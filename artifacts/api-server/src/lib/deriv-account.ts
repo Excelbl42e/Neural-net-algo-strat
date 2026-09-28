@@ -13,10 +13,15 @@ export type OptionsAccount = {
 const API_BASE = "https://api.derivws.com/trading/v1/options";
 const REQUEST_TIMEOUT_MS = 15_000;
 
+// 1089 (Deriv's shared test app id) is purely numeric, but an app registered
+// for PAT/Deriv-App-ID auth in Deriv's current Developer Dashboard can be
+// alphanumeric with dashes — don't reject a legitimately registered id.
+const APP_ID_PATTERN = /^[A-Za-z0-9-]+$/;
+
 function patHeaders(token: string): Record<string, string> {
   const appId = (process.env.DERIV_APP_ID?.trim() || "1089");
-  if (!/^\d+$/.test(appId)) {
-    throw new Error("DERIV_APP_ID must be numeric (default 1089 is Deriv's shared test app id)");
+  if (!APP_ID_PATTERN.test(appId)) {
+    throw new Error("DERIV_APP_ID has an unexpected format (expected letters, digits and dashes)");
   }
   if (!token.trim()) throw new Error("Deriv Personal Access Token is missing");
   return { Authorization: `Bearer ${token.trim()}`, "Deriv-App-ID": appId };
