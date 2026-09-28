@@ -37,6 +37,7 @@ const formSchema = z.object({
   newsBlackoutBeforeMin: z.coerce.number().int().min(0).max(1440),
   newsBlackoutAfterMin: z.coerce.number().int().min(0).max(1440),
   maxSpreadCostPct: z.coerce.number().min(0).max(100),
+  maxPositionHoldHours: z.coerce.number().int().min(1).max(8760),
   maxDailyLossPct: z.coerce.number().min(0).max(100),
   minConfidence: z.coerce.number().min(0).max(1),
   allowedInstruments: z.string(),
@@ -69,6 +70,7 @@ export default function ConfigurationPage() {
       newsBlackoutBeforeMin: 30,
       newsBlackoutAfterMin: 30,
       maxSpreadCostPct: 0.5,
+      maxPositionHoldHours: 96,
       maxDailyLossPct: 5,
       minConfidence: 0.78,
       allowedInstruments: "",
@@ -94,6 +96,7 @@ export default function ConfigurationPage() {
         newsBlackoutBeforeMin: config.newsBlackoutBeforeMin ?? 30,
         newsBlackoutAfterMin: config.newsBlackoutAfterMin ?? 30,
         maxSpreadCostPct: Number(config.maxSpreadCostPct ?? 0.5),
+        maxPositionHoldHours: config.maxPositionHoldHours ?? 96,
         maxDailyLossPct: Number(config.maxDailyLossPct),
         minConfidence: Number(config.minConfidence),
         allowedInstruments: config.allowedInstruments,
@@ -280,6 +283,7 @@ export default function ConfigurationPage() {
                 ["newsBlackoutBeforeMin", "News blackout: minutes before a high-impact release", "1"],
                 ["newsBlackoutAfterMin", "News blackout: minutes after a high-impact release", "1"],
                 ["maxSpreadCostPct", "Max indicative trading cost (% of stake)", "0.01"],
+                ["maxPositionHoldHours", "Force-close a multiplier position after this many hours if neither SL nor TP has hit", "1"],
               ] as const).map(([name, label, step]) => (
                 <FormField key={name} control={form.control} name={name} render={({ field }) => (
                   <FormItem>

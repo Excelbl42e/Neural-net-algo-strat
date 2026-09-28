@@ -6,6 +6,7 @@ import {
   useCreateTrade,
   useDeleteTrade,
   useBulkDeleteTrades,
+  useCloseTrade,
   useListAccounts,
   getListTradesQueryKey,
   getListSignalsQueryKey,
@@ -26,7 +27,8 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { format } from "date-fns";
 import { Card } from "@/components/ui/card";
-import { ChevronDown, ChevronRight, Plus, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronRight, Plus, Trash2, XCircle } from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
 
 const tradeFormSchema = z.object({
   accountId: z.coerce.number({ required_error: "Account required" }).min(1, "Account required"),
@@ -48,6 +50,7 @@ export default function TradesPage() {
   const [open, setOpen] = useState(false);
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
+  const [confirmCloseId, setConfirmCloseId] = useState<number | null>(null);
   const [confirmBulk, setConfirmBulk] = useState<"closed" | "all" | null>(null);
 
   const { data: trades, isLoading } = useListTrades({ limit: 200 });
@@ -56,7 +59,9 @@ export default function TradesPage() {
   const createTrade = useCreateTrade();
   const deleteTrade = useDeleteTrade();
   const bulkDelete = useBulkDeleteTrades();
+  const closeTrade = useCloseTrade();
   const queryClient = useQueryClient();
+  const { toast } = useToast();
 
   const accountMap = new Map((accounts ?? []).map((a) => [a.id, a]));
   const signalMap = new Map((signals ?? []).map((s) => [s.id, s]));
@@ -102,6 +107,27 @@ export default function TradesPage() {
 
   const handleDelete = (id: number) => {
     deleteTrade.mutate({ id }, { onSuccess: () => { setConfirmDeleteId(null); invalidateAll(); } });
+  };
+
+  const handleClose = (id: number) => {
+    closeTrade.mutate(
+      { id },
+      {
+        onSuccess: (result) => {
+          setConfirmCloseId(null);
+          invalidateAll();
+          toast({
+            title: result.ok ? "Position closed" : "Close failed",
+            description: result.message ?? undefined,
+            variant: result.ok ? "default" : "destructive",
+          });
+        },
+        onError: (err) => {
+          setConfirmCloseId(null);
+          toast({ title: "Close failed", description: err instanceof Error ? err.message : "Request failed", variant: "destructive" });
+        },
+      }
+    );
   };
 
   const handleBulkDelete = (scope: "closed" | "all") => {
@@ -233,6 +259,35 @@ export default function TradesPage() {
                         </Badge>
                       </TableCell>
                       <TableCell className="text-center" onClick={(e) => e.stopPropagation()}>
+                        {trade.status === "open" && (
+                          confirmCloseId === trade.id ? (
+                            <div className="flex items-center gap-1 justify-center mb-1">
+                              <button
+                                onClick={() => handleClose(trade.id)}
+                                disabled={closeTrade.isPending}
+                                className="text-[10px] bg-amber-600 text-white px-1.5 py-0.5 rounded font-mono-numbers uppercase"
+                                data-testid={`button-confirm-close-trade-${trade.id}`}
+                              >
+                                {closeTrade.isPending ? "Closing..." : "Force close now"}
+                              </button>
+                              <button
+                                onClick={() => setConfirmCloseId(null)}
+                                className="text-[10px] text-muted-foreground hover:text-foreground px-1 py-0.5 rounded"
+                              >
+                                ✕
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              onClick={() => setConfirmCloseId(trade.id)}
+                              className="text-muted-foreground hover:text-amber-500 transition-colors p-1 rounded opacity-0 group-hover:opacity-100 inline-block mr-1"
+                              title="Force-close this position at market now"
+                              data-testid={`button-close-trade-${trade.id}`}
+                            >
+                              <XCircle className="w-3.5 h-3.5" />
+                            </button>
+                          )
+                        )}
                         {confirmDeleteId === trade.id ? (
                           <div className="flex items-center gap-1 justify-center">
                             <button

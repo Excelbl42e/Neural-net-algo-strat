@@ -23,6 +23,7 @@ const DEFAULTS = {
   newsBlackoutBeforeMin: 30,
   newsBlackoutAfterMin: 30,
   maxSpreadCostPct: 0.5,
+  maxPositionHoldHours: 96,
   riskPerTradePct: 1,
   maxConcurrentPositions: 3,
   maxDailyLossPct: 5,
@@ -53,6 +54,7 @@ function serialize(row: BotConfig) {
     newsBlackoutBeforeMin: row.newsBlackoutBeforeMin,
     newsBlackoutAfterMin: row.newsBlackoutAfterMin,
     maxSpreadCostPct: parseFloat(row.maxSpreadCostPct),
+    maxPositionHoldHours: row.maxPositionHoldHours,
     notes: row.notes,
     updatedAt: row.updatedAt.toISOString(),
   };
@@ -125,6 +127,7 @@ router.put("/config", async (req, res): Promise<void> => {
     newsBlackoutBeforeMin: d.newsBlackoutBeforeMin ?? prev?.newsBlackoutBeforeMin ?? 30,
     newsBlackoutAfterMin: d.newsBlackoutAfterMin ?? prev?.newsBlackoutAfterMin ?? 30,
     maxSpreadCostPct: keep(d.maxSpreadCostPct, prev?.maxSpreadCostPct, 0.5),
+    maxPositionHoldHours: d.maxPositionHoldHours ?? prev?.maxPositionHoldHours ?? 96,
     notes: parsed.data.notes ?? null,
   };
   const [row] = await db

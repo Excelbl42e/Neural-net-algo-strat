@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import { eq, desc, and, inArray } from "drizzle-orm";
-import { db, tradesTable } from "@workspace/db";
+import { db, tradesTable, brokerConnectionsTable } from "@workspace/db";
 import {
   CreateTradeBody,
   UpdateTradeBody,
@@ -9,8 +9,21 @@ import {
   ListTradesQueryParams,
   GetRecentTradesQueryParams,
 } from "@workspace/api-zod";
+import { decryptSecret } from "../lib/crypto.js";
+import { sellDerivTrade } from "../lib/deriv.js";
+import { logger } from "../lib/logger.js";
 
 const router: IRouter = Router();
+
+function getContractId(annotations: string | null): number | null {
+  if (!annotations) return null;
+  try {
+    const obj = JSON.parse(annotations);
+    return typeof obj.contractId === "number" ? obj.contractId : null;
+  } catch {
+    return null;
+  }
+}
 
 router.get("/trades", async (req, res): Promise<void> => {
   const query = ListTradesQueryParams.safeParse(req.query);
@@ -123,6 +136,66 @@ router.delete("/trades/:id", async (req, res): Promise<void> => {
     return;
   }
   res.status(204).end();
+});
+
+// Manual safety valve: sell an open multiplier position at market now.
+// Evidence label: code review only — sellDerivTrade has not been exercised
+// against a live Deriv connection yet. Treat the first real use as a test.
+router.post("/trades/:id/close", async (req, res): Promise<void> => {
+  const params = GetTradeParams.safeParse(req.params);
+  if (!params.success) {
+    res.status(400).json({ error: params.error.message });
+    return;
+  }
+  const [trade] = await db.select().from(tradesTable).where(eq(tradesTable.id, params.data.id));
+  if (!trade) {
+    res.status(404).json({ error: "Trade not found" });
+    return;
+  }
+  if (trade.status !== "open") {
+    res.status(400).json({ ok: false, message: `Trade is ${trade.status}, not open` });
+    return;
+  }
+  const contractId = getContractId(trade.annotations);
+  if (contractId === null) {
+    res.status(400).json({ ok: false, message: "Trade has no linked broker contract" });
+    return;
+  }
+  const [conn] = await db
+    .select()
+    .from(brokerConnectionsTable)
+    .where(and(
+      eq(brokerConnectionsTable.accountId, trade.accountId),
+      eq(brokerConnectionsTable.enabled, true),
+      eq(brokerConnectionsTable.status, "connected"),
+    ));
+  if (!conn) {
+    res.status(400).json({ ok: false, message: "No connected, enabled broker connection found for this trade's account" });
+    return;
+  }
+
+  const token = await decryptSecret(conn.credential);
+  const result = await sellDerivTrade(token, conn.environment === "real" ? "real" : "demo", contractId);
+
+  if (!result.ok) {
+    logger.warn({ tradeId: trade.id, contractId, message: result.message, ambiguous: result.ambiguous }, "manual close: sell failed");
+    res.status(400).json({ ok: false, message: result.message ?? "Sell request failed" });
+    return;
+  }
+
+  const [closedTrade] = await db
+    .update(tradesTable)
+    .set({
+      status: "closed",
+      closePrice: null,
+      pnl: result.soldFor != null ? String(Number((result.soldFor - parseFloat(trade.lotSize ?? "10")).toFixed(2))) : null,
+      closedAt: new Date(),
+    })
+    .where(and(eq(tradesTable.id, trade.id), eq(tradesTable.status, "open")))
+    .returning();
+
+  logger.info({ tradeId: trade.id, contractId, soldFor: result.soldFor }, "manual close: trade closed");
+  res.json({ ok: true, message: closedTrade ? result.message : "Sold at Deriv, but trade was already updated elsewhere" });
 });
 
 router.post("/trades/bulk-delete", async (req, res): Promise<void> => {
