@@ -149,6 +149,14 @@ export interface DerivContractInfo {
   sellPrice: number | null;
   sellSpot: number | null;
   sellTime: number | null;
+  /** "multiplier" | "binary" | null (unknown — e.g. Deriv omitted contract_type). */
+  contractType: "multiplier" | "binary" | null;
+}
+
+/** Deriv's raw contract_type (MULTUP/MULTDOWN/CALL/PUT/...) -> our two buckets. */
+function classifyContractType(raw: unknown): "multiplier" | "binary" | null {
+  if (typeof raw !== "string" || raw.length === 0) return null;
+  return raw.toUpperCase().startsWith("MULT") ? "multiplier" : "binary";
 }
 
 /**
@@ -280,6 +288,7 @@ export async function fetchRecentContracts(token: string, environment: "demo" | 
         buyPrice: c.buy_price != null ? Number(c.buy_price) : null,
         purchaseTime: c.purchase_time != null ? Number(c.purchase_time) : null,
         isSold: false, profit: null, sellPrice: null, sellSpot: null, sellTime: null,
+        contractType: classifyContractType(c.contract_type),
       });
     }
     const pt = await session.request<{ profit_table?: { transactions?: Array<Record<string, any>> }; error?: unknown }>({
@@ -295,6 +304,7 @@ export async function fetchRecentContracts(token: string, environment: "demo" | 
         purchaseTime: t.purchase_time != null ? Number(t.purchase_time) : null,
         isSold: true, profit: buy != null && sell != null ? Number((sell - buy).toFixed(2)) : null,
         sellPrice: sell, sellSpot: null, sellTime: t.sell_time != null ? Number(t.sell_time) : null,
+        contractType: classifyContractType(t.contract_type),
       });
     }
     return out;
@@ -328,6 +338,7 @@ export async function fetchContractStatuses(
           sellPrice: poc.sell_price != null ? Number(poc.sell_price) : null,
           sellSpot: poc.sell_spot != null ? Number(poc.sell_spot) : null,
           sellTime: poc.sell_time != null ? Number(poc.sell_time) : null,
+          contractType: classifyContractType(poc.contract_type),
         });
       } catch { /* one contract failing is never settlement proof */ }
     }
