@@ -20,3 +20,9 @@ When staging `.replit` from Git content for the validator, normalize line ending
 **Why:** A validated replacement contained the correct visible configuration but differed on every line until the staging content was normalized to LF.
 
 **How to apply:** Compare the resulting file byte-for-byte with the intended Git blob, not just by reading the visible TOML or trusting successful schema validation.
+
+In a mixed static-dashboard/API-artifact VM publish, a log line forwarding local port 0 to external port 80 can refer to the platform's static handler, not the API service. Check the adjacent static-handler registration and the separate API listener log before changing ports.
+
+**Why:** A failed publish logged the static handler and port-0 forwarding together, while separately waiting for and starting the API artifact on its configured port 8080. Treating port 0 as the API listener would have led to an incorrect config edit.
+
+**How to apply:** Correlate startup lines by service and distinguish a failed attempted build from the older successful build that may still serve the public URL.
