@@ -329,6 +329,38 @@ paths:
         "404":
           description: Not found
 
+  /trades/{id}/close:
+    post:
+      operationId: closeTrade
+      tags: [trades]
+      summary: Force-close an open position at Deriv now, regardless of its stop/target
+      description: >
+        Manual safety valve. A multiplier position only closes on its own via
+        its stop-loss/take-profit; this sells it at whatever price Deriv
+        currently offers. Refuses if the trade has no linked broker contract
+        or is not open.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Closed (or the attempt's outcome)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SimpleOk"
+        "400":
+          description: Refused (not open, no contract, or Deriv rejected the sell)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SimpleOk"
+        "404":
+          description: Not found
+
   /trades/bulk-delete:
     post:
       operationId: bulkDeleteTrades
@@ -1665,6 +1697,7 @@ components:
         newsBlackoutBeforeMin:  { type: integer, minimum: 0, maximum: 1440 }
         newsBlackoutAfterMin:   { type: integer, minimum: 0, maximum: 1440 }
         maxSpreadCostPct:       { type: number, minimum: 0, maximum: 100 }
+        maxPositionHoldHours:   { type: integer, minimum: 1, maximum: 8760 }
         notes:                  { type: ["string", "null"] }
         updatedAt:              { type: string, format: date-time }
 
@@ -1690,6 +1723,7 @@ components:
         newsBlackoutBeforeMin:  { type: integer, minimum: 0, maximum: 1440 }
         newsBlackoutAfterMin:   { type: integer, minimum: 0, maximum: 1440 }
         maxSpreadCostPct:       { type: number, minimum: 0, maximum: 100 }
+        maxPositionHoldHours:   { type: integer, minimum: 1, maximum: 8760 }
         notes:                  { type: string }
 
     # ──────────── Analysis ────────────

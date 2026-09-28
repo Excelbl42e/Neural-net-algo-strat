@@ -22,6 +22,12 @@ export const botConfigTable = pgTable("bot_config", {
   newsBlackoutBeforeMin: integer("news_blackout_before_min").notNull().default(30),
   newsBlackoutAfterMin: integer("news_blackout_after_min").notNull().default(30),
   maxSpreadCostPct: numeric("max_spread_cost_pct", { precision: 5, scale: 2 }).notNull().default("0.50"),
+  // Multiplier positions only close via their own stop-loss/take-profit —
+  // there is no other expiry. This is the safety-net max hold time before
+  // contract-monitor force-closes one at market, in case price never
+  // reaches either level. Binary contracts already expire on their own via
+  // their configured duration and are unaffected by this.
+  maxPositionHoldHours: integer("max_position_hold_hours").notNull().default(96),
   notes: text("notes"),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
 });

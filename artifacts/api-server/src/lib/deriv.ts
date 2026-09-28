@@ -217,6 +217,56 @@ export async function checkMultiplierProposal(token: string, environment: "demo"
   }
 }
 
+export interface DerivSellResult {
+  ok: boolean;
+  soldFor?: number;
+  contractId?: number;
+  message?: string;
+  /** The sell request may have reached Deriv but the outcome could not be confirmed. Never retry blindly; re-check via fetchContractStatuses instead. */
+  ambiguous?: boolean;
+}
+
+/**
+ * Closes an open contract now, at whatever price Deriv currently offers
+ * (price: 0 = accept any price — there is no meaningful minimum to protect
+ * for a forced exit; the caller already decided this position must close).
+ *
+ * Evidence label: code review only. The request/response shape
+ * ({sell: contract_id, price}, response.sell.{sold_for, contract_id, ...})
+ * matches Deriv's current documented Sell Contract endpoint, but — like
+ * every other write path in this file before today — has not been run
+ * against a live Deriv connection. Given the buy path had a wrong field
+ * name that only live testing caught, treat a first real use of this as
+ * a genuine test, not a proven capability.
+ */
+export async function sellDerivTrade(token: string, environment: "demo" | "real", contractId: number): Promise<DerivSellResult> {
+  let session: DerivSession | null = null;
+  try {
+    session = await openDerivSession(token, environment);
+    const res = await session.request<{
+      error?: { message?: string; code?: string; details?: unknown };
+      sell?: { sold_for?: number | string; contract_id?: number };
+    }>(
+      { sell: contractId, price: 0 },
+      { timeoutMs: 20_000 },
+    );
+    if (res.error) {
+      const details = res.error.details !== undefined ? ` — details: ${JSON.stringify(res.error.details)}` : "";
+      return { ok: false, message: `${res.error.message ?? "Deriv rejected the sell request"}${details}` };
+    }
+    if (!res.sell?.contract_id) return { ok: false, ambiguous: true, message: "Sell response missing contract_id" };
+    const soldFor = toFiniteNumber(res.sell.sold_for) ?? undefined;
+    return { ok: true, contractId: res.sell.contract_id, soldFor, message: `Contract ${res.sell.contract_id} sold for ${soldFor}` };
+  } catch (err) {
+    if (err instanceof DerivRequestTimeout || (err instanceof Error && /closed/i.test(err.message))) {
+      return { ok: false, ambiguous: true, message: "Deriv connection dropped or timed out after sell submission; outcome is ambiguous" };
+    }
+    return { ok: false, ambiguous: true, message: err instanceof Error ? err.message : "Unknown error after sell submission" };
+  } finally {
+    session?.close();
+  }
+}
+
 /** Open portfolio + recent profit table for an account. Used by the reconciler. */
 export async function fetchRecentContracts(token: string, environment: "demo" | "real"): Promise<DerivContractInfo[]> {
   const session = await openDerivSession(token, environment);

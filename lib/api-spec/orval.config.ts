@@ -57,6 +57,13 @@ export default defineConfig({
       prettier: true,
       override: {
         zod: {
+          // This workspace is pinned to zod v3 (see pnpm-workspace.yaml
+          // catalog) for @hookform/resolvers compatibility on the dashboard.
+          // orval's own tool dependency is zod v4, and without this it
+          // silently emits v4-only syntax (z.int()) regardless of what's
+          // actually installed here — broke the build the first time
+          // codegen ran after orval was bumped to 8.38.0.
+          version: 3,
           coerce: {
             query: ['boolean', 'number', 'string'],
             param: ['boolean', 'number', 'string'],

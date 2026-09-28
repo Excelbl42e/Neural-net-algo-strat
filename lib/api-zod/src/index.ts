@@ -1,15 +1,16 @@
 export * from "./generated/api";
-// Re-export all types from generated, excluding UploadSourceFileBody which
-// collides with the Zod schema of the same name exported above.
+// Re-export all types from generated individually (not via the ./generated/types
+// barrel) so the two names below can be excluded: they collide with the Zod
+// schemas of the same name exported above, which must take precedence.
 export * from "./generated/types/account";
 export * from "./generated/types/accountAccountType";
 export * from "./generated/types/accountInput";
 export * from "./generated/types/accountInputAccountType";
 export * from "./generated/types/accountInputStatus";
-export * from "./generated/types/accountsSummary";
 export * from "./generated/types/accountStatus";
 export * from "./generated/types/accountUpdate";
 export * from "./generated/types/accountUpdateStatus";
+export * from "./generated/types/accountsSummary";
 export * from "./generated/types/analysisRequest";
 export * from "./generated/types/analysisResult";
 export * from "./generated/types/analysisResultStatus";
@@ -30,6 +31,14 @@ export * from "./generated/types/brokerConnectionStatus";
 export * from "./generated/types/brokerConnectionUpdate";
 export * from "./generated/types/brokerConnectionUpdateEnvironment";
 export * from "./generated/types/brokerSyncResult";
+export * from "./generated/types/bulkDeleteTrades200";
+// bulkDeleteTradesBody intentionally omitted — Zod schema above takes precedence
+export * from "./generated/types/bulkDeleteTradesBodyStatus";
+export * from "./generated/types/candle";
+export * from "./generated/types/candleFeederStatus";
+export * from "./generated/types/candleResponse";
+export * from "./generated/types/checkWriteKey200";
+export * from "./generated/types/checkWriteKeyWriteMethod200";
 export * from "./generated/types/dashboardOverview";
 export * from "./generated/types/dashboardOverviewBotStatus";
 export * from "./generated/types/educationSource";
@@ -42,10 +51,17 @@ export * from "./generated/types/educationSourceUpdateStatus";
 export * from "./generated/types/getRecentTradesParams";
 export * from "./generated/types/healthStatus";
 export * from "./generated/types/ingestResult";
+export * from "./generated/types/ingestResultStatus";
+export * from "./generated/types/lastTick";
+export * from "./generated/types/listCandlesParams";
+export * from "./generated/types/listCandlesTimeframe";
 export * from "./generated/types/listReportsParams";
 export * from "./generated/types/listReportsType";
 export * from "./generated/types/listSignalsParams";
 export * from "./generated/types/listSignalsStatus";
+export * from "./generated/types/listTradePerformanceDimension";
+export * from "./generated/types/listTradePerformanceParams";
+export * from "./generated/types/listTradeReviewsParams";
 export * from "./generated/types/listTradesParams";
 export * from "./generated/types/listTradesStatus";
 export * from "./generated/types/report";
@@ -55,6 +71,7 @@ export * from "./generated/types/reportType";
 export * from "./generated/types/scoringResult";
 export * from "./generated/types/signal";
 export * from "./generated/types/signalDirection";
+export * from "./generated/types/signalExecutionStatus";
 export * from "./generated/types/signalInput";
 export * from "./generated/types/signalInputDirection";
 export * from "./generated/types/signalInputStatus";
@@ -65,15 +82,24 @@ export * from "./generated/types/simpleOk";
 export * from "./generated/types/strategy";
 export * from "./generated/types/strategyInput";
 export * from "./generated/types/strategyUpdate";
+export * from "./generated/types/synthesizeResult";
+export * from "./generated/types/syntheticSymbol";
 export * from "./generated/types/trade";
 export * from "./generated/types/tradeDirection";
 export * from "./generated/types/tradeInput";
 export * from "./generated/types/tradeInputDirection";
 export * from "./generated/types/tradeInputStatus";
+export * from "./generated/types/tradePerformance";
+export * from "./generated/types/tradePerformanceDimension";
+export * from "./generated/types/tradeReview";
+export * from "./generated/types/tradeReviewEvidenceStatus";
+export * from "./generated/types/tradeReviewOutcome";
 export * from "./generated/types/tradeStatus";
 export * from "./generated/types/tradeUpdate";
 export * from "./generated/types/tradeUpdateStatus";
-// UploadSourceFileBody intentionally omitted — Zod schema above takes precedence
+export * from "./generated/types/uploadSourceFile400";
+export * from "./generated/types/uploadSourceFile413";
+// uploadSourceFileBody intentionally omitted — Zod schema above takes precedence
 export * from "./generated/types/workerStatus";
 export * from "./generated/types/workflowStatus";
 export * from "./generated/types/workflowStatusOverallStatus";
