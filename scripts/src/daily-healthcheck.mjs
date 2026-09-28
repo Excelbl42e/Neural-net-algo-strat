@@ -133,7 +133,9 @@ try {
   const symbols = status.symbols ?? [];
   ok(`Feeder tracking ${symbols.length} symbol(s)`);
 
-  const KEY_SYMBOLS = ["R_75", "R_100", "BOOM1000", "CRASH1000"];
+  // Forex-only scope: these are the six majors the candle feeder subscribes
+  // to on boot (see synthetic-catalog.ts DEFAULT_FEED_SYMBOLS).
+  const KEY_SYMBOLS = ["frxEURUSD", "frxGBPUSD", "frxUSDJPY", "frxAUDUSD", "frxUSDCAD", "frxGBPJPY"];
   for (const sym of KEY_SYMBOLS) {
     try {
       const data = await get(`/candles?symbol=${sym}&timeframe=M5&limit=3`);
