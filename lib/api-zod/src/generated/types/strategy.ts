@@ -9,7 +9,7 @@
 export interface Strategy {
   id: number;
   name: string;
-  /** Strategy kind. The synthesized mega-strategy uses 'mega'. */
+  /** Strategy category, e.g. 'ict' or 'quant' for the hardcoded strategy library. */
   type: string;
   description: string;
   /** @nullable */
@@ -22,13 +22,10 @@ export interface Strategy {
   tradeCount?: number;
   /** @nullable */
   winRate?: number | null;
-  /**
-     * JSON-encoded list of detected ICT concepts with weights and evidence.
-     * @nullable
-     */
+  /** @nullable */
   concepts?: string | null;
   /**
-     * JSON-encoded execution rules synthesized by the C++ expert system.
+     * Fuller entry/exit rule text for this strategy.
      * @nullable
      */
   rules?: string | null;

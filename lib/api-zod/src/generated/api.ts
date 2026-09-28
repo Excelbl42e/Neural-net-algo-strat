@@ -649,7 +649,7 @@ export const GetCandleFeederStatusResponse = zod.object({
 export const ListStrategiesResponseItem = zod.object({
   "id": zod.number().int(),
   "name": zod.string(),
-  "type": zod.string().describe('Strategy kind. The synthesized mega-strategy uses \'mega\'.'),
+  "type": zod.string().describe('Strategy category, e.g. \'ict\' or \'quant\' for the hardcoded strategy library.'),
   "description": zod.string(),
   "explanation": zod.string().nullish(),
   "weight": zod.number().nullish(),
@@ -657,8 +657,8 @@ export const ListStrategiesResponseItem = zod.object({
   "parameters": zod.string().nullish(),
   "tradeCount": zod.number().int().optional(),
   "winRate": zod.number().nullish(),
-  "concepts": zod.string().nullish().describe('JSON-encoded list of detected ICT concepts with weights and evidence.'),
-  "rules": zod.string().nullish().describe('JSON-encoded execution rules synthesized by the C++ expert system.'),
+  "concepts": zod.string().nullish(),
+  "rules": zod.string().nullish().describe('Fuller entry/exit rule text for this strategy.'),
   "sourcesUsed": zod.number().int().optional(),
   "wordsAnalyzed": zod.number().int().optional(),
   "summary": zod.string().nullish(),
@@ -689,7 +689,7 @@ export const CreateStrategyBody = zod.object({
 export const CreateStrategyResponse = zod.object({
   "id": zod.number().int(),
   "name": zod.string(),
-  "type": zod.string().describe('Strategy kind. The synthesized mega-strategy uses \'mega\'.'),
+  "type": zod.string().describe('Strategy category, e.g. \'ict\' or \'quant\' for the hardcoded strategy library.'),
   "description": zod.string(),
   "explanation": zod.string().nullish(),
   "weight": zod.number().nullish(),
@@ -697,64 +697,8 @@ export const CreateStrategyResponse = zod.object({
   "parameters": zod.string().nullish(),
   "tradeCount": zod.number().int().optional(),
   "winRate": zod.number().nullish(),
-  "concepts": zod.string().nullish().describe('JSON-encoded list of detected ICT concepts with weights and evidence.'),
-  "rules": zod.string().nullish().describe('JSON-encoded execution rules synthesized by the C++ expert system.'),
-  "sourcesUsed": zod.number().int().optional(),
-  "wordsAnalyzed": zod.number().int().optional(),
-  "summary": zod.string().nullish(),
-  "synthesizedAt": zod.coerce.date().nullish(),
-  "createdAt": zod.coerce.date(),
-  "updatedAt": zod.coerce.date().optional()
-})
-
-
-/**
- * @summary Run the C++ expert system across all knowledge chunks and (re)synthesize the single mega-strategy.
- */
-export const SynthesizeStrategyResponse = zod.object({
-  "strategy": zod.object({
-  "id": zod.number().int(),
-  "name": zod.string(),
-  "type": zod.string().describe('Strategy kind. The synthesized mega-strategy uses \'mega\'.'),
-  "description": zod.string(),
-  "explanation": zod.string().nullish(),
-  "weight": zod.number().nullish(),
-  "active": zod.boolean(),
-  "parameters": zod.string().nullish(),
-  "tradeCount": zod.number().int().optional(),
-  "winRate": zod.number().nullish(),
-  "concepts": zod.string().nullish().describe('JSON-encoded list of detected ICT concepts with weights and evidence.'),
-  "rules": zod.string().nullish().describe('JSON-encoded execution rules synthesized by the C++ expert system.'),
-  "sourcesUsed": zod.number().int().optional(),
-  "wordsAnalyzed": zod.number().int().optional(),
-  "summary": zod.string().nullish(),
-  "synthesizedAt": zod.coerce.date().nullish(),
-  "createdAt": zod.coerce.date(),
-  "updatedAt": zod.coerce.date().optional()
-}),
-  "conceptsCount": zod.number().int(),
-  "rulesCount": zod.number().int(),
-  "sourcesUsed": zod.number().int(),
-  "wordsAnalyzed": zod.number().int().optional()
-})
-
-
-/**
- * @summary Return the current synthesized mega-strategy (or 404 if none has been synthesized yet).
- */
-export const GetMegaStrategyResponse = zod.object({
-  "id": zod.number().int(),
-  "name": zod.string(),
-  "type": zod.string().describe('Strategy kind. The synthesized mega-strategy uses \'mega\'.'),
-  "description": zod.string(),
-  "explanation": zod.string().nullish(),
-  "weight": zod.number().nullish(),
-  "active": zod.boolean(),
-  "parameters": zod.string().nullish(),
-  "tradeCount": zod.number().int().optional(),
-  "winRate": zod.number().nullish(),
-  "concepts": zod.string().nullish().describe('JSON-encoded list of detected ICT concepts with weights and evidence.'),
-  "rules": zod.string().nullish().describe('JSON-encoded execution rules synthesized by the C++ expert system.'),
+  "concepts": zod.string().nullish(),
+  "rules": zod.string().nullish().describe('Fuller entry/exit rule text for this strategy.'),
   "sourcesUsed": zod.number().int().optional(),
   "wordsAnalyzed": zod.number().int().optional(),
   "summary": zod.string().nullish(),
@@ -782,7 +726,7 @@ export const UpdateStrategyBody = zod.object({
 export const UpdateStrategyResponse = zod.object({
   "id": zod.number().int(),
   "name": zod.string(),
-  "type": zod.string().describe('Strategy kind. The synthesized mega-strategy uses \'mega\'.'),
+  "type": zod.string().describe('Strategy category, e.g. \'ict\' or \'quant\' for the hardcoded strategy library.'),
   "description": zod.string(),
   "explanation": zod.string().nullish(),
   "weight": zod.number().nullish(),
@@ -790,8 +734,8 @@ export const UpdateStrategyResponse = zod.object({
   "parameters": zod.string().nullish(),
   "tradeCount": zod.number().int().optional(),
   "winRate": zod.number().nullish(),
-  "concepts": zod.string().nullish().describe('JSON-encoded list of detected ICT concepts with weights and evidence.'),
-  "rules": zod.string().nullish().describe('JSON-encoded execution rules synthesized by the C++ expert system.'),
+  "concepts": zod.string().nullish(),
+  "rules": zod.string().nullish().describe('Fuller entry/exit rule text for this strategy.'),
   "sourcesUsed": zod.number().int().optional(),
   "wordsAnalyzed": zod.number().int().optional(),
   "summary": zod.string().nullish(),
@@ -930,148 +874,6 @@ export const GetWorkflowStatusResponse = zod.object({
   "overallStatus": zod.enum(['running', 'paused', 'error', 'idle']),
   "lastUpdated": zod.coerce.date()
 })
-
-
-/**
- * @summary List all knowledge base sources
- */
-export const ListEducationSourcesResponseItem = zod.object({
-  "id": zod.number().int(),
-  "kind": zod.enum(['book', 'video', 'playlist', 'text']),
-  "title": zod.string(),
-  "author": zod.string().nullish(),
-  "sourceUrl": zod.string().nullish(),
-  "contentText": zod.string().nullish(),
-  "status": zod.enum(['pending', 'processing', 'ready', 'partial', 'error']),
-  "chunksCount": zod.number().int(),
-  "vectorCount": zod.number().int(),
-  "transcriptPreview": zod.string().nullish(),
-  "metadata": zod.string().nullish(),
-  "errorMessage": zod.string().nullish(),
-  "createdAt": zod.coerce.date(),
-  "updatedAt": zod.coerce.date().optional()
-})
-export const ListEducationSourcesResponse = zod.array(ListEducationSourcesResponseItem)
-
-
-/**
- * @summary Add a new knowledge source (book, video, playlist, raw text)
- */
-
-
-
-export const CreateEducationSourceBody = zod.object({
-  "kind": zod.enum(['book', 'video', 'playlist', 'text']),
-  "title": zod.string().min(1),
-  "author": zod.string().optional(),
-  "sourceUrl": zod.string().optional(),
-  "contentText": zod.string().optional(),
-  "metadata": zod.string().optional()
-})
-
-export const CreateEducationSourceResponse = zod.object({
-  "id": zod.number().int(),
-  "kind": zod.enum(['book', 'video', 'playlist', 'text']),
-  "title": zod.string(),
-  "author": zod.string().nullish(),
-  "sourceUrl": zod.string().nullish(),
-  "contentText": zod.string().nullish(),
-  "status": zod.enum(['pending', 'processing', 'ready', 'partial', 'error']),
-  "chunksCount": zod.number().int(),
-  "vectorCount": zod.number().int(),
-  "transcriptPreview": zod.string().nullish(),
-  "metadata": zod.string().nullish(),
-  "errorMessage": zod.string().nullish(),
-  "createdAt": zod.coerce.date(),
-  "updatedAt": zod.coerce.date().optional()
-})
-
-
-/**
- * @summary Upload a PDF, EPUB, or supported book-page image for ingestion
- */
-export const UploadSourceFileParams = zod.object({
-  "id": zod.coerce.number().int()
-})
-
-export const UploadSourceFileBody = zod.object({
-  "file": zod.instanceof(Blob)
-})
-
-export const UploadSourceFileResponse = zod.object({
-  "ok": zod.boolean(),
-  "message": zod.string().optional()
-})
-
-
-/**
- * Ready sources return successfully without reprocessing; processing sources return 409 without starting a duplicate; pending and error sources are ingested/retried synchronously.
- * @summary Run or retry ingestion for an existing education source
- */
-
-
-
-export const TriggerEducationSourceIngestParams = zod.object({
-  "id": zod.coerce.number().int().min(1)
-})
-
-export const TriggerEducationSourceIngestResponse = zod.object({
-  "ok": zod.boolean(),
-  "sourceId": zod.number().int().optional(),
-  "error": zod.string().optional(),
-  "status": zod.enum(['pending', 'processing', 'ready', 'partial', 'error']).optional(),
-  "message": zod.string().optional()
-})
-
-
-/**
- * @summary Update ingestion status / metadata (called by C++ ingestion engine)
- */
-export const UpdateEducationSourceParams = zod.object({
-  "id": zod.coerce.number().int()
-})
-
-export const updateEducationSourceBodyChunksCountMin = 0;
-
-export const updateEducationSourceBodyVectorCountMin = 0;
-
-
-
-export const UpdateEducationSourceBody = zod.object({
-  "status": zod.enum(['pending', 'processing', 'ready', 'partial', 'error']).optional(),
-  "chunksCount": zod.number().int().min(updateEducationSourceBodyChunksCountMin).optional(),
-  "vectorCount": zod.number().int().min(updateEducationSourceBodyVectorCountMin).optional(),
-  "transcriptPreview": zod.string().optional(),
-  "metadata": zod.string().optional(),
-  "errorMessage": zod.string().optional()
-})
-
-export const UpdateEducationSourceResponse = zod.object({
-  "id": zod.number().int(),
-  "kind": zod.enum(['book', 'video', 'playlist', 'text']),
-  "title": zod.string(),
-  "author": zod.string().nullish(),
-  "sourceUrl": zod.string().nullish(),
-  "contentText": zod.string().nullish(),
-  "status": zod.enum(['pending', 'processing', 'ready', 'partial', 'error']),
-  "chunksCount": zod.number().int(),
-  "vectorCount": zod.number().int(),
-  "transcriptPreview": zod.string().nullish(),
-  "metadata": zod.string().nullish(),
-  "errorMessage": zod.string().nullish(),
-  "createdAt": zod.coerce.date(),
-  "updatedAt": zod.coerce.date().optional()
-})
-
-
-/**
- * @summary Remove a knowledge source from the system
- */
-export const DeleteEducationSourceParams = zod.object({
-  "id": zod.coerce.number().int()
-})
-
-export const DeleteEducationSourceResponse = zod.void()
 
 
 /**
@@ -1392,39 +1194,12 @@ export const RunAnalysisBody = zod.object({
 
 export const RunAnalysisResponse = zod.object({
   "ok": zod.boolean(),
-  "status": zod.enum(['no_data', 'brain_not_trained', 'brain_warming', 'ready']),
+  "status": zod.enum(['no_data', 'brain_warming', 'ready']),
   "symbol": zod.string(),
   "timeframe": zod.string(),
   "message": zod.string(),
-  "readySources": zod.number().int().optional(),
-  "pendingSources": zod.number().int().optional(),
   "activeStrategies": zod.number().int().optional(),
   "connectedBrokers": zod.number().int().optional()
-})
-
-
-/**
- * @summary Trigger ingestion of a specific education source
- */
-export const IngestSourceParams = zod.object({
-  "id": zod.coerce.number().int()
-})
-
-export const IngestSourceResponse = zod.object({
-  "ok": zod.boolean(),
-  "sourceId": zod.number().int().optional(),
-  "error": zod.string().optional(),
-  "status": zod.enum(['pending', 'processing', 'ready', 'partial', 'error']).optional(),
-  "message": zod.string().optional()
-})
-
-
-/**
- * @summary Process all pending education sources
- */
-export const IngestAllPendingResponse = zod.object({
-  "ok": zod.boolean(),
-  "message": zod.string().optional()
 })
 
 

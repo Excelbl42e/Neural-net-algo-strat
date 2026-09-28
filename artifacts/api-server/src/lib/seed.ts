@@ -1,13 +1,14 @@
-import { eq, inArray, sql } from "drizzle-orm";
-import { botConfigTable, brokerConnectionsTable, db, educationSourcesTable, knowledgeChunksTable } from "@workspace/db";
+import { eq } from "drizzle-orm";
+import { botConfigTable, brokerConnectionsTable, strategiesTable, db } from "@workspace/db";
 import { logger } from "./logger.js";
 import { encryptSecret, isEncrypted } from "./crypto.js";
 import { getOrCreateSecret } from "./secrets.js";
+import { STRATEGY_LIBRARY } from "./strategy-library.js";
 
 /**
  * Boot provisioning: fail-closed config row, auto-generated secrets, automatic
- * encryption of legacy plaintext broker tokens, and removal of known test scraps.
- * Nothing here needs a manual step.
+ * encryption of legacy plaintext broker tokens, and the hardcoded strategy
+ * library upsert. Nothing here needs a manual step.
  */
 export async function seedDefaults(): Promise<void> {
   await getOrCreateSecret("session_signing_key");
@@ -33,23 +34,27 @@ export async function seedDefaults(): Promise<void> {
   }
   if (migrated > 0) logger.info({ migrated }, "Encrypted legacy plaintext broker tokens");
 
-  await purgeTestScraps();
+  await seedStrategyLibrary();
 }
 
-/** Deletes the 1-page test PDFs (1.pdf..8.pdf, identical one-sentence body) and their chunks. */
-export async function purgeTestScraps(): Promise<void> {
-  const rows = await db.select({ id: educationSourcesTable.id, title: educationSourcesTable.title, content: educationSourcesTable.contentText, metadata: educationSourcesTable.metadata })
-    .from(educationSourcesTable);
-  const scrapSentence = "Market structure is key to understanding liquidity";
-  const ids = rows.filter((r) => {
-    const text = (r.content ?? "").trim();
-    const short = text.length > 0 && text.length < 400 && text.includes(scrapSentence);
-    const numberedName = /^[1-8](\.pdf)?$/i.test(r.title.trim());
-    return short || (numberedName && text.length < 400);
-  }).map((r) => r.id);
-  if (ids.length === 0) return;
-  await db.delete(knowledgeChunksTable).where(inArray(knowledgeChunksTable.sourceId, ids));
-  await db.delete(educationSourcesTable).where(inArray(educationSourcesTable.id, ids));
-  logger.info({ removed: ids.length }, "Removed test-scrap education sources and their chunks");
-  void sql;
+/** Upserts the hardcoded ICT + quant/TA strategy library into strategiesTable, by name, every boot. */
+export async function seedStrategyLibrary(): Promise<void> {
+  for (const s of STRATEGY_LIBRARY) {
+    const [existingRow] = await db.select({ id: strategiesTable.id }).from(strategiesTable).where(eq(strategiesTable.name, s.name)).limit(1);
+    const values = {
+      name: s.name,
+      type: s.category,
+      description: s.summary,
+      explanation: s.rules,
+      summary: s.summary,
+      rules: s.rules,
+      active: true,
+    };
+    if (existingRow) {
+      await db.update(strategiesTable).set(values).where(eq(strategiesTable.id, existingRow.id));
+    } else {
+      await db.insert(strategiesTable).values(values);
+    }
+  }
+  logger.info({ count: STRATEGY_LIBRARY.length }, "Hardcoded strategy library seeded");
 }

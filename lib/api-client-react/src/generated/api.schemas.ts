@@ -476,7 +476,7 @@ export interface SignalUpdate {
 export interface Strategy {
   id: number;
   name: string;
-  /** Strategy kind. The synthesized mega-strategy uses 'mega'. */
+  /** Strategy category, e.g. 'ict' or 'quant' for the hardcoded strategy library. */
   type: string;
   description: string;
   /** @nullable */
@@ -489,13 +489,10 @@ export interface Strategy {
   tradeCount?: number;
   /** @nullable */
   winRate?: number | null;
-  /**
-     * JSON-encoded list of detected ICT concepts with weights and evidence.
-     * @nullable
-     */
+  /** @nullable */
   concepts?: string | null;
   /**
-     * JSON-encoded execution rules synthesized by the C++ expert system.
+     * Fuller entry/exit rule text for this strategy.
      * @nullable
      */
   rules?: string | null;
@@ -1011,7 +1008,6 @@ export type AnalysisResultStatus = typeof AnalysisResultStatus[keyof typeof Anal
 
 export const AnalysisResultStatus = {
   no_data: 'no_data',
-  brain_not_trained: 'brain_not_trained',
   brain_warming: 'brain_warming',
   ready: 'ready',
 } as const;
@@ -1022,8 +1018,6 @@ export interface AnalysisResult {
   symbol: string;
   timeframe: string;
   message: string;
-  readySources?: number;
-  pendingSources?: number;
   activeStrategies?: number;
   connectedBrokers?: number;
 }
@@ -1193,19 +1187,6 @@ export const ListReportsType = {
   daily: 'daily',
   monthly: 'monthly',
 } as const;
-
-export type UploadSourceFileBody = {
-  /** Supported extensions: PDF, EPUB, JPG, JPEG, PNG, WEBP, GIF, BMP, TIF, TIFF; declared media type must match the extension (application/octet-stream is permitted when the client omits a specific type). */
-  file: Blob | File;
-};
-
-export type UploadSourceFile400 = {
-  error: string;
-};
-
-export type UploadSourceFile413 = {
-  error: string;
-};
 
 export type ListTradeReviewsParams = {
 /**

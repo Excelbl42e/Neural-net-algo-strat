@@ -1,21 +1,21 @@
 import { Link } from "wouter";
-import { Activity, ArrowUpRight, BookOpen, CandlestickChart, Radio, ShieldAlert, Workflow } from "lucide-react";
+import { Activity, ArrowUpRight, CandlestickChart, Crosshair, Radio, ShieldAlert, Workflow } from "lucide-react";
 import {
   useGetWorkerStatus, getGetWorkerStatusQueryKey,
   useGetCandleFeederStatus, getGetCandleFeederStatusQueryKey,
-  useListEducationSources, useListSignals, useListBrokerConnections,
+  useListStrategies, useListSignals, useListBrokerConnections,
 } from "@workspace/api-client-react";
 import { Skeleton } from "@/components/ui/skeleton";
 
 export default function Dashboard() {
   const worker = useGetWorkerStatus({ query: { queryKey: getGetWorkerStatusQueryKey(), refetchInterval: 10000 } });
   const feeder = useGetCandleFeederStatus({ query: { queryKey: getGetCandleFeederStatusQueryKey(), refetchInterval: 10000 } });
-  const sources = useListEducationSources();
+  const strategies = useListStrategies();
   const signals = useListSignals();
   const brokers = useListBrokerConnections();
-  const loading = [worker, feeder, sources, signals, brokers].some(q => q.isLoading);
-  const failed = [worker, feeder, sources, signals, brokers].some(q => q.isError);
-  const readySources = sources.data?.filter(s => s.status === "ready").length;
+  const loading = [worker, feeder, strategies, signals, brokers].some(q => q.isLoading);
+  const failed = [worker, feeder, strategies, signals, brokers].some(q => q.isError);
+  const activeStrategies = strategies.data?.filter(s => s.active).length;
   const activeSignals = signals.data?.filter(s => s.status === "active").length;
   const connectedBrokers = brokers.data?.filter(b => b.status === "connected" && b.enabled).length;
 
@@ -29,10 +29,10 @@ export default function Dashboard() {
       <Link href="/signals" data-testid="link-dashboard-signals" className="text-xs text-primary border border-primary/30 rounded px-3 py-2 hover:bg-primary/10 flex gap-2 items-center">Inspect signals <ArrowUpRight className="w-3.5 h-3.5" /></Link>
     </header>
     {loading ? <div className="grid gap-3 md:grid-cols-3"><Skeleton className="h-40" /><Skeleton className="h-40" /><Skeleton className="h-40" /></div> :
-      failed ? <div className="border border-amber-500/30 rounded-lg p-6 text-sm text-amber-200">Some operational data is unavailable. Do not infer system readiness from partial status. <button className="underline ml-2" onClick={() => { worker.refetch(); feeder.refetch(); sources.refetch(); signals.refetch(); brokers.refetch(); }}>Retry</button></div> :
+      failed ? <div className="border border-amber-500/30 rounded-lg p-6 text-sm text-amber-200">Some operational data is unavailable. Do not infer system readiness from partial status. <button className="underline ml-2" onClick={() => { worker.refetch(); feeder.refetch(); strategies.refetch(); signals.refetch(); brokers.refetch(); }}>Retry</button></div> :
       <>
         <section className="grid gap-3 md:grid-cols-[1.1fr_1fr_1fr]">
-          <StatusPanel icon={<BookOpen className="w-5 h-5" />} label="Knowledge sources" value={`${readySources ?? 0} ready / ${sources.data?.length ?? 0} total`} detail="Source status reported by ingestion API" href="/education" />
+          <StatusPanel icon={<Crosshair className="w-5 h-5" />} label="Strategy library" value={`${activeStrategies ?? 0} active`} detail="Hardcoded ICT + quant/TA strategies, seeded on boot" href="/strategy" />
           <StatusPanel icon={<Activity className="w-5 h-5" />} label="Signal worker" value={worker.data?.running ? "Running" : "Not running"} detail={`${worker.data?.signalsGeneratedTotal ?? 0} generated (worker counter) · ${activeSignals ?? 0} active records`} href="/analysis" />
           <StatusPanel icon={<Radio className="w-5 h-5" />} label="Deriv connectivity" value={`${connectedBrokers ?? 0} broker connections`} detail={`Candle feeder: ${feeder.data?.connected ? "connected" : "disconnected"} · ${feeder.data?.symbols.length ?? 0} subscribed symbols`} href="/brokers" />
         </section>
@@ -41,8 +41,8 @@ export default function Dashboard() {
             <div className="flex items-center gap-2 text-violet-300 font-mono-numbers text-[11px] tracking-widest uppercase"><Workflow className="w-4 h-4" /> What happens next</div>
             <div className="mt-5 space-y-0">
               {[
-                ["01", "Ingest", "Submitted sources are parsed and stored; source rows expose processing status and counts.", "/education"],
-                ["02", "Analyze", "The worker generates signal records from available market and knowledge context.", "/analysis"],
+                ["01", "Strategy library", "The hardcoded ICT + quant/TA strategy list feeds the signal prompt directly — no upload or processing step.", "/strategy"],
+                ["02", "Analyze", "The worker generates signal records from available market data and the strategy library.", "/analysis"],
                 ["03", "Review", "A generated signal is not proof that an order was sent or filled. Verify trades and broker state independently.", "/signals"],
               ].map(([n, title, body, href]) => <Link key={n} href={href} className="group flex gap-5 border-t border-border/70 py-4" data-testid={`link-stage-${n}`}>
                 <span className="font-mono-numbers text-primary text-xs">{n}</span>

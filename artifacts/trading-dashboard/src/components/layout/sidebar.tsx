@@ -1,17 +1,16 @@
 import { Link, useLocation } from "wouter";
-import { 
-  Activity, 
+import {
+  Activity,
   Zap,
   CandlestickChart,
-  Crosshair, 
-  Wallet, 
-  BarChart3, 
-  History, 
+  Crosshair,
+  Wallet,
+  BarChart3,
+  History,
   Terminal,
   Plug,
   ScanSearch,
   Settings,
-  BookOpen,
   BookOpenText,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -23,7 +22,6 @@ export function Sidebar() {
 
   const links = [
     { href: "/", label: "Overview", icon: Activity },
-    { href: "/education", label: "Education", icon: BookOpen },
     { href: "/analysis", label: "Analysis", icon: ScanSearch },
     { href: "/signals", label: "Signals", icon: Zap },
     { href: "/chart", label: "Chart", icon: CandlestickChart },
@@ -45,7 +43,6 @@ export function Sidebar() {
           <span className="font-bold text-base tracking-tight uppercase">NeuralTrade</span>
         </div>
         <div className="mt-2 hidden md:flex flex-col gap-1">
-          <StackBadge color="text-violet-400 border-violet-400/30 bg-violet-400/5" label="C++" sublabel="Concept scanner" />
           <StackBadge color="text-fuchsia-400 border-fuchsia-400/30 bg-fuchsia-400/5" label="Node" sublabel="Signal worker / Deriv client" />
           <StackBadge color="text-primary border-primary/30 bg-primary/5" label="React" sublabel="Control panel" />
         </div>

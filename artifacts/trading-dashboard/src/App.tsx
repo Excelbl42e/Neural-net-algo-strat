@@ -18,7 +18,6 @@ import Brokers from "@/pages/brokers";
 import Configuration from "@/pages/configuration";
 import Analysis from "@/pages/analysis";
 import Chart from "@/pages/chart";
-import Education from "@/pages/education";
 import Journal from "@/pages/journal";
 
 const queryClient = new QueryClient({
@@ -43,7 +42,6 @@ function Router() {
         <Route path="/trades" component={Trades} />
         <Route path="/reports" component={Reports} />
         <Route path="/analysis" component={Analysis} />
-        <Route path="/education" component={Education} />
         <Route path="/journal" component={Journal} />
         <Route path="/configuration" component={Configuration} />
         <Route component={NotFound} />

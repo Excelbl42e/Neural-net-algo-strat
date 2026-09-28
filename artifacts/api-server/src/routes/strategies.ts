@@ -6,7 +6,6 @@ import {
   UpdateStrategyBody,
   UpdateStrategyParams,
 } from "@workspace/api-zod";
-import { synthesizeMegaStrategy, getMegaStrategyRow } from "../lib/expert-system.js";
 
 const router: IRouter = Router();
 
@@ -39,41 +38,6 @@ router.get("/strategies", async (_req, res): Promise<void> => {
 });
 
 // IMPORTANT: literal-path routes must come BEFORE /:id
-
-router.post("/strategies/synthesize", async (req, res): Promise<void> => {
-  try {
-    const result = await synthesizeMegaStrategy();
-    if (!result) {
-      res.status(400).json({ error: "No ready knowledge sources to synthesize from. Upload knowledge first." });
-      return;
-    }
-    const row = await getMegaStrategyRow();
-    if (!row) {
-      res.status(500).json({ error: "Synthesis succeeded but strategy row not found" });
-      return;
-    }
-    res.json({
-      strategy: serialize(row),
-      conceptsCount: result.output.concepts.length,
-      rulesCount: result.output.rules.length,
-      sourcesUsed: result.output.sourcesUsed,
-      wordsAnalyzed: result.output.wordsAnalyzed,
-    });
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    req.log.error({ err: msg }, "Synthesize failed");
-    res.status(500).json({ error: msg });
-  }
-});
-
-router.get("/strategies/mega", async (_req, res): Promise<void> => {
-  const row = await getMegaStrategyRow();
-  if (!row) {
-    res.json(null);
-    return;
-  }
-  res.json(serialize(row));
-});
 
 router.post("/strategies", async (req, res): Promise<void> => {
   const parsed = CreateStrategyBody.safeParse(req.body);

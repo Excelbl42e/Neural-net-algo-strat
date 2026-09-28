@@ -1,20 +1,19 @@
 /**
  * AI signal generator worker.
- * Every SIGNAL_INTERVAL_MS, for each configured instrument, retrieves a
- * sample of knowledge chunks, asks gpt-5.4 to identify ICT/SMC patterns,
- * and writes signals to the signals table when confidence meets the threshold.
+ * Every SIGNAL_INTERVAL_MS, for each configured instrument, asks gpt-5.4 to
+ * identify ICT/SMC patterns against a hardcoded strategy library (see
+ * strategy-library.ts), and writes signals to the signals table when
+ * confidence meets the threshold.
  *
- * GPT-based ICT analysis and a deterministic concept tagger produce signals;
- * the Node/TypeScript Deriv path is the execution layer.
+ * GPT-based ICT analysis produces signals; the Node/TypeScript Deriv path is
+ * the execution layer.
  */
-import { eq, sql, and, or, gte, lt, lte, isNull, inArray, desc } from "drizzle-orm";
+import { eq, sql, and, or, gte, lt, lte, isNull, desc } from "drizzle-orm";
 import {
   db,
   signalsTable,
   strategiesTable,
   botConfigTable,
-  knowledgeChunksTable,
-  educationSourcesTable,
   brokerConnectionsTable,
   tradesTable,
   candlesTable,
@@ -114,14 +113,15 @@ import {
   atrPercentile, geometryGate, portfolioGate, preTradeGate, premiumDiscount, verifyClaims, DEFAULT_THRESHOLDS,
   type OHLC, type QuantThresholds,
 } from "./quant-filters.js";
+import { STRATEGY_LIBRARY, strategySummaryList, quantKnowledgeContext } from "./strategy-library.js";
 
 // H1 entry timing and 1–4 day holding do not justify a paid GPT scan every
 // five minutes. Feed and open-contract monitors run on their own schedules.
 const SIGNAL_INTERVAL_MS = 30 * 60 * 1000;
-const CHUNK_SAMPLE_SIZE = 12;              // chunks to feed per analysis
 const DEFAULT_CONCEPT_SCORE_THRESHOLD = 0.4;
 const DEFAULT_CONCEPT_MIN_SAMPLES = 8;
 const DEFAULT_CONCEPT_PRIOR_SAMPLES = 4;
+const STRATEGY_LIBRARY_NAME = "NeuralTrade Hardcoded Strategy Library";
 // Only forex is traded and analyzed. The bot scans every forex major in the
 // catalog unless the account has a custom allowedInstruments allow-list
 // (which is itself filtered back down to forex — see below).
@@ -129,8 +129,8 @@ const DEFAULT_INSTRUMENTS = ALL_FOREX_INSTRUMENTS;
 
 interface PromptConceptScore {
   name: string;
-  cxxHitWeight: number;
-  cxxHitCount: number;
+  category: "ict" | "quant";
+  libraryRank: number;
   sampleAdjustedScore: number;
   historicalSamples: number;
 }
@@ -467,9 +467,9 @@ Always mark D1 FVGs first, then H4 FVGs. Only use LTF FVGs for entry precision i
 Once price breaks structure in your direction (first BOS after entry), consider moving SL to break-even (entry price). Do not claim an outcome unless it is shown by the supplied candles.
 
 ═══ KEY RULES FOR FOREX ═══
-Eligible ingestion concepts and persisted sample-adjusted scores (structured evidence; concept weights are hit weights from the C++ ingestion scanner):
+Eligible strategy-library concepts and persisted sample-adjusted scores (structured evidence; ranks are fixed priority order from the hardcoded strategy library, not a live measurement):
 ${conceptEvidence}
-- Prefer concepts with stronger scanner hit weight and higher sample-adjusted historical score. Do not use a concept absent from this eligible list.
+- Prefer concepts with a lower (higher-priority) library rank and higher sample-adjusted historical score. Do not use a concept absent from this eligible list.
 - Real institutional market: news events and spread widen at session opens and around high-impact releases — this signal was only generated because the code-side news blackout and session gate already passed for this instrument at scan time; still favour setups AWAY from the immediate post-release spike.
 - Forex is closed Sat 00:00 UTC – Sun 21:00 UTC and thinly traded right at that reopen; a setup at the very start of the week deserves extra caution.
 - EURUSD/GBPUSD: highest liquidity, tightest cost, cleanest London/NY structure.
@@ -525,7 +525,7 @@ If the DOL is unclear, BMS has no FVG confirmation, or entry is in wrong premium
 ${priceLine}
 Expected hold: 1–4 days. Use D1/H4 candles for directional bias and H1 candles for entry timing. Do not assume a one-week hold or refer to candle intervals not present below. Make every price claim traceable to the supplied data.
 ${candleSection}${performanceSection}
-Relevant ICT knowledge extracted from training materials:
+Hardcoded strategy library reference (ICT concept index + full quant/TA strategy rules):
 ---
 ${knowledgeContext}
 ---
@@ -1205,53 +1205,10 @@ async function runWorkerTick(): Promise<void> {
     const newsEvents = await getNewsEvents();
     const scanTime = new Date();
 
-    // The synthesized mega-strategy (single row produced by the C++ expert system).
-    const { getMegaStrategyRow } = await import("./expert-system.js");
-    const mega = await getMegaStrategyRow();
-    if (!mega || !mega.active) {
-      logger.info("Signal worker: no active mega-strategy, skipping");
-      return;
-    }
-    let megaConcepts: { name: string; weight: number; hitCount: number }[] = [];
-    try {
-      const parsedConcepts: unknown = mega.concepts ? JSON.parse(mega.concepts) : [];
-      megaConcepts = Array.isArray(parsedConcepts)
-        ? parsedConcepts.filter((concept): concept is { name: string; weight: number; hitCount: number } =>
-            Boolean(
-              concept
-              && typeof concept.name === "string"
-              && concept.name.trim()
-              && Number.isFinite(Number(concept.weight))
-              && Number.isFinite(Number(concept.hitCount)),
-            ),
-          ).map((concept) => ({
-            name: concept.name.trim(),
-            weight: Number(concept.weight),
-            hitCount: Number(concept.hitCount),
-          }))
-        : [];
-    } catch {
-      megaConcepts = [];
-    }
-    if (megaConcepts.length === 0) {
-      logger.info("Signal worker: mega-strategy has no concepts, skipping");
-      return;
-    }
-    // The LLM must only receive real ingested knowledge, never synthesized
-    // seed/fallback rules presented as source evidence.
-    const chunks = await db
-      .select({ content: knowledgeChunksTable.content })
-      .from(knowledgeChunksTable)
-      .innerJoin(educationSourcesTable, eq(knowledgeChunksTable.sourceId, educationSourcesTable.id))
-      .where(inArray(educationSourcesTable.status, ["ready", "partial"]))
-      .orderBy(sql`RANDOM()`)
-      .limit(CHUNK_SAMPLE_SIZE);
-
-    if (chunks.length === 0) {
-      logger.warn("Signal worker: no actual knowledge chunks available; skipping analysis");
-      return;
-    }
-    const knowledgeContext = chunks.map((c, i) => `[${i + 1}] ${c.content}`).join("\n\n");
+    // Hardcoded strategy library (see strategy-library.ts) replaces the old
+    // book-ingestion pipeline as the source of both the concept eligibility
+    // list and the supplementary knowledge context below.
+    const knowledgeContext = `${strategySummaryList()}\n\n${quantKnowledgeContext()}`;
 
     const conceptScoreOptions = {
       threshold: boundedEnvNumber("ICT_CONCEPT_SCORE_THRESHOLD", DEFAULT_CONCEPT_SCORE_THRESHOLD, 0, 1),
@@ -1259,32 +1216,32 @@ async function runWorkerTick(): Promise<void> {
       priorSamples: boundedEnvNumber("ICT_CONCEPT_PRIOR_SAMPLES", DEFAULT_CONCEPT_PRIOR_SAMPLES, 0.1, 100),
     };
     const scoreRows = await scoreConcepts(
-      megaConcepts.map((concept) => conceptKey(concept.name)),
+      STRATEGY_LIBRARY.map((s) => conceptKey(s.name)),
       conceptScoreOptions,
     );
     const scoreByConcept = new Map(scoreRows.map((row) => [conceptKey(row.concept), row]));
     const suppressedConcepts = new Set(
       scoreRows.filter((row) => !row.eligible).map((row) => conceptKey(row.concept)),
     );
-    const eligibleConcepts: PromptConceptScore[] = megaConcepts
-      .map((concept) => {
-        const score = scoreByConcept.get(conceptKey(concept.name));
+    const eligibleConcepts: PromptConceptScore[] = STRATEGY_LIBRARY
+      .map((s) => {
+        const score = scoreByConcept.get(conceptKey(s.name));
         return score?.eligible
           ? {
-              name: concept.name,
-              cxxHitWeight: concept.weight,
-              cxxHitCount: concept.hitCount,
+              name: s.name,
+              category: s.category,
+              libraryRank: s.rank,
               sampleAdjustedScore: score.score,
               historicalSamples: score.sampleCount,
             }
           : null;
       })
       .filter((concept): concept is PromptConceptScore => concept !== null)
-      .sort((a, b) => b.cxxHitWeight - a.cxxHitWeight || b.sampleAdjustedScore - a.sampleAdjustedScore);
+      .sort((a, b) => a.libraryRank - b.libraryRank || b.sampleAdjustedScore - a.sampleAdjustedScore);
     if (eligibleConcepts.length === 0) {
       logger.info(
         { threshold: conceptScoreOptions.threshold },
-        "Signal worker: persisted score gate suppressed all ingestion concepts; skipping GPT analysis",
+        "Signal worker: persisted score gate suppressed every library concept, skipping GPT analysis",
       );
       return;
     }
@@ -1296,7 +1253,7 @@ async function runWorkerTick(): Promise<void> {
     }
 
     logger.info(
-      { instruments, concepts: eligibleConcepts.length, suppressedConcepts: suppressedConcepts.size, chunks: chunks.length, autotradeMode: config.autotradeMode, enabled: config.enabled },
+      { instruments, concepts: eligibleConcepts.length, suppressedConcepts: suppressedConcepts.size, autotradeMode: config.autotradeMode, enabled: config.enabled },
       "Signal worker tick"
     );
 
@@ -1618,7 +1575,7 @@ async function runWorkerTick(): Promise<void> {
           symbol,
           direction: result.direction,
           confidence: String(result.confidence),
-          strategy: result.conceptsDetected || mega.name,
+          strategy: result.conceptsDetected || STRATEGY_LIBRARY_NAME,
           concepts: result.conceptsDetected,
           entryZone: result.entryZone,
           targetZone: result.targetZone || null,
@@ -1648,7 +1605,7 @@ async function runWorkerTick(): Promise<void> {
           symbol,
           direction: result.direction,
           confidence: String(result.confidence),
-          strategy: result.conceptsDetected || mega.name,
+          strategy: result.conceptsDetected || STRATEGY_LIBRARY_NAME,
           reasoning: result.reasoning || null,
           stopLevel: result.stopLevel != null ? String(result.stopLevel) : null,
           target1Level: result.target1Level != null ? String(result.target1Level) : null,

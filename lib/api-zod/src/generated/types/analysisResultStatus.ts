@@ -11,7 +11,6 @@ export type AnalysisResultStatus = typeof AnalysisResultStatus[keyof typeof Anal
 
 export const AnalysisResultStatus = {
   no_data: 'no_data',
-  brain_not_trained: 'brain_not_trained',
   brain_warming: 'brain_warming',
   ready: 'ready',
 } as const;
