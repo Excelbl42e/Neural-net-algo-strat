@@ -1,5 +1,9 @@
 # Changes in this build (vs. your Replit export)
 
+## Update: expanded quant/TA strategy count from 10 to 20
+- Per request: 10 more hardcoded technical-analysis strategies added to `lib/strategy-library.ts`, all computed from OHLC price data only (none assume real traded volume, which this system never has): Stochastic Oscillator Reversal, ADX Trend Strength Filter, Ichimoku Cloud Confluence, Parabolic SAR Trend Flip, Pivot Point Confluence, Keltner Channel Breakout, Rate of Change Momentum Filter, Williams %R Extreme Reversal, Donchian Channel Breakout, CCI Extreme Filter.
+- Total library is now 20 ICT + 20 quant/TA = 40 strategies. No other code changed — `STRATEGY_LIBRARY`, the eligibility gate, the prompt injection, and the boot-time seed into `strategiesTable` all already operated generically over the array.
+
 ## Update: hardcoded strategy library, book-ingestion pipeline removed
 - Per explicit request: the book-upload/OCR/chunking pipeline (Education page, `/education/*` and `/brain/ingest/*` API routes, `lib/ingest.ts`, the C++ `chunker` binary) is removed from the product. Nothing in the running app depends on uploaded books anymore.
 - The C++ "concept scanner" (`expert-system.ts`/`expert_system.cpp`, the `strategies/synthesize` and `strategies/mega` endpoints, the old Strategy page's "Scan ready sources" button) is also removed — it existed only to scan ingested book chunks for concept names, which no longer exist as an input.
