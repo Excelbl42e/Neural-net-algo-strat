@@ -80,15 +80,17 @@ export async function placeDerivTrade(params: DerivTradeParams): Promise<DerivTr
   const useMultiplier = meta?.tradeType === "multiplier" && !params.forceBinary;
   const multiplier = meta?.multiplier ?? 30;
   const currency = params.currency ?? "USD";
-  // Verified live against Deriv: the buy request's `parameters` object does
-  // NOT accept `symbol` ("Properties not allowed: symbol") — it belongs at
-  // the top level of the buy request instead, unlike `proposal`.
+  // Verified live against Deriv, twice: the field is not named `symbol` at
+  // all anymore in this API — confirmed via Deriv's own current docs, the
+  // proposal/buy schema renamed it to `underlying_symbol`. Neither a nested
+  // nor a top-level `symbol` was accepted ("Properties not allowed: symbol"
+  // both times); this is the actual fix, not just a placement change.
   let parameters: Record<string, unknown>;
   let duration: string | null = null;
   if (useMultiplier) {
     parameters = {
       contract_type: params.direction === "buy" ? "MULTUP" : "MULTDOWN",
-      amount: params.stakeAmount, basis: "stake", currency, multiplier,
+      underlying_symbol: symbol, amount: params.stakeAmount, basis: "stake", currency, multiplier,
     };
     const limit = computeLimitOrder(params, multiplier);
     if (limit) parameters.limit_order = limit;
@@ -97,7 +99,7 @@ export async function placeDerivTrade(params: DerivTradeParams): Promise<DerivTr
     duration = `${d.value}${d.unit}`;
     parameters = {
       contract_type: params.direction === "buy" ? "CALL" : "PUT",
-      duration: d.value, duration_unit: d.unit,
+      underlying_symbol: symbol, duration: d.value, duration_unit: d.unit,
       amount: params.stakeAmount, basis: "stake", currency,
     };
   }
@@ -109,7 +111,7 @@ export async function placeDerivTrade(params: DerivTradeParams): Promise<DerivTr
       error?: { message?: string; code?: string; details?: unknown };
       buy?: { contract_id?: number; buy_price?: number | string };
     }>(
-      { buy: "1", price: params.stakeAmount, symbol, parameters, passthrough: { signal_id: params.signalId ?? null } },
+      { buy: "1", price: params.stakeAmount, parameters, passthrough: { signal_id: params.signalId ?? null } },
       { signalId: params.signalId ?? null, timeoutMs: 20_000 },
     );
     if (res.error) {
@@ -168,7 +170,7 @@ export async function getIndicativeCostPct(token: string, environment: "demo" | 
   try {
     session = await openDerivSession(token, environment);
     const res = await session.request<{ proposal?: { ask_price?: number | string }; error?: { message?: string } }>(
-      { proposal: 1, amount: 1, basis: "stake", contract_type: "MULTUP", currency: "USD", symbol, multiplier },
+      { proposal: 1, amount: 1, basis: "stake", contract_type: "MULTUP", currency: "USD", underlying_symbol: symbol, multiplier },
       { timeoutMs: 8_000 },
     );
     if (res.error) return null;
