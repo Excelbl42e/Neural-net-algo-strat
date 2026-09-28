@@ -40,13 +40,41 @@ export interface SyntheticSymbol {
 
 export const SYNTHETIC_CATALOG: SyntheticSymbol[] = [
   // ── REAL MARKETS — preferred for ICT/SMC trading ──────────────────────────
-  // Forex majors (24/5, real institutional liquidity)
+  // Forex majors + crosses (24/5, real institutional liquidity). Not
+  // independently verified against Deriv's live active_symbols list from
+  // this sandbox (no outbound network here) — if any one of these isn't
+  // actually offered, it simply never gets candle data or trades; nothing
+  // else breaks. Majors stay in DEFAULT_FEED_SYMBOLS for a fast boot
+  // subscribe; the rest lazy-subscribe the first time the signal worker
+  // scans them or a chart requests them.
   { code: "frxEURUSD", display: "EUR / USD", group: "Forex", pipDecimals: 5, tradeType: "multiplier", multiplier: 30 },
   { code: "frxGBPUSD", display: "GBP / USD", group: "Forex", pipDecimals: 5, tradeType: "multiplier", multiplier: 30 },
   { code: "frxUSDJPY", display: "USD / JPY", group: "Forex", pipDecimals: 3, tradeType: "multiplier", multiplier: 30 },
   { code: "frxAUDUSD", display: "AUD / USD", group: "Forex", pipDecimals: 5, tradeType: "multiplier", multiplier: 30 },
   { code: "frxUSDCAD", display: "USD / CAD", group: "Forex", pipDecimals: 5, tradeType: "multiplier", multiplier: 30 },
   { code: "frxGBPJPY", display: "GBP / JPY", group: "Forex", pipDecimals: 3, tradeType: "multiplier", multiplier: 30 },
+  { code: "frxUSDCHF", display: "USD / CHF", group: "Forex", pipDecimals: 5, tradeType: "multiplier", multiplier: 30 },
+  { code: "frxNZDUSD", display: "NZD / USD", group: "Forex", pipDecimals: 5, tradeType: "multiplier", multiplier: 30 },
+  { code: "frxEURGBP", display: "EUR / GBP", group: "Forex", pipDecimals: 5, tradeType: "multiplier", multiplier: 30 },
+  { code: "frxEURJPY", display: "EUR / JPY", group: "Forex", pipDecimals: 3, tradeType: "multiplier", multiplier: 30 },
+  { code: "frxEURAUD", display: "EUR / AUD", group: "Forex", pipDecimals: 5, tradeType: "multiplier", multiplier: 30 },
+  { code: "frxEURCAD", display: "EUR / CAD", group: "Forex", pipDecimals: 5, tradeType: "multiplier", multiplier: 30 },
+  { code: "frxEURCHF", display: "EUR / CHF", group: "Forex", pipDecimals: 5, tradeType: "multiplier", multiplier: 30 },
+  { code: "frxEURNZD", display: "EUR / NZD", group: "Forex", pipDecimals: 5, tradeType: "multiplier", multiplier: 30 },
+  { code: "frxGBPAUD", display: "GBP / AUD", group: "Forex", pipDecimals: 5, tradeType: "multiplier", multiplier: 30 },
+  { code: "frxGBPCAD", display: "GBP / CAD", group: "Forex", pipDecimals: 5, tradeType: "multiplier", multiplier: 30 },
+  { code: "frxGBPCHF", display: "GBP / CHF", group: "Forex", pipDecimals: 5, tradeType: "multiplier", multiplier: 30 },
+  { code: "frxGBPNZD", display: "GBP / NZD", group: "Forex", pipDecimals: 5, tradeType: "multiplier", multiplier: 30 },
+  { code: "frxAUDJPY", display: "AUD / JPY", group: "Forex", pipDecimals: 3, tradeType: "multiplier", multiplier: 30 },
+  { code: "frxAUDCAD", display: "AUD / CAD", group: "Forex", pipDecimals: 5, tradeType: "multiplier", multiplier: 30 },
+  { code: "frxAUDCHF", display: "AUD / CHF", group: "Forex", pipDecimals: 5, tradeType: "multiplier", multiplier: 30 },
+  { code: "frxAUDNZD", display: "AUD / NZD", group: "Forex", pipDecimals: 5, tradeType: "multiplier", multiplier: 30 },
+  { code: "frxNZDJPY", display: "NZD / JPY", group: "Forex", pipDecimals: 3, tradeType: "multiplier", multiplier: 30 },
+  { code: "frxNZDCAD", display: "NZD / CAD", group: "Forex", pipDecimals: 5, tradeType: "multiplier", multiplier: 30 },
+  { code: "frxNZDCHF", display: "NZD / CHF", group: "Forex", pipDecimals: 5, tradeType: "multiplier", multiplier: 30 },
+  { code: "frxCADJPY", display: "CAD / JPY", group: "Forex", pipDecimals: 3, tradeType: "multiplier", multiplier: 30 },
+  { code: "frxCADCHF", display: "CAD / CHF", group: "Forex", pipDecimals: 5, tradeType: "multiplier", multiplier: 30 },
+  { code: "frxCHFJPY", display: "CHF / JPY", group: "Forex", pipDecimals: 3, tradeType: "multiplier", multiplier: 30 },
 
   // Commodities
   { code: "frxXAUUSD", display: "Gold / USD",  group: "Commodities", pipDecimals: 2, tradeType: "multiplier", multiplier: 30 },
