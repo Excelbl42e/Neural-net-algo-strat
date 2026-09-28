@@ -236,7 +236,11 @@ class CandleFeeder {
         });
       }
 
-      // Persist historical candles in one go (fire-and-forget)
+      // Persist historical candles in one go (fire-and-forget).
+      // Deriv's ticks_history candle response carries no volume field at all
+      // — leave it null (unknown) rather than a false "0", which would read
+      // as "confirmed zero trading activity" to any future consumer. Only
+      // the live-built M1 candles below have a real value (actual tick count).
       const inserts = msg.candles.map((c) => ({
         symbol,
         timeframe: tf,
@@ -245,7 +249,6 @@ class CandleFeeder {
         high: String(c.high),
         low: String(c.low),
         close: String(c.close),
-        volume: "0",
       }));
       if (inserts.length > 0) {
         db.insert(candlesTable)

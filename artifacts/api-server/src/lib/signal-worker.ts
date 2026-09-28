@@ -384,7 +384,7 @@ PRINCIPLE 1 — PERMANENT vs TEMPORARY PRICE IMPACT (Kyle 1985 / Glosten-Milgrom
 Every price move has two components: PERMANENT impact (the efficient price shifts — a new informed order permanently changed fair value) and TEMPORARY impact (execution noise from liquidity traders that quickly mean-reverts). The FVG is the physical signature of PERMANENT impact — the region where the institutional algo had to execute faster than the LOB could absorb, leaving an unfilled gap. A BMS with a visible FVG = permanent price impact confirmed = follow it. A BMS with NO FVG = temporary impact only = retail noise = fade or skip.
 
 PRINCIPLE 2 — ADVERSE SELECTION & ORDER IMBALANCE (Glosten-Milgrom / Cartea Ch.12):
-When order flow is BUY-HEAVY (more buy market orders than sell orders arriving = bid > ask side dominance), future price jumps are biased UPWARD by ~28% more often than neutral. When SELL-HEAVY, price jumps downward 21% more frequently. In practice on forex: a bullish DISPLACEMENT candle with a large body means the informed buyer executed aggressively — buy-heavy imbalance regime — making the resulting FVG/OB a HIGH-QUALITY entry zone. Conversely, a bearish DISPLACEMENT with large body = sell-heavy regime = FVG below is high-quality for shorts. Weak, small-body breakouts = neutral or opposing imbalance = low quality, skip.
+The underlying research measures order imbalance from real order-book/order-flow data: when order flow is BUY-HEAVY (more buy market orders than sell orders arriving = bid > ask side dominance), future price jumps are biased UPWARD by ~28% more often than neutral; SELL-HEAVY biases downward 21% more often. The candles supplied to you carry no real order-flow, order-book, or volume data — large candle body is used here only as a PROXY for that imbalance, not a measurement of it. Apply it as a lower-confidence heuristic: a bullish DISPLACEMENT candle with a large body is treated as buy-heavy-regime evidence, making the resulting FVG/OB a higher-quality entry zone; a bearish DISPLACEMENT with large body is treated as sell-heavy-regime evidence for shorts. Weak, small-body breakouts get no imbalance-regime credit either way. Never state in your reasoning that order flow or order-book imbalance was directly observed — only that the candle-body proxy suggests it.
 
 PRINCIPLE 3 — VOLUME-VOLATILITY CLUSTERING & SESSION TIMING (Cartea Ch.3-4):
 Empirically: spreads are WIDEST at market open (high uncertainty, informed + noise traders both active), narrow through mid-session, then narrow again at close. Volume is U-shaped: peak at open, trough at mid-day, peak at close. Implication for entry timing: the London/NY sweep (Manipulation phase) fires at the SESSION OPEN spike. Do NOT enter on the very first candle of the session — that is the maximum-noise environment. Wait 1-3 candles (30-90 minutes) for the sweep to complete and the spread/noise to decline. The best entry candle is 1-3 periods AFTER the ALGO_CANDLE prints, when order imbalance has stabilised and the retracement into FVG begins.
@@ -545,17 +545,24 @@ Apply these steps, use the candle data as evidence, then respond with your JSON.
     const response = await getOpenAI().chat.completions.create({
       model: "gpt-5.4",
       max_completion_tokens: 1024,
+      response_format: { type: "json_object" },
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt },
       ],
     });
 
+    // response_format: json_object should make the API itself guarantee
+    // valid, complete JSON in content. This runs through a configurable AI
+    // integration proxy (AI_INTEGRATIONS_OPENAI_BASE_URL), not necessarily
+    // api.openai.com directly, so keep the old brace-match extraction as a
+    // fallback in case that proxy doesn't honor response_format — evidence
+    // label: code review only, not verified against the live endpoint.
     const raw = response.choices[0]?.message?.content ?? "";
-    const jsonMatch = raw.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) return null;
+    if (!raw.trim()) return null;
+    const jsonSource = raw.trim().startsWith("{") ? raw : (raw.match(/\{[\s\S]*\}/)?.[0] ?? raw);
 
-    const parsed = JSON.parse(jsonMatch[0]);
+    const parsed = JSON.parse(jsonSource);
     if (
       !parsed.setup_found
       || !Number.isFinite(Number(parsed.confidence))
