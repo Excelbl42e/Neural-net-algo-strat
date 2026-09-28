@@ -1,3 +1,4 @@
 - [Workflow configuration validation](workflow-config-validation.md) — validate .replit edits; a failed managed restart can leave old processes holding ports.
 - [Deriv protocol migration](deriv-protocol-migration.md) — legacy WebSocket 520 is not proof of its cause; verify current public and OTP account channels independently.
 - [Import dependency firewall](import-dependency-firewall.md) — if a locked development tool is blocked during restore, update that tool rather than bypassing the registry.
+- [GitHub push authentication](github-push-auth.md) — a connected GitHub API integration may not authorize shell git push in this workspace.
