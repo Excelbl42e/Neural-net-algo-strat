@@ -580,36 +580,6 @@ paths:
               schema:
                 $ref: "#/components/schemas/Strategy"
 
-  /strategies/synthesize:
-    post:
-      operationId: synthesizeStrategy
-      tags: [strategies]
-      summary: Run the C++ expert system across all knowledge chunks and (re)synthesize the single mega-strategy.
-      responses:
-        "200":
-          description: Synthesized
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/SynthesizeResult"
-        "400":
-          description: No knowledge available
-
-  /strategies/mega:
-    get:
-      operationId: getMegaStrategy
-      tags: [strategies]
-      summary: Return the current synthesized mega-strategy (or 404 if none has been synthesized yet).
-      responses:
-        "200":
-          description: The mega strategy
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Strategy"
-        "404":
-          description: Not synthesized yet
-
   /strategies/{id}:
     patch:
       operationId: updateStrategy
@@ -736,175 +706,6 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/WorkflowStatus"
-
-  # ──────────────── EDUCATION ────────────────
-  /education/sources:
-    get:
-      operationId: listEducationSources
-      tags: [education]
-      summary: List all knowledge base sources
-      responses:
-        "200":
-          description: Education sources list
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/EducationSource"
-    post:
-      operationId: createEducationSource
-      tags: [education]
-      summary: Add a new knowledge source (book, video, playlist, raw text)
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/EducationSourceInput"
-      responses:
-        "201":
-          description: Created
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/EducationSource"
-
-  /education/sources/{id}/file:
-    post:
-      operationId: uploadSourceFile
-      tags: [education]
-      summary: Upload a PDF, EPUB, or supported book-page image for ingestion
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: integer
-      requestBody:
-        required: true
-        content:
-          multipart/form-data:
-            schema:
-              type: object
-              required: [file]
-              properties:
-                file:
-                  type: string
-                  format: binary
-                  description: "Supported extensions: PDF, EPUB, JPG, JPEG, PNG, WEBP, GIF, BMP, TIF, TIFF; declared media type must match the extension (application/octet-stream is permitted when the client omits a specific type)."
-      responses:
-        "200":
-          description: File uploaded and ingestion triggered
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/SimpleOk"
-        "404":
-          description: Source not found
-        "400":
-          description: Missing file, unsupported extension, or mismatched media type
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [error]
-                properties:
-                  error: { type: string }
-        "413":
-          description: File exceeds the 100 MB upload limit
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [error]
-                properties:
-                  error: { type: string }
-
-  /education/sources/{id}/ingest:
-    post:
-      operationId: triggerEducationSourceIngest
-      tags: [education]
-      summary: Run or retry ingestion for an existing education source
-      description: Ready sources return successfully without reprocessing; processing sources return 409 without starting a duplicate; pending and error sources are ingested/retried synchronously.
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema: { type: integer, minimum: 1 }
-      responses:
-        "200":
-          description: Ingestion completed, or the source was already ready
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/IngestResult"
-        "400":
-          description: Invalid source id
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/IngestResult"
-        "404":
-          description: Source not found
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/IngestResult"
-        "409":
-          description: Source is already processing; no duplicate ingestion was started
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/IngestResult"
-        "500":
-          description: Ingestion failed; error detail is persisted on the source
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/IngestResult"
-
-  /education/sources/{id}:
-    patch:
-      operationId: updateEducationSource
-      tags: [education]
-      summary: Update ingestion status / metadata (called by C++ ingestion engine)
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: integer
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/EducationSourceUpdate"
-      responses:
-        "200":
-          description: Updated
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/EducationSource"
-        "404":
-          description: Not found
-    delete:
-      operationId: deleteEducationSource
-      tags: [education]
-      summary: Remove a knowledge source from the system
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: integer
-      responses:
-        "204":
-          description: Deleted
-        "404":
-          description: Not found
 
   # ──────────────── BROKER CONNECTIONS ────────────────
   /brokers/connections:
@@ -1052,44 +853,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/AnalysisResult"
 
-  # ──────────────── BRAIN / INGESTION / WORKERS ────────────────
-  /brain/ingest/{id}:
-    post:
-      operationId: ingestSource
-      tags: [brain]
-      summary: Trigger ingestion of a specific education source
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema: { type: integer }
-      responses:
-        "200":
-          description: Ingestion result
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/IngestResult"
-        "500":
-          description: Error
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/IngestResult"
-
-  /brain/ingest/all:
-    post:
-      operationId: ingestAllPending
-      tags: [brain]
-      summary: Process all pending education sources
-      responses:
-        "200":
-          description: Started
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/SimpleOk"
-
+  # ──────────────── BRAIN / WORKERS ────────────────
   /brain/worker-status:
     get:
       operationId: getWorkerStatus
@@ -1468,7 +1232,7 @@ components:
       properties:
         id:             { type: integer }
         name:           { type: string }
-        type:           { type: string, description: "Strategy kind. The synthesized mega-strategy uses 'mega'." }
+        type:           { type: string, description: "Strategy category, e.g. 'ict' or 'quant' for the hardcoded strategy library." }
         description:    { type: string }
         explanation:    { type: ["string", "null"] }
         weight:         { type: ["number", "null"] }
@@ -1476,8 +1240,8 @@ components:
         parameters:     { type: ["string", "null"] }
         tradeCount:     { type: integer }
         winRate:        { type: ["number", "null"] }
-        concepts:       { type: ["string", "null"], description: "JSON-encoded list of detected ICT concepts with weights and evidence." }
-        rules:          { type: ["string", "null"], description: "JSON-encoded execution rules synthesized by the C++ expert system." }
+        concepts:       { type: ["string", "null"] }
+        rules:          { type: ["string", "null"], description: "Fuller entry/exit rule text for this strategy." }
         sourcesUsed:    { type: integer }
         wordsAnalyzed:  { type: integer }
         summary:        { type: ["string", "null"] }
@@ -1744,12 +1508,10 @@ components:
         ok: { type: boolean }
         status:
           type: string
-          enum: [no_data, brain_not_trained, brain_warming, ready]
+          enum: [no_data, brain_warming, ready]
         symbol: { type: string }
         timeframe: { type: string }
         message: { type: string }
-        readySources: { type: integer }
-        pendingSources: { type: integer }
         activeStrategies: { type: integer }
         connectedBrokers: { type: integer }
 

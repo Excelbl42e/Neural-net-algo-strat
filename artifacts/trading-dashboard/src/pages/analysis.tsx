@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, ScanSearch, AlertTriangle, AlertCircle, CheckCircle2, Database, Crosshair, Plug, GraduationCap } from "lucide-react";
+import { Loader2, ScanSearch, AlertCircle, CheckCircle2, Crosshair, Plug } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const TIMEFRAMES = ["M5", "M15", "M30", "H1", "H4", "D1"];
@@ -13,18 +13,13 @@ const TIMEFRAMES = ["M5", "M15", "M30", "H1", "H4", "D1"];
 const STATUS_META: Record<string, { color: string; icon: React.ReactNode; title: string }> = {
   no_data: {
     color: "border-amber-400 text-amber-400",
-    icon: <GraduationCap className="w-4 h-4" />,
-    title: "No source data available",
+    icon: <Loader2 className="w-4 h-4 animate-spin" />,
+    title: "Strategy library not seeded yet",
   },
   brain_warming: {
     color: "border-amber-400 text-amber-400",
-    icon: <Loader2 className="w-4 h-4 animate-spin" />,
-    title: "Knowledge is still ingesting",
-  },
-  brain_not_trained: {
-    color: "border-amber-400 text-amber-400",
-    icon: <AlertTriangle className="w-4 h-4" />,
-    title: "Analysis unavailable",
+    icon: <Plug className="w-4 h-4" />,
+    title: "No connected broker",
   },
   ready: {
     color: "border-green-500 text-green-500",
@@ -140,22 +135,22 @@ export default function AnalysisPage() {
           <CardContent className="space-y-4">
             <p className="text-sm leading-relaxed">{r.message}</p>
 
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 pt-2 border-t border-border">
-              <Stat icon={<Database className="w-3 h-3" />} label="Ready Sources" value={r.readySources ?? 0} />
-              <Stat icon={<Loader2 className="w-3 h-3" />} label="Pending Sources" value={r.pendingSources ?? 0} />
+            <div className="grid grid-cols-2 gap-3 pt-2 border-t border-border">
               <Stat icon={<Crosshair className="w-3 h-3" />} label="Active Strategies" value={r.activeStrategies ?? 0} />
               <Stat icon={<Plug className="w-3 h-3" />} label="Connected Brokers" value={r.connectedBrokers ?? 0} />
             </div>
 
             {r.status === "no_data" && (
-              <NextStep label="Open Education" href="/education" hint="Upload books, video URLs, playlists, or paste raw text." />
+              <div className="text-[11px] text-muted-foreground font-mono-numbers p-3 bg-muted/30 rounded border border-border">
+                The hardcoded strategy library seeds itself automatically on server boot. If this persists, the server hasn't finished starting up.
+              </div>
             )}
             {r.status === "brain_warming" && (
-              <NextStep label="Open Education" href="/education" hint="Watch the source statuses turn from 'pending' to 'ready'." />
+              <NextStep label="Open Brokers" href="/brokers" hint="Connect and enable a Deriv account so the signal worker has somewhere to trade." />
             )}
-            {r.status === "brain_not_trained" && (
+            {r.status === "ready" && (
               <div className="text-[11px] text-muted-foreground font-mono-numbers p-3 bg-muted/30 rounded border border-border">
-                Analysis endpoint reports this status. It does not return trade recommendations or an execution confirmation.
+                This confirms readiness only. The signal worker scans on its own interval — see the worker status bar above.
               </div>
             )}
           </CardContent>

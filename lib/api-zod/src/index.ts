@@ -1,105 +1,13 @@
 export * from "./generated/api";
-// Re-export all types from generated individually (not via the ./generated/types
-// barrel) so the two names below can be excluded: they collide with the Zod
-// schemas of the same name exported above, which must take precedence.
-export * from "./generated/types/account";
-export * from "./generated/types/accountAccountType";
-export * from "./generated/types/accountInput";
-export * from "./generated/types/accountInputAccountType";
-export * from "./generated/types/accountInputStatus";
-export * from "./generated/types/accountStatus";
-export * from "./generated/types/accountUpdate";
-export * from "./generated/types/accountUpdateStatus";
-export * from "./generated/types/accountsSummary";
-export * from "./generated/types/analysisRequest";
-export * from "./generated/types/analysisResult";
-export * from "./generated/types/analysisResultStatus";
-export * from "./generated/types/botConfig";
-export * from "./generated/types/botConfigAutotradeMode";
-export * from "./generated/types/botConfigInput";
-export * from "./generated/types/botConfigInputAutotradeMode";
-export * from "./generated/types/brainLayer";
-export * from "./generated/types/brainLayerLayerType";
-export * from "./generated/types/brainLayerStatus";
-export * from "./generated/types/brokerConnection";
-export * from "./generated/types/brokerConnectionBroker";
-export * from "./generated/types/brokerConnectionEnvironment";
-export * from "./generated/types/brokerConnectionInput";
-export * from "./generated/types/brokerConnectionInputBroker";
-export * from "./generated/types/brokerConnectionInputEnvironment";
-export * from "./generated/types/brokerConnectionStatus";
-export * from "./generated/types/brokerConnectionUpdate";
-export * from "./generated/types/brokerConnectionUpdateEnvironment";
-export * from "./generated/types/brokerSyncResult";
-export * from "./generated/types/bulkDeleteTrades200";
-// bulkDeleteTradesBody intentionally omitted — Zod schema above takes precedence
-export * from "./generated/types/bulkDeleteTradesBodyStatus";
-export * from "./generated/types/candle";
-export * from "./generated/types/candleFeederStatus";
-export * from "./generated/types/candleResponse";
-export * from "./generated/types/checkWriteKey200";
-export * from "./generated/types/checkWriteKeyWriteMethod200";
-export * from "./generated/types/dashboardOverview";
-export * from "./generated/types/dashboardOverviewBotStatus";
-export * from "./generated/types/educationSource";
-export * from "./generated/types/educationSourceInput";
-export * from "./generated/types/educationSourceInputKind";
-export * from "./generated/types/educationSourceKind";
-export * from "./generated/types/educationSourceStatus";
-export * from "./generated/types/educationSourceUpdate";
-export * from "./generated/types/educationSourceUpdateStatus";
-export * from "./generated/types/getRecentTradesParams";
-export * from "./generated/types/healthStatus";
-export * from "./generated/types/ingestResult";
-export * from "./generated/types/ingestResultStatus";
-export * from "./generated/types/lastTick";
-export * from "./generated/types/listCandlesParams";
-export * from "./generated/types/listCandlesTimeframe";
-export * from "./generated/types/listReportsParams";
-export * from "./generated/types/listReportsType";
-export * from "./generated/types/listSignalsParams";
-export * from "./generated/types/listSignalsStatus";
-export * from "./generated/types/listTradePerformanceDimension";
-export * from "./generated/types/listTradePerformanceParams";
-export * from "./generated/types/listTradeReviewsParams";
-export * from "./generated/types/listTradesParams";
-export * from "./generated/types/listTradesStatus";
-export * from "./generated/types/report";
-export * from "./generated/types/reportInput";
-export * from "./generated/types/reportInputType";
-export * from "./generated/types/reportType";
-export * from "./generated/types/scoringResult";
-export * from "./generated/types/signal";
-export * from "./generated/types/signalDirection";
-export * from "./generated/types/signalExecutionStatus";
-export * from "./generated/types/signalInput";
-export * from "./generated/types/signalInputDirection";
-export * from "./generated/types/signalInputStatus";
-export * from "./generated/types/signalStatus";
-export * from "./generated/types/signalUpdate";
-export * from "./generated/types/signalUpdateStatus";
-export * from "./generated/types/simpleOk";
-export * from "./generated/types/strategy";
-export * from "./generated/types/strategyInput";
-export * from "./generated/types/strategyUpdate";
-export * from "./generated/types/synthesizeResult";
-export * from "./generated/types/syntheticSymbol";
-export * from "./generated/types/trade";
-export * from "./generated/types/tradeDirection";
-export * from "./generated/types/tradeInput";
-export * from "./generated/types/tradeInputDirection";
-export * from "./generated/types/tradeInputStatus";
-export * from "./generated/types/tradePerformance";
-export * from "./generated/types/tradePerformanceDimension";
-export * from "./generated/types/tradeReview";
-export * from "./generated/types/tradeReviewEvidenceStatus";
-export * from "./generated/types/tradeReviewOutcome";
-export * from "./generated/types/tradeStatus";
-export * from "./generated/types/tradeUpdate";
-export * from "./generated/types/tradeUpdateStatus";
-export * from "./generated/types/uploadSourceFile400";
-export * from "./generated/types/uploadSourceFile413";
-// uploadSourceFileBody intentionally omitted — Zod schema above takes precedence
-export * from "./generated/types/workerStatus";
-export * from "./generated/types/workflowStatus";
-export * from "./generated/types/workflowStatusOverallStatus";
+export * from "./generated/types";
+// TypeScript resolves an `export *` ambiguity in favor of an explicit named
+// re-export — this is what actually wins, not the file's position or the
+// order of the two lines above. Orval regenerates both ./generated/api and
+// ./generated/types on every codegen run, and (as of orval 8.38.0) also
+// re-appends the `export * from "./generated/types"` line above into this
+// hand-written file if it's ever removed — so excluding one side file-by-file
+// doesn't survive a codegen run. Naming the value here instead does, because
+// it doesn't depend on this file's shape at all, only on TypeScript's own
+// disambiguation rule. Add a line here for any future operationId whose
+// generated request-body type collides with a same-named component schema.
+export { BulkDeleteTradesBody } from "./generated/api";

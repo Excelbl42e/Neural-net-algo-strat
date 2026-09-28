@@ -2,7 +2,6 @@ import { Router, type IRouter } from "express";
 import { eq, and } from "drizzle-orm";
 import {
   db,
-  educationSourcesTable,
   strategiesTable,
   brokerConnectionsTable,
 } from "@workspace/db";
@@ -19,9 +18,7 @@ router.post("/analysis/run", async (req, res): Promise<void> => {
   const symbol = parsed.data.symbol.toUpperCase();
   const timeframe = parsed.data.timeframe ?? "H1";
 
-  const [readySources, pendingSources, activeStrategies, connectedBrokers] = await Promise.all([
-    db.select().from(educationSourcesTable).where(eq(educationSourcesTable.status, "ready")),
-    db.select().from(educationSourcesTable).where(eq(educationSourcesTable.status, "pending")),
+  const [activeStrategies, connectedBrokers] = await Promise.all([
     db.select().from(strategiesTable).where(eq(strategiesTable.active, true)),
     db.select().from(brokerConnectionsTable).where(and(
       eq(brokerConnectionsTable.status, "connected"),
@@ -30,43 +27,42 @@ router.post("/analysis/run", async (req, res): Promise<void> => {
   ]);
 
   const counts = {
-    readySources: readySources.length,
-    pendingSources: pendingSources.length,
     activeStrategies: activeStrategies.length,
     connectedBrokers: connectedBrokers.length,
   };
 
-  if (readySources.length === 0 && pendingSources.length === 0) {
+  // The hardcoded strategy library is seeded at boot (seedDefaults); this
+  // should only read 0 if the server hasn't finished its first boot yet.
+  if (activeStrategies.length === 0) {
     res.json({
       ok: false,
       status: "no_data",
       symbol,
       timeframe,
-      message: "No knowledge sources uploaded yet. Open Education and add the books, videos, or playlists you want the brain to learn from.",
+      message: "The hardcoded strategy library has not been seeded yet. This happens automatically on server boot; try again shortly.",
       ...counts,
     });
     return;
   }
 
-  if (readySources.length === 0) {
+  if (connectedBrokers.length === 0) {
     res.json({
       ok: false,
       status: "brain_warming",
       symbol,
       timeframe,
-      message: `Knowledge sources are still processing (${pendingSources.length} pending). Try again once at least one source reaches "ready" on the Education page.`,
+      message: `Strategy library is ready (${activeStrategies.length} strategies) but no connected, enabled broker account is configured yet. Connect one on the Brokers page.`,
       ...counts,
     });
     return;
   }
 
-  // Sources are ready, but the C++ training pipeline has not been built yet.
   res.json({
-    ok: false,
-    status: "brain_not_trained",
+    ok: true,
+    status: "ready",
     symbol,
     timeframe,
-    message: `Knowledge ingested (${readySources.length} source${readySources.length === 1 ? "" : "s"} ready) but the C++ neural-network trainer has not been hooked up yet. On-demand analysis will start working once training completes.`,
+    message: `Strategy library ready (${activeStrategies.length} strategies) with a connected broker. The signal worker scans automatically on its own interval — this endpoint reports readiness, it does not trigger an immediate scan.`,
     ...counts,
   });
 });

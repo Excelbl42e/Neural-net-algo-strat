@@ -13,8 +13,6 @@ export interface AnalysisResult {
   symbol: string;
   timeframe: string;
   message: string;
-  readySources?: number;
-  pendingSources?: number;
   activeStrategies?: number;
   connectedBrokers?: number;
 }

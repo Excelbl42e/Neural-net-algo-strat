@@ -8,7 +8,6 @@ import router from "./routes/index.js";
 import { logger } from "./lib/logger.js";
 import { requireAuth } from "./middlewares/api-key.js";
 import { startSignalWorker } from "./lib/signal-worker.js";
-import { processPendingSources, recoverStuckIngestions } from "./lib/ingest.js";
 import { startCandleFeeder } from "./lib/candle-feeder.js";
 import { seedDefaults } from "./lib/seed.js";
 import { ensureSchema } from "./lib/migrate.js";
@@ -82,7 +81,6 @@ export async function boot(): Promise<void> {
   safeStart("balance_sync", startBalanceSync);
   safeStart("contract_monitor", startContractMonitor);
   safeStart("reconciler", startReconciler);
-  recoverStuckIngestions().then(() => processPendingSources()).catch(() => { /* surfaced per-source */ });
   getNewsEvents().catch(() => { /* surfaced via news_calendar system-status component */ });
   logger.info({ started }, "Startup self-check: workers started");
 }
