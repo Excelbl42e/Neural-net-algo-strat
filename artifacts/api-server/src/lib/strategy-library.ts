@@ -10,10 +10,12 @@
  * signal-worker.ts's system prompt — these 20 entries are the named concept
  * list that framework operates on, used for the self-learning eligibility
  * gate (scoreConcepts, keyed by concept name against real closed-trade
- * outcomes) and as a compact reference block in the prompt. The 10 quant/TA
+ * outcomes) and as a compact reference block in the prompt. The 20 quant/TA
  * entries cover ground the ICT system prompt does not: classical technical
  * analysis and market-microstructure filters, several of which have live
- * deterministic implementations in quant-filters.ts.
+ * deterministic implementations in quant-filters.ts. All are computed from
+ * OHLC price data only — none assume real traded volume, which this system
+ * never has (Deriv forex candles carry no verified volume field).
  */
 
 export type StrategyCategory = "ict" | "quant";
@@ -125,6 +127,36 @@ export const QUANT_STRATEGIES: HardcodedStrategy[] = [
   { key: "multi timeframe trend alignment", name: "Multi-Timeframe Trend Alignment", category: "quant", rank: 30,
     summary: "D1/H4 directional bias must agree with the H1 entry-timeframe structure before a trade is taken.",
     rules: "Establish bias on D1/H4 first (the HTF draw on liquidity). Only take H1 entries that align with that bias — an H1 setup that contradicts the D1/H4 direction is treated as a lower-timeframe liquidity grab/inducement within the larger move, not an independent trade idea, unless it is itself confirmed by a full HTF CHoCH with two impulse legs." },
+  { key: "stochastic oscillator reversal", name: "Stochastic Oscillator Overbought/Oversold Reversal", category: "quant", rank: 31,
+    summary: "%K/%D crossing back out of the extreme zone flags exhaustion — strongest when it lines up with a liquidity sweep.",
+    rules: "Stochastic(14,3,3) above 80 (overbought) or below 20 (oversold) flags a stretched move. The signal is the %K/%D crossover back OUT of the extreme zone, not the extreme reading itself. Standalone stochastic reversals in a strong trend are frequently premature — require it to coincide with an ICT liquidity sweep or failure swing at the same extreme before treating it as a reversal trigger rather than noise." },
+  { key: "adx trend strength filter", name: "ADX Trend Strength Filter", category: "quant", rank: 32,
+    summary: "Average Directional Index confirms whether a market is trending strongly enough to trade continuation setups at all.",
+    rules: "ADX(14) below 20 means the market lacks directional strength — continuation entry models (2022 Model, OFED) are low-probability here; favor range/reversal setups instead. ADX above 25 and rising confirms a strong trend worth trading continuation into. Use +DI/-DI crossover only as a secondary confirmation of which direction is currently dominant, never as a standalone trigger." },
+  { key: "ichimoku cloud confluence", name: "Ichimoku Cloud Confluence", category: "quant", rank: 33,
+    summary: "Price position relative to the Kumo (cloud), and Tenkan/Kijun crosses, frame trend direction and dynamic support/resistance.",
+    rules: "Price above a bullish (green) Kumo = uptrend context; below a bearish (red) Kumo = downtrend context; inside the cloud = no clear trend, lower conviction for continuation trades. A Tenkan-sen/Kijun-sen cross in the direction of the cloud adds timing confirmation. The cloud's own edges frequently coincide with ICT order blocks or breaker levels — treat an overlap as confluence, not two independent signals." },
+  { key: "parabolic sar trend flip", name: "Parabolic SAR Trend Flip", category: "quant", rank: 34,
+    summary: "SAR dots flipping to the opposite side of price mark a trailing-stop-style trend change, useful for exit timing more than entry.",
+    rules: "A SAR flip (dots moving from below price to above, or vice versa) signals the current short-term trend has reversed by this indicator's trailing logic. More reliable as a signal to tighten or exit an existing position than as a standalone entry trigger, since SAR whipsaws heavily in ranging conditions — cross-check against the ADX trend-strength filter before treating a flip as a new entry rather than an exit cue." },
+  { key: "pivot point confluence", name: "Pivot Point Confluence", category: "quant", rank: 35,
+    summary: "Classic daily/weekly pivot, R1-R3 and S1-S3 levels overlapping an ICT zone mark a level watched by a much wider set of market participants.",
+    rules: "Compute the standard pivot (P = (prior H+L+C)/3) and its R1-R3/S1-S3 levels from the prior day and prior week. These are widely-watched levels independent of ICT methodology. When a pivot level sits inside or right at an FVG, order block, or breaker, treat that confluence as raising conviction on the zone; a pivot level with no ICT confluence nearby is lower priority." },
+  { key: "keltner channel breakout", name: "Keltner Channel Breakout", category: "quant", rank: 36,
+    summary: "An ATR-based envelope around a moving average; a close outside it in the direction of HTF bias signals a volatility-backed continuation.",
+    rules: "Channel = EMA(20) ± (ATR(10) × 2). A candle closing outside the channel, in the direction of the existing D1/H4 bias, confirms the move has real volatility behind it (distinct from a Bollinger squeeze breakout, which measures a different kind of band). A breakout against HTF bias is treated as a likely liquidity grab, not a reversal signal, unless it also produces a confirmed MSS with FVG." },
+  { key: "rate of change momentum filter", name: "Rate of Change (ROC) Momentum Filter", category: "quant", rank: 37,
+    summary: "Percentage price change over a fixed lookback measures whether momentum is accelerating or decelerating into a potential entry.",
+    rules: "ROC(10) rising into a bullish setup (or falling into a bearish one) confirms momentum supports the trade direction; a flattening or opposing ROC into an otherwise-valid structural setup is a caution flag — momentum is decelerating even as price structure looks ready, which historically precedes a failed breakout more often than a clean continuation." },
+  { key: "williams percent r extreme", name: "Williams %R Extreme Reversal", category: "quant", rank: 38,
+    summary: "A fast overbought/oversold oscillator; extremes that persist across multiple bars flag a genuinely strong trend rather than an imminent reversal.",
+    rules: "Williams %R above -20 is overbought, below -80 is oversold — deliberately faster and noisier than the Stochastic filter above. A single extreme reading is not actionable alone; use it as a same-direction confirmation alongside RSI divergence or a liquidity sweep, and note that %R remaining pinned at an extreme for several consecutive bars indicates trend strength, not exhaustion — do not fade it in that case." },
+  { key: "donchian channel breakout", name: "Donchian Channel Breakout", category: "quant", rank: 39,
+    summary: "A close beyond the N-period high/low channel (turtle-trader style) — the classical-TA analog of an ICT liquidity sweep plus BOS.",
+    rules: "Channel = highest high / lowest low over the last 20 periods. A close beyond either edge is a textbook breakout signal. On its own it is prone to false breaks at round-number/liquidity levels; require the breakout candle to also qualify as an ICT liquidity sweep + BOS with FVG before treating it as a real continuation rather than a stop run that will revert." },
+  { key: "cci extreme filter", name: "Commodity Channel Index (CCI) Extreme Filter", category: "quant", rank: 40,
+    summary: "Measures deviation from a statistical average price — extreme readings flag stretched conditions similar to Stochastic/Williams %R but on a different lookback basis.",
+    rules: "CCI(20) above +100 signals a strong upward deviation from the mean, below -100 a strong downward deviation. Used the same way as the Stochastic filter: the useful signal is CCI turning back from beyond ±100 toward the mean, not the extreme reading itself. Best combined with the Kaufman Efficiency Ratio — a CCI extreme inside a low-efficiency (choppy) regime is far more likely to be noise than one inside a high-efficiency trend that has simply pulled back." },
 ];
 
 export const STRATEGY_LIBRARY: HardcodedStrategy[] = [...ICT_STRATEGIES, ...QUANT_STRATEGIES];
@@ -136,7 +168,7 @@ export function strategySummaryList(): string {
     .join("\n");
 }
 
-/** Fuller reference text for the 10 quant/TA strategies — ICT depth already lives in the system prompt itself. */
+/** Fuller reference text for the 20 quant/TA strategies — ICT depth already lives in the system prompt itself. */
 export function quantKnowledgeContext(): string {
   return QUANT_STRATEGIES
     .map((s, i) => `[${i + 1}] ${s.name}: ${s.rules}`)
