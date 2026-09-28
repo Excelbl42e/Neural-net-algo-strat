@@ -6,6 +6,7 @@ import {
   GetReportParams,
   ListReportsQueryParams,
 } from "@workspace/api-zod";
+import { computeMaxDrawdown } from "../lib/trade-stats.js";
 
 const router: IRouter = Router();
 
@@ -71,26 +72,36 @@ router.post("/reports", async (req, res): Promise<void> => {
   const rrValues = closed.filter(t => t.riskReward != null).map(t => parseFloat(t.riskReward!));
   const avgRR = rrValues.length > 0 ? rrValues.reduce((a, b) => a + b, 0) / rrValues.length : null;
 
+  const activeAccounts = await db.select().from(accountsTable).where(eq(accountsTable.status, "active"));
+  const totalEquity = activeAccounts.reduce((sum, a) => sum + parseFloat(a.equity ?? "0"), 0);
+  const maxDrawdown = computeMaxDrawdown(closed, totalEquity);
+  // scoreDrawdown derived from the real maxDrawdown above (1 = severe, 5 = negligible),
+  // not a fixed constant like the fields below.
+  const scoreDrawdown = maxDrawdown >= 0.4 ? 1 : maxDrawdown >= 0.25 ? 2 : maxDrawdown >= 0.15 ? 3 : maxDrawdown >= 0.05 ? 4 : 5;
+
   // Score categories 1-5
   const scoreWinRate = Math.max(1, Math.min(5, Math.round(winRate * 5 + 1)));
   const scoreRisk = avgRR != null ? Math.max(1, Math.min(5, Math.round(avgRR))) : 3;
-  const scoreAdherence = 4; // default high
-  const scoreGambling = 5; // default excellent
   const scoreProfitability = totalPnl > 0 ? Math.min(5, Math.round(totalPnl / 500)) + 1 : 2;
-  const scoreDrawdown = 4;
-  const scoreConsistency = 3;
   const scoreLongShort = Math.abs(longs - shorts) < 3 ? 5 : 3;
-  const totalScore = scoreWinRate + scoreRisk + scoreAdherence + scoreGambling + scoreProfitability + scoreDrawdown + scoreConsistency + scoreLongShort;
+  // strategyAdherence, gamblingAvoidance and consistency have no underlying
+  // measurement anywhere in this codebase — there is no tracked notion of
+  // "adherence to strategy" or a gambling-behavior heuristic. Scoring them
+  // would be fabricating data, so they are left out of totalScore/scores
+  // rather than reported as if real. uptimePercent is likewise not tracked
+  // (no deploy-uptime metric exists) and is omitted for the same reason.
+  const totalScore = scoreWinRate + scoreRisk + scoreProfitability + scoreDrawdown + scoreLongShort;
 
   const scores = JSON.stringify({
     winRate: scoreWinRate,
     riskManagement: scoreRisk,
-    strategyAdherence: scoreAdherence,
-    gamblingAvoidance: scoreGambling,
     profitability: scoreProfitability,
     drawdown: scoreDrawdown,
-    consistency: scoreConsistency,
     longShortBalance: scoreLongShort,
+    strategyAdherence: null,
+    gamblingAvoidance: null,
+    consistency: null,
+    _note: "strategyAdherence, gamblingAvoidance and consistency are not computed from real data and are intentionally omitted rather than fabricated.",
   });
 
   const [report] = await db.insert(reportsTable).values({
@@ -98,15 +109,17 @@ router.post("/reports", async (req, res): Promise<void> => {
     period,
     winRate: String(winRate),
     totalPnl: String(totalPnl),
-    maxDrawdown: "0.05",
+    maxDrawdown: String(maxDrawdown),
     tradesCount: closed.length,
     longCount: longs,
     shortCount: shorts,
     avgHoldingTime: avgHoldingTime != null ? String(avgHoldingTime) : null,
     riskReward: avgRR != null ? String(avgRR) : null,
-    strategyAdherence: "0.92",
-    gamblingScore: "0.98",
-    uptimePercent: "99.7",
+    // strategyAdherence/gamblingScore are NOT NULL columns with neutral
+    // defaults (0 / 1) in the schema; left unset here rather than filled
+    // with fabricated precise-looking values. uptimePercent has no default
+    // and no underlying measurement, so it's left null (the column allows it).
+    uptimePercent: null,
     scores,
     totalScore: String(totalScore),
   }).returning();

@@ -3,16 +3,54 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build as esbuild } from "esbuild";
 import esbuildPluginPino from "esbuild-plugin-pino";
-import { rm } from "node:fs/promises";
+import { rm, mkdir } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
 
 // Plugins (e.g. 'esbuild-plugin-pino') may use `require` to resolve dependencies
 globalThis.require = createRequire(import.meta.url);
 
 const artifactDir = path.dirname(fileURLToPath(import.meta.url));
 
+/**
+ * Compile the C++ helpers from source instead of trusting the committed
+ * binaries in bin/. Those were built once in a specific Nix environment and
+ * are dynamically linked against an exact glibc store path
+ * (/nix/store/<hash>-glibc-<version>); if this deploy's Nix store doesn't
+ * have that exact derivation, the binary can't execute at all ("cannot
+ * execute: required file not found"), silently breaking the Strategy page's
+ * concept scan. Compiling fresh removes that fragility. If no C++ compiler
+ * is available, fall back to whatever is already committed rather than
+ * failing the whole build over an optional step.
+ */
+function compileNative() {
+  const compiler = ["g++", "clang++"].find(
+    (cc) => spawnSync(cc, ["--version"], { stdio: "ignore" }).status === 0,
+  );
+  const binDir = path.resolve(artifactDir, "bin");
+  const targets = [
+    { src: path.resolve(artifactDir, "../expert-system/expert_system.cpp"), out: path.join(binDir, "expert-system") },
+    { src: path.resolve(artifactDir, "../chunker/chunker.cpp"), out: path.join(binDir, "chunker") },
+  ];
+  if (!compiler) {
+    console.warn("No C++ compiler (g++/clang++) found; keeping committed bin/ binaries as-is. " +
+      "If the Strategy page's scan fails with a spawn error, this environment needs a C++ toolchain.");
+    return;
+  }
+  for (const { src, out } of targets) {
+    const res = spawnSync(compiler, ["-O2", "-std=c++17", "-o", out, src], { stdio: "inherit" });
+    if (res.status !== 0) {
+      throw new Error(`Failed to compile ${src} with ${compiler} (exit ${res.status})`);
+    }
+    console.log(`Compiled ${path.basename(src)} -> ${out}`);
+  }
+}
+
 async function buildAll() {
   const distDir = path.resolve(artifactDir, "dist");
   await rm(distDir, { recursive: true, force: true });
+
+  await mkdir(path.resolve(artifactDir, "bin"), { recursive: true });
+  compileNative();
 
   await esbuild({
     entryPoints: [path.resolve(artifactDir, "src/index.ts")],
