@@ -1,5 +1,5 @@
 import { getSyntheticSymbol } from "./synthetic-catalog.js";
-import { inspectDerivAccount, syncDerivPatAccount } from "./deriv-account.js";
+import { inspectDerivAccount, syncDerivPatAccount, toFiniteNumber } from "./deriv-account.js";
 import { DerivRequestTimeout, openDerivSession, type DerivSession } from "./deriv-session.js";
 
 export interface DerivTradeParams {
@@ -104,7 +104,7 @@ export async function placeDerivTrade(params: DerivTradeParams): Promise<DerivTr
     // From here on the request may have reached Deriv: never treat failure as retryable.
     const res = await session.request<{
       error?: { message?: string; code?: string };
-      buy?: { contract_id?: number; buy_price?: number };
+      buy?: { contract_id?: number; buy_price?: number | string };
     }>(
       { buy: "1", price: params.stakeAmount, parameters, passthrough: { signal_id: params.signalId ?? null } },
       { signalId: params.signalId ?? null, timeoutMs: 20_000 },
@@ -115,9 +115,10 @@ export async function placeDerivTrade(params: DerivTradeParams): Promise<DerivTr
     }
     if (!res.buy?.contract_id) return { ok: false, ambiguous: true, message: "Buy response missing contract_id" };
     consecutiveBrokerErrors = 0;
+    const buyPrice = toFiniteNumber(res.buy.buy_price) ?? undefined;
     return {
-      ok: true, contractId: res.buy.contract_id, buyPrice: res.buy.buy_price, contractType, duration,
-      message: `Contract ${res.buy.contract_id} opened at ${res.buy.buy_price}`,
+      ok: true, contractId: res.buy.contract_id, buyPrice, contractType, duration,
+      message: `Contract ${res.buy.contract_id} opened at ${buyPrice}`,
     };
   } catch (err) {
     if (err instanceof DerivRequestTimeout || (err instanceof Error && /closed/i.test(err.message))) {
@@ -159,12 +160,14 @@ export async function getIndicativeCostPct(token: string, environment: "demo" | 
   let session: DerivSession | null = null;
   try {
     session = await openDerivSession(token, environment);
-    const res = await session.request<{ proposal?: { ask_price?: number }; error?: { message?: string } }>(
+    const res = await session.request<{ proposal?: { ask_price?: number | string }; error?: { message?: string } }>(
       { proposal: 1, amount: 1, basis: "stake", contract_type: "MULTUP", currency: "USD", symbol, multiplier },
       { timeoutMs: 8_000 },
     );
-    if (res.error || typeof res.proposal?.ask_price !== "number") return null;
-    return Math.abs(res.proposal.ask_price - 1) * 100;
+    if (res.error) return null;
+    const askPrice = toFiniteNumber(res.proposal?.ask_price);
+    if (askPrice === null) return null;
+    return Math.abs(askPrice - 1) * 100;
   } catch {
     return null;
   } finally {

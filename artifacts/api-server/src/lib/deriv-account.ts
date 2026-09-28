@@ -13,6 +13,20 @@ export type OptionsAccount = {
 const API_BASE = "https://api.derivws.com/trading/v1/options";
 const REQUEST_TIMEOUT_MS = 15_000;
 
+/**
+ * Deriv returns monetary amounts (balance, etc.) as quoted JSON strings, not
+ * numbers — verified against a live /accounts response ("balance":"10005.83").
+ * Accept either shape rather than assuming one.
+ */
+export function toFiniteNumber(v: unknown): number | null {
+  if (typeof v === "number") return Number.isFinite(v) ? v : null;
+  if (typeof v === "string" && v.trim() !== "") {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+
 // 1089 (Deriv's shared test app id) is purely numeric, but an app registered
 // for PAT/Deriv-App-ID auth in Deriv's current Developer Dashboard can be
 // alphanumeric with dashes — don't reject a legitimately registered id.
@@ -46,13 +60,20 @@ export async function inspectDerivAccount(
     throw new Error("Deriv account lookup returned invalid JSON");
   }
   if (!Array.isArray(body.data)) throw new Error("Deriv account lookup did not return an account list");
-  const matches = body.data.filter((item): item is OptionsAccount =>
-    item !== null && typeof item === "object" &&
-    item.account_type === environment && item.status === "active" &&
-    typeof item.account_id === "string" && /^[a-zA-Z0-9_-]+$/.test(item.account_id) &&
-    typeof item.balance === "number" && Number.isFinite(item.balance) &&
-    typeof item.currency === "string" && item.currency.length > 0,
-  );
+  const matches = body.data
+    .map((item): OptionsAccount | null => {
+      if (item === null || typeof item !== "object") return null;
+      const r = item as Record<string, unknown>;
+      const balance = toFiniteNumber(r.balance);
+      if (
+        r.account_type !== environment || r.status !== "active" ||
+        typeof r.account_id !== "string" || !/^[a-zA-Z0-9_-]+$/.test(r.account_id) ||
+        balance === null ||
+        typeof r.currency !== "string" || r.currency.length === 0
+      ) return null;
+      return { account_id: r.account_id, account_type: environment, status: "active", balance, currency: r.currency };
+    })
+    .filter((a): a is OptionsAccount => a !== null);
   if (matches.length !== 1) {
     throw new Error(matches.length === 0
       ? `No active ${environment} Options account confirmed by Deriv`
@@ -140,7 +161,7 @@ function readAccountSession(url: string, account: OptionsAccount): Promise<Deriv
       let msg: {
         msg_type?: string;
         error?: { code?: string };
-        balance?: { balance?: number; currency?: string };
+        balance?: { balance?: number | string; currency?: string };
         portfolio?: { contracts?: unknown[] };
       };
       try { msg = JSON.parse(raw.toString()); } catch { return; }
@@ -150,11 +171,12 @@ function readAccountSession(url: string, account: OptionsAccount): Promise<Deriv
         return;
       }
       if (msg.msg_type === "balance" && msg.balance) {
-        if (typeof msg.balance.balance !== "number" || !Number.isFinite(msg.balance.balance)) {
+        const parsedBalance = toFiniteNumber(msg.balance.balance);
+        if (parsedBalance === null) {
           finish({ ok: false, status: "error", message: "Deriv balance response was invalid" });
           return;
         }
-        balance = msg.balance.balance;
+        balance = parsedBalance;
         if (typeof msg.balance.currency === "string" && msg.balance.currency) currency = msg.balance.currency;
       } else if (msg.msg_type === "portfolio" && msg.portfolio) {
         if (!Array.isArray(msg.portfolio.contracts)) {
