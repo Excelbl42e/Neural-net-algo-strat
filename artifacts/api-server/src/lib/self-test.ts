@@ -1,11 +1,14 @@
 /**
- * Demo self-test. Refuses unless Deriv itself reports the account as virtual, places ONE
- * minimum-stake demo order, and walks it pending -> confirmed -> closed with timings.
- * Nothing else calls this path. A passed run is what unlocks auto_live.
+ * Demo self-test. Refuses unless Deriv itself reports the account as virtual.
+ * Checks both order paths real signals can take: a quote-only multiplier
+ * proposal (never opens a position — this codebase cannot close one early),
+ * then places ONE minimum-stake binary demo order and walks it pending ->
+ * confirmed -> closed with timings. Nothing else calls this path. A passed
+ * run is what unlocks auto_live.
  */
 import { brokerConnectionsTable } from "@workspace/db";
 import { decryptSecret } from "./crypto.js";
-import { fetchContractStatuses, placeDerivTrade } from "./deriv.js";
+import { fetchContractStatuses, placeDerivTrade, checkMultiplierProposal } from "./deriv.js";
 import { inspectDerivAccount } from "./deriv-account.js";
 import { setSecret } from "./secrets.js";
 
@@ -38,6 +41,17 @@ export async function runDemoSelfTest(conn: Conn): Promise<SelfTestResult> {
     const { account } = await inspectDerivAccount(token, "demo");
     if (account.account_type !== "demo") return { ok: false, passed: false, message: "Refused: Deriv did not report this account as virtual (is_virtual)", steps };
     mark("virtual_confirmed", `account ${account.account_id} is a demo account`);
+
+    // Quote-only check (never opens a position) that Deriv accepts the
+    // multiplier parameter shape real forex signals actually use — the
+    // binary buy below only proves the binary path, and this codebase has
+    // no way to close a multiplier position early, so this is a proposal
+    // check, not a buy.
+    const multiplierCheck = await checkMultiplierProposal(token, "demo", "frxEURUSD");
+    mark(multiplierCheck.ok ? "multiplier_path_ok" : "multiplier_path_failed", multiplierCheck.message);
+    if (!multiplierCheck.ok) {
+      return await finish(false, `Multiplier order path rejected by Deriv (this is what real signals will use): ${multiplierCheck.message}`);
+    }
 
     // Test the actual instrument class the bot trades (forex, via a binary
     // CALL for a fast, self-settling round trip) rather than a leftover

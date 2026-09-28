@@ -184,6 +184,39 @@ export async function getIndicativeCostPct(token: string, environment: "demo" | 
   }
 }
 
+/**
+ * Diagnostic-only check that Deriv accepts the multiplier (MULTUP/MULTDOWN)
+ * parameter shape used by real forex signal dispatch — a quote-only
+ * `proposal`, never a `buy`, so it can never open a position or leave
+ * anything to close. Used by the demo self-test to catch a wrong field name
+ * on the multiplier path the same way the binary path's buy already caught
+ * one, without the risk of an orphaned open position (this codebase has no
+ * "sell to close" capability at all — a multiplier position can only close
+ * via its own stop-loss/take-profit).
+ */
+export async function checkMultiplierProposal(token: string, environment: "demo" | "real", symbol: string): Promise<{ ok: boolean; message: string }> {
+  const meta = getSyntheticSymbol(symbol);
+  const multiplier = meta?.multiplier ?? 30;
+  let session: DerivSession | null = null;
+  try {
+    session = await openDerivSession(token, environment);
+    const res = await session.request<{ proposal?: { ask_price?: number | string; id?: string }; error?: { message?: string; details?: unknown } }>(
+      { proposal: 1, amount: 1, basis: "stake", contract_type: "MULTUP", currency: "USD", underlying_symbol: symbol, multiplier },
+      { timeoutMs: 8_000 },
+    );
+    if (res.error) {
+      const details = res.error.details !== undefined ? ` — details: ${JSON.stringify(res.error.details)}` : "";
+      return { ok: false, message: `${res.error.message ?? "Deriv rejected the multiplier proposal"}${details}` };
+    }
+    if (!res.proposal?.id) return { ok: false, message: "Multiplier proposal response missing id" };
+    return { ok: true, message: `Multiplier proposal accepted (ask_price ${res.proposal.ask_price})` };
+  } catch (err) {
+    return { ok: false, message: err instanceof Error ? err.message : "Multiplier proposal check failed" };
+  } finally {
+    session?.close();
+  }
+}
+
 /** Open portfolio + recent profit table for an account. Used by the reconciler. */
 export async function fetchRecentContracts(token: string, environment: "demo" | "real"): Promise<DerivContractInfo[]> {
   const session = await openDerivSession(token, environment);
