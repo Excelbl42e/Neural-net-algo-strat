@@ -39,17 +39,23 @@ export async function runDemoSelfTest(conn: Conn): Promise<SelfTestResult> {
     if (account.account_type !== "demo") return { ok: false, passed: false, message: "Refused: Deriv did not report this account as virtual (is_virtual)", steps };
     mark("virtual_confirmed", `account ${account.account_id} is a demo account`);
 
-    mark("pending", "buy request sent: R_100 CALL, 5 ticks, stake 0.35");
+    // Test the actual instrument class the bot trades (forex, via a binary
+    // CALL for a fast, self-settling round trip) rather than a leftover
+    // synthetic-index symbol from before this app became forex-only.
+    mark("pending", "buy request sent: frxEURUSD CALL, 5 minutes, stake 0.35");
     const buy = await placeDerivTrade({
-      token, environment: "demo", symbol: "R_100", direction: "buy", stakeAmount: 0.35,
-      currency: account.currency, forceBinary: true, binaryDuration: { value: 5, unit: "t" },
+      token, environment: "demo", symbol: "frxEURUSD", direction: "buy", stakeAmount: 0.35,
+      currency: account.currency, forceBinary: true, binaryDuration: { value: 5, unit: "m" },
     });
     if (!buy.ok || !buy.contractId) {
       return await finish(false, `Buy did not confirm: ${buy.message ?? "unknown"}${buy.ambiguous ? " (ambiguous; check Diagnostics frames)" : ""}`);
     }
     mark("confirmed", `contract ${buy.contractId} bought at ${buy.buyPrice}`);
 
-    const deadline = Date.now() + 120_000;
+    // 5-minute contract + settlement lag + polling overhead: give it a
+    // generous window rather than the tick-contract-sized 120s this used
+    // to have when it tested a synthetic instead of forex.
+    const deadline = Date.now() + 420_000;
     while (Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, 3_000));
       const m = await fetchContractStatuses(token, "demo", [buy.contractId]);

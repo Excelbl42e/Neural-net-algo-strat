@@ -398,7 +398,7 @@ async function runSourceIngestion(sourceId: number): Promise<void> {
         content: c.content,
         wordCount: c.wordCount,
       })));
-      addedChunks = chunks.length;
+      addedChunks = chunksToAdd.length;
     }
     const totalChunks = existingChunks.length + addedChunks;
 

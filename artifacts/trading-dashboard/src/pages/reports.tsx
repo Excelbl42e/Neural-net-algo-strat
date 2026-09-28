@@ -103,10 +103,11 @@ function ReportCard({ report }: { report: Report }) {
       <CardContent className="p-4 grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-4">
         <Metric label="Win Rate" value={`${(report.winRate * 100).toFixed(1)}%`} highlight={report.winRate > 0.5} />
         <Metric label="Trades" value={report.tradesCount} />
-        <Metric label="Max Drawdown" value={report.maxDrawdown ? `${report.maxDrawdown.toFixed(2)}%` : '---'} highlight={false} isNegative={(report.maxDrawdown || 0) > 5} />
+        <Metric label="Max Drawdown" value={report.maxDrawdown ? `${(report.maxDrawdown * 100).toFixed(2)}%` : '---'} highlight={false} isNegative={(report.maxDrawdown || 0) > 0.05} />
         <Metric label="Risk/Reward" value={report.riskReward?.toFixed(2) || '---'} highlight={(report.riskReward || 0) > 1.5} />
-        <Metric label="Strategy Adherence" value={report.strategyAdherence ? `${Math.round(report.strategyAdherence * 100)}%` : '---'} highlight={(report.strategyAdherence || 0) > 0.8} />
-        <Metric label="Gambling Score" value={report.gamblingScore !== undefined ? report.gamblingScore.toString() : '---'} highlight={false} isNegative={(report.gamblingScore || 0) > 20} />
+        {/* Not tracked anywhere in this codebase — no underlying measurement exists, so this is never rendered as a real value. */}
+        <Metric label="Strategy Adherence" value="Not tracked" highlight={false} />
+        <Metric label="Gambling Score" value="Not tracked" highlight={false} />
       </CardContent>
     </Card>
   );

@@ -2,36 +2,9 @@ import { getSystemStatus } from "../lib/system-status.js";
 import { Router, type IRouter } from "express";
 import { eq, desc } from "drizzle-orm";
 import { db, accountsTable, tradesTable, signalsTable, strategiesTable, brainLayersTable, botConfigTable } from "@workspace/db";
+import { computeMaxDrawdown } from "../lib/trade-stats.js";
 
 const router: IRouter = Router();
-
-function computeMaxDrawdown(closedTrades: { pnl: string | null; closedAt: Date | null }[], totalEquity: number): number {
-  if (closedTrades.length === 0) return 0;
-
-  // Sort by close time ascending to build an equity curve
-  const sorted = [...closedTrades].sort((a, b) => {
-    const ta = a.closedAt ? new Date(a.closedAt).getTime() : 0;
-    const tb = b.closedAt ? new Date(b.closedAt).getTime() : 0;
-    return ta - tb;
-  });
-
-  let runningPnl = 0;
-  let peak = 0;
-  let maxDd = 0;
-
-  for (const t of sorted) {
-    runningPnl += parseFloat(t.pnl ?? "0");
-    if (runningPnl > peak) peak = runningPnl;
-    const dd = peak - runningPnl;
-    if (dd > maxDd) maxDd = dd;
-  }
-
-  if (maxDd === 0) return 0;
-
-  // Express as fraction of current equity when available, else fraction of peak P&L
-  const denominator = totalEquity > 0 ? totalEquity : peak > 0 ? peak : 1;
-  return maxDd / denominator;
-}
 
 router.get("/dashboard/overview", async (_req, res): Promise<void> => {
   const [accounts, openTrades, activeSignals, allStrategies, closedTrades, [config]] = await Promise.all([
