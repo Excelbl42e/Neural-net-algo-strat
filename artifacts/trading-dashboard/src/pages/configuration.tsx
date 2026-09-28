@@ -34,6 +34,9 @@ const formSchema = z.object({
   efficiencyRatioMin: z.coerce.number().min(0).max(1),
   minStopAtr: z.coerce.number().min(0).max(20),
   maxPerAssetClass: z.coerce.number().int().min(1).max(100),
+  newsBlackoutBeforeMin: z.coerce.number().int().min(0).max(1440),
+  newsBlackoutAfterMin: z.coerce.number().int().min(0).max(1440),
+  maxSpreadCostPct: z.coerce.number().min(0).max(100),
   maxDailyLossPct: z.coerce.number().min(0).max(100),
   minConfidence: z.coerce.number().min(0).max(1),
   allowedInstruments: z.string(),
@@ -63,6 +66,9 @@ export default function ConfigurationPage() {
       efficiencyRatioMin: 0.15,
       minStopAtr: 1,
       maxPerAssetClass: 2,
+      newsBlackoutBeforeMin: 30,
+      newsBlackoutAfterMin: 30,
+      maxSpreadCostPct: 0.5,
       maxDailyLossPct: 5,
       minConfidence: 0.78,
       allowedInstruments: "",
@@ -85,6 +91,9 @@ export default function ConfigurationPage() {
         efficiencyRatioMin: Number(config.efficiencyRatioMin ?? 0.15),
         minStopAtr: Number(config.minStopAtr ?? 1),
         maxPerAssetClass: config.maxPerAssetClass ?? 2,
+        newsBlackoutBeforeMin: config.newsBlackoutBeforeMin ?? 30,
+        newsBlackoutAfterMin: config.newsBlackoutAfterMin ?? 30,
+        maxSpreadCostPct: Number(config.maxSpreadCostPct ?? 0.5),
         maxDailyLossPct: Number(config.maxDailyLossPct),
         minConfidence: Number(config.minConfidence),
         allowedInstruments: config.allowedInstruments,
@@ -96,7 +105,7 @@ export default function ConfigurationPage() {
 
   const onSubmit = (v: FormValues) => {
     update.mutate(
-      { data: { ...v, killzones: config?.killzones ?? v.killzones, notes: v.notes || undefined } },
+      { data: { ...v, notes: v.notes || undefined } },
       {
         onSuccess: () => {
           qc.invalidateQueries({ queryKey: getGetBotConfigQueryKey() });
@@ -268,6 +277,9 @@ export default function ConfigurationPage() {
                 ["efficiencyRatioMin", "Efficiency ratio floor (0 chop, 1 trend)", "0.01"],
                 ["minStopAtr", "Minimum stop distance (ATRs)", "0.1"],
                 ["maxPerAssetClass", "Max open positions per asset class", "1"],
+                ["newsBlackoutBeforeMin", "News blackout: minutes before a high-impact release", "1"],
+                ["newsBlackoutAfterMin", "News blackout: minutes after a high-impact release", "1"],
+                ["maxSpreadCostPct", "Max indicative trading cost (% of stake)", "0.01"],
               ] as const).map(([name, label, step]) => (
                 <FormField key={name} control={form.control} name={name} render={({ field }) => (
                   <FormItem>
@@ -288,8 +300,16 @@ export default function ConfigurationPage() {
               <FormField control={form.control} name="allowedInstruments" render={({ field }) => (
                 <FormItem>
                   <FormLabel>Allowed instruments</FormLabel>
-                  <FormControl><Input placeholder="JD25,JD75,R_75,BOOM1000" {...field} data-testid="input-instruments" /></FormControl>
-                  <FormDescription className="text-[11px]">Synthetics only. Blank scans supported synthetics; forex, crypto, and commodities are currently blocked. Enter comma-separated synthetic symbols to narrow the scan.</FormDescription>
+                  <FormControl><Input placeholder="frxEURUSD,frxGBPUSD,frxUSDJPY" {...field} data-testid="input-instruments" /></FormControl>
+                  <FormDescription className="text-[11px]">Forex only. Blank scans all forex majors (EURUSD, GBPUSD, USDJPY, AUDUSD, USDCAD, GBPJPY); synthetics, crypto and commodities are not traded or analyzed. Enter comma-separated forex symbols to narrow the scan.</FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )} />
+              <FormField control={form.control} name="killzones" render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Killzone sessions</FormLabel>
+                  <FormControl><Input placeholder="london,newyork" {...field} data-testid="input-killzones" /></FormControl>
+                  <FormDescription className="text-[11px]">Comma-separated: asian, london, newyork. Blank allows any open-market hour. Signals are only generated while one of the listed sessions is active (UTC).</FormDescription>
                   <FormMessage />
                 </FormItem>
               )} />

@@ -875,6 +875,21 @@ export interface BotConfig {
    * @maximum 100
    */
   maxPerAssetClass?: number;
+  /**
+   * @minimum 0
+   * @maximum 1440
+   */
+  newsBlackoutBeforeMin?: number;
+  /**
+   * @minimum 0
+   * @maximum 1440
+   */
+  newsBlackoutAfterMin?: number;
+  /**
+   * @minimum 0
+   * @maximum 100
+   */
+  maxSpreadCostPct?: number;
   /** @nullable */
   notes?: string | null;
   updatedAt: string;
@@ -949,6 +964,21 @@ export interface BotConfigInput {
    * @maximum 100
    */
   maxPerAssetClass?: number;
+  /**
+   * @minimum 0
+   * @maximum 1440
+   */
+  newsBlackoutBeforeMin?: number;
+  /**
+   * @minimum 0
+   * @maximum 1440
+   */
+  newsBlackoutAfterMin?: number;
+  /**
+   * @minimum 0
+   * @maximum 100
+   */
+  maxSpreadCostPct?: number;
   notes?: string;
 }
 

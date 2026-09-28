@@ -1154,6 +1154,15 @@ export const getBotConfigResponseMinStopAtrMax = 20;
 
 export const getBotConfigResponseMaxPerAssetClassMax = 100;
 
+export const getBotConfigResponseNewsBlackoutBeforeMinMin = 0;
+export const getBotConfigResponseNewsBlackoutBeforeMinMax = 1440;
+
+export const getBotConfigResponseNewsBlackoutAfterMinMin = 0;
+export const getBotConfigResponseNewsBlackoutAfterMinMax = 1440;
+
+export const getBotConfigResponseMaxSpreadCostPctMin = 0;
+export const getBotConfigResponseMaxSpreadCostPctMax = 100;
+
 export const GetBotConfigResponse = zod.object({
   id: zod.number(),
   enabled: zod.boolean(),
@@ -1203,6 +1212,21 @@ export const GetBotConfigResponse = zod.object({
     .min(1)
     .max(getBotConfigResponseMaxPerAssetClassMax)
     .optional(),
+  newsBlackoutBeforeMin: zod
+    .number()
+    .min(getBotConfigResponseNewsBlackoutBeforeMinMin)
+    .max(getBotConfigResponseNewsBlackoutBeforeMinMax)
+    .optional(),
+  newsBlackoutAfterMin: zod
+    .number()
+    .min(getBotConfigResponseNewsBlackoutAfterMinMin)
+    .max(getBotConfigResponseNewsBlackoutAfterMinMax)
+    .optional(),
+  maxSpreadCostPct: zod
+    .number()
+    .min(getBotConfigResponseMaxSpreadCostPctMin)
+    .max(getBotConfigResponseMaxSpreadCostPctMax)
+    .optional(),
   notes: zod.string().nullish(),
   updatedAt: zod.coerce.date(),
 });
@@ -1241,6 +1265,15 @@ export const updateBotConfigBodyMinStopAtrMin = 0;
 export const updateBotConfigBodyMinStopAtrMax = 20;
 
 export const updateBotConfigBodyMaxPerAssetClassMax = 100;
+
+export const updateBotConfigBodyNewsBlackoutBeforeMinMin = 0;
+export const updateBotConfigBodyNewsBlackoutBeforeMinMax = 1440;
+
+export const updateBotConfigBodyNewsBlackoutAfterMinMin = 0;
+export const updateBotConfigBodyNewsBlackoutAfterMinMax = 1440;
+
+export const updateBotConfigBodyMaxSpreadCostPctMin = 0;
+export const updateBotConfigBodyMaxSpreadCostPctMax = 100;
 
 export const UpdateBotConfigBody = zod.object({
   enabled: zod.boolean(),
@@ -1298,6 +1331,21 @@ export const UpdateBotConfigBody = zod.object({
     .min(1)
     .max(updateBotConfigBodyMaxPerAssetClassMax)
     .optional(),
+  newsBlackoutBeforeMin: zod
+    .number()
+    .min(updateBotConfigBodyNewsBlackoutBeforeMinMin)
+    .max(updateBotConfigBodyNewsBlackoutBeforeMinMax)
+    .optional(),
+  newsBlackoutAfterMin: zod
+    .number()
+    .min(updateBotConfigBodyNewsBlackoutAfterMinMin)
+    .max(updateBotConfigBodyNewsBlackoutAfterMinMax)
+    .optional(),
+  maxSpreadCostPct: zod
+    .number()
+    .min(updateBotConfigBodyMaxSpreadCostPctMin)
+    .max(updateBotConfigBodyMaxSpreadCostPctMax)
+    .optional(),
   notes: zod.string().optional(),
 });
 
@@ -1320,6 +1368,15 @@ export const updateBotConfigResponseMinStopAtrMin = 0;
 export const updateBotConfigResponseMinStopAtrMax = 20;
 
 export const updateBotConfigResponseMaxPerAssetClassMax = 100;
+
+export const updateBotConfigResponseNewsBlackoutBeforeMinMin = 0;
+export const updateBotConfigResponseNewsBlackoutBeforeMinMax = 1440;
+
+export const updateBotConfigResponseNewsBlackoutAfterMinMin = 0;
+export const updateBotConfigResponseNewsBlackoutAfterMinMax = 1440;
+
+export const updateBotConfigResponseMaxSpreadCostPctMin = 0;
+export const updateBotConfigResponseMaxSpreadCostPctMax = 100;
 
 export const UpdateBotConfigResponse = zod.object({
   id: zod.number(),
@@ -1369,6 +1426,21 @@ export const UpdateBotConfigResponse = zod.object({
     .number()
     .min(1)
     .max(updateBotConfigResponseMaxPerAssetClassMax)
+    .optional(),
+  newsBlackoutBeforeMin: zod
+    .number()
+    .min(updateBotConfigResponseNewsBlackoutBeforeMinMin)
+    .max(updateBotConfigResponseNewsBlackoutBeforeMinMax)
+    .optional(),
+  newsBlackoutAfterMin: zod
+    .number()
+    .min(updateBotConfigResponseNewsBlackoutAfterMinMin)
+    .max(updateBotConfigResponseNewsBlackoutAfterMinMax)
+    .optional(),
+  maxSpreadCostPct: zod
+    .number()
+    .min(updateBotConfigResponseMaxSpreadCostPctMin)
+    .max(updateBotConfigResponseMaxSpreadCostPctMax)
     .optional(),
   notes: zod.string().nullish(),
   updatedAt: zod.coerce.date(),

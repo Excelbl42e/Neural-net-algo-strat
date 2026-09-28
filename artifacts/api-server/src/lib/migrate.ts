@@ -25,6 +25,9 @@ export async function ensureSchema(): Promise<void> {
     sql`ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS efficiency_ratio_min numeric(5,3) NOT NULL DEFAULT 0.150`,
     sql`ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS min_stop_atr numeric(5,2) NOT NULL DEFAULT 1.00`,
     sql`ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS max_per_asset_class integer NOT NULL DEFAULT 2`,
+    sql`ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS news_blackout_before_min integer NOT NULL DEFAULT 30`,
+    sql`ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS news_blackout_after_min integer NOT NULL DEFAULT 30`,
+    sql`ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS max_spread_cost_pct numeric(5,2) NOT NULL DEFAULT 0.50`,
     // Autotrade modes are now off | auto_demo | auto_live. The removed
     // manual_approval mode could never execute; autonomous maps to demo only.
     sql`UPDATE bot_config SET autotrade_mode = 'off' WHERE autotrade_mode NOT IN ('off','auto_demo','auto_live') AND autotrade_mode <> 'autonomous'`,

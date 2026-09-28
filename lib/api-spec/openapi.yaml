@@ -1662,6 +1662,9 @@ components:
         efficiencyRatioMin:     { type: number, minimum: 0, maximum: 1 }
         minStopAtr:             { type: number, minimum: 0, maximum: 20 }
         maxPerAssetClass:       { type: integer, minimum: 1, maximum: 100 }
+        newsBlackoutBeforeMin:  { type: integer, minimum: 0, maximum: 1440 }
+        newsBlackoutAfterMin:   { type: integer, minimum: 0, maximum: 1440 }
+        maxSpreadCostPct:       { type: number, minimum: 0, maximum: 100 }
         notes:                  { type: ["string", "null"] }
         updatedAt:              { type: string, format: date-time }
 
@@ -1684,6 +1687,9 @@ components:
         efficiencyRatioMin:     { type: number, minimum: 0, maximum: 1 }
         minStopAtr:             { type: number, minimum: 0, maximum: 20 }
         maxPerAssetClass:       { type: integer, minimum: 1, maximum: 100 }
+        newsBlackoutBeforeMin:  { type: integer, minimum: 0, maximum: 1440 }
+        newsBlackoutAfterMin:   { type: integer, minimum: 0, maximum: 1440 }
+        maxSpreadCostPct:       { type: number, minimum: 0, maximum: 100 }
         notes:                  { type: string }
 
     # ──────────── Analysis ────────────

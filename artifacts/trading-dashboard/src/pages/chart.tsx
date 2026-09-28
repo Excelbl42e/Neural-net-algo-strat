@@ -49,7 +49,7 @@ function parseLevels(raw: string | null | undefined): LevelDrawing[] {
 }
 
 export default function ChartPage() {
-  const [symbol, setSymbol] = useState<string>("R_75");
+  const [symbol, setSymbol] = useState<string>("frxEURUSD");
   const [timeframe, setTimeframe] = useState<Timeframe>("H4");
 
   const { data: symbolCatalog } = useListSymbols({
@@ -119,7 +119,7 @@ export default function ChartPage() {
                     </SelectGroup>
                   ))
                 : (
-                    <SelectItem value="R_75">Volatility 75</SelectItem>
+                    <SelectItem value="frxEURUSD">EUR / USD</SelectItem>
                   )
               }
             </SelectContent>

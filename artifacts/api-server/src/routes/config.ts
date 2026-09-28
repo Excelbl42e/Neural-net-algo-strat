@@ -20,6 +20,9 @@ const DEFAULTS = {
   efficiencyRatioMin: 0.15,
   minStopAtr: 1,
   maxPerAssetClass: 2,
+  newsBlackoutBeforeMin: 30,
+  newsBlackoutAfterMin: 30,
+  maxSpreadCostPct: 0.5,
   riskPerTradePct: 1,
   maxConcurrentPositions: 3,
   maxDailyLossPct: 5,
@@ -47,6 +50,9 @@ function serialize(row: BotConfig) {
     efficiencyRatioMin: parseFloat(row.efficiencyRatioMin),
     minStopAtr: parseFloat(row.minStopAtr),
     maxPerAssetClass: row.maxPerAssetClass,
+    newsBlackoutBeforeMin: row.newsBlackoutBeforeMin,
+    newsBlackoutAfterMin: row.newsBlackoutAfterMin,
+    maxSpreadCostPct: parseFloat(row.maxSpreadCostPct),
     notes: row.notes,
     updatedAt: row.updatedAt.toISOString(),
   };
@@ -116,6 +122,9 @@ router.put("/config", async (req, res): Promise<void> => {
     efficiencyRatioMin: keep(d.efficiencyRatioMin, prev?.efficiencyRatioMin, 0.15),
     minStopAtr: keep(d.minStopAtr, prev?.minStopAtr, 1),
     maxPerAssetClass: d.maxPerAssetClass ?? prev?.maxPerAssetClass ?? 2,
+    newsBlackoutBeforeMin: d.newsBlackoutBeforeMin ?? prev?.newsBlackoutBeforeMin ?? 30,
+    newsBlackoutAfterMin: d.newsBlackoutAfterMin ?? prev?.newsBlackoutAfterMin ?? 30,
+    maxSpreadCostPct: keep(d.maxSpreadCostPct, prev?.maxSpreadCostPct, 0.5),
     notes: parsed.data.notes ?? null,
   };
   const [row] = await db

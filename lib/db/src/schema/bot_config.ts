@@ -19,6 +19,9 @@ export const botConfigTable = pgTable("bot_config", {
   efficiencyRatioMin: numeric("efficiency_ratio_min", { precision: 5, scale: 3 }).notNull().default("0.150"),
   minStopAtr: numeric("min_stop_atr", { precision: 5, scale: 2 }).notNull().default("1.00"),
   maxPerAssetClass: integer("max_per_asset_class").notNull().default(2),
+  newsBlackoutBeforeMin: integer("news_blackout_before_min").notNull().default(30),
+  newsBlackoutAfterMin: integer("news_blackout_after_min").notNull().default(30),
+  maxSpreadCostPct: numeric("max_spread_cost_pct", { precision: 5, scale: 2 }).notNull().default("0.50"),
   notes: text("notes"),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
 });

@@ -393,7 +393,7 @@ export default function TradesPage() {
                 <FormField control={form.control} name="symbol" render={({ field }) => (
                   <FormItem>
                     <FormLabel>Symbol</FormLabel>
-                    <FormControl><Input placeholder="R_75" {...field} data-testid="input-trade-symbol" /></FormControl>
+                    <FormControl><Input placeholder="frxEURUSD" {...field} data-testid="input-trade-symbol" /></FormControl>
                     <FormMessage />
                   </FormItem>
                 )} />

@@ -141,6 +141,37 @@ export interface DerivContractInfo {
   sellTime: number | null;
 }
 
+/**
+ * Indicative live trading cost as a percentage of stake, read from a real
+ * Deriv `proposal` quote for a $1 MULTUP (basis=stake, so ask_price should
+ * equal amount modulo the spread/commission Deriv actually prices in). Used
+ * by the forex readiness dispatch gate to refuse trading when the market is
+ * too expensive right now. Returns null (never throws) if the quote can't be
+ * read; forex-readiness.ts treats null as "refuse rather than trade blind".
+ *
+ * Evidence label: code review only — the proposal shape (`ask_price`,
+ * `amount`, `basis: "stake"`) matches Deriv's documented multiplier proposal
+ * response, but this has not been run against a live Deriv connection.
+ */
+export async function getIndicativeCostPct(token: string, environment: "demo" | "real", symbol: string): Promise<number | null> {
+  const meta = getSyntheticSymbol(symbol);
+  const multiplier = meta?.multiplier ?? 30;
+  let session: DerivSession | null = null;
+  try {
+    session = await openDerivSession(token, environment);
+    const res = await session.request<{ proposal?: { ask_price?: number }; error?: { message?: string } }>(
+      { proposal: 1, amount: 1, basis: "stake", contract_type: "MULTUP", currency: "USD", symbol, multiplier },
+      { timeoutMs: 8_000 },
+    );
+    if (res.error || typeof res.proposal?.ask_price !== "number") return null;
+    return Math.abs(res.proposal.ask_price - 1) * 100;
+  } catch {
+    return null;
+  } finally {
+    session?.close();
+  }
+}
+
 /** Open portfolio + recent profit table for an account. Used by the reconciler. */
 export async function fetchRecentContracts(token: string, environment: "demo" | "real"): Promise<DerivContractInfo[]> {
   const session = await openDerivSession(token, environment);

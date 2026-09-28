@@ -100,9 +100,11 @@ async function buildPerformanceFeedback(): Promise<string | null> {
 }
 import { getOpenAI } from "./ai-client.js";
 import { logger } from "./logger.js";
-import { placeDerivTrade } from "./deriv.js";
-import { ALL_SYNTHETIC_MARKETS, getSyntheticSymbol, isSyntheticMarketCode } from "./synthetic-catalog.js";
+import { placeDerivTrade, getIndicativeCostPct } from "./deriv.js";
+import { ALL_FOREX_INSTRUMENTS, getSyntheticSymbol, isForexCode } from "./synthetic-catalog.js";
 import { calculateCappedStake, calculateDailyLossCappedStake } from "./execution-risk.js";
+import { forexPreScanGate, forexDispatchGate } from "./forex-readiness.js";
+import { getNewsEvents } from "./news-calendar.js";
 import { scoreConcepts } from "./trade-review.js";
 import { claimReason, getExecutionLock } from "./reconciler.js";
 import { decryptSecret } from "./crypto.js";
@@ -120,10 +122,10 @@ const CHUNK_SAMPLE_SIZE = 12;              // chunks to feed per analysis
 const DEFAULT_CONCEPT_SCORE_THRESHOLD = 0.4;
 const DEFAULT_CONCEPT_MIN_SAMPLES = 8;
 const DEFAULT_CONCEPT_PRIOR_SAMPLES = 4;
-// All Deriv synthetics in the catalog — the bot scans every one of them
-// unless the account has a custom allowedInstruments allow-list.
-// Real markets (forex/crypto) are skipped unless explicitly opted into.
-const DEFAULT_INSTRUMENTS = ALL_SYNTHETIC_MARKETS;
+// Only forex is traded and analyzed. The bot scans every forex major in the
+// catalog unless the account has a custom allowedInstruments allow-list
+// (which is itself filtered back down to forex — see below).
+const DEFAULT_INSTRUMENTS = ALL_FOREX_INSTRUMENTS;
 
 interface PromptConceptScore {
   name: string;
@@ -243,7 +245,7 @@ async function analyzeSymbol(
     : "Current market price: unavailable — do not invent price levels; set setup_found false";
 
   const conceptEvidence = JSON.stringify(scoredConcepts, null, 2);
-  const systemPrompt = `You are an ICT (Inner Circle Trader) / SMC (Smart Money Concepts) analyst specialising in Deriv synthetic indices. Use only the supplied candle evidence and knowledge context. Analyze H4/D1 for directional bias, H1 for entry timing, and target an expected 1–4 day hold.
+  const systemPrompt = `You are an ICT (Inner Circle Trader) / SMC (Smart Money Concepts) analyst specialising in spot forex majors traded as Deriv multiplier contracts. Use only the supplied candle evidence and knowledge context. Analyze H4/D1 for directional bias, H1 for entry timing, and target an expected 1–4 day hold.
 
 ═══ CORE FRAMEWORK: THE ALGO MODEL ═══
 Markets are engineered by a central bank algorithm (IPDA — Interbank Price Delivery Algorithm). Its only objective: seek liquidity, grab it, reverse. Every move follows: BUILD UP LIQUIDITY → AGGRESSIVE GRAB → REVERSAL → DISTRIBUTION.
@@ -256,7 +258,7 @@ Markets are engineered by a central bank algorithm (IPDA — Interbank Price Del
 ─── DRAW ON LIQUIDITY (DOL) — know this FIRST ───
 Before any analysis, identify where price is DRAWING TO. Is the DOL bullish (targeting BSL above) or bearish (targeting SSL below)? Never trade against the DOL. DOL = the nearest major liquidity pool in the direction of HTF bias.
 
-═══ WEEKLY CYCLE (applies to synthetics — algo runs 24/7 on NY time) ═══
+═══ WEEKLY CYCLE (forex trades Sun 21:00 UTC – Fri 21:00 UTC; sessions run on NY time) ═══
 • Monday: Accumulation OR manipulation — the HOW or LOW of the week often forms Monday
 • Tuesday: If Monday was accumulation → Tuesday grabs liquidity to set direction; if Monday swept → Tuesday continuation
 • Wednesday: Reaccumulation OR reversal (check if HTF draw has been reached); most reversals happen Wed
@@ -382,7 +384,7 @@ PRINCIPLE 1 — PERMANENT vs TEMPORARY PRICE IMPACT (Kyle 1985 / Glosten-Milgrom
 Every price move has two components: PERMANENT impact (the efficient price shifts — a new informed order permanently changed fair value) and TEMPORARY impact (execution noise from liquidity traders that quickly mean-reverts). The FVG is the physical signature of PERMANENT impact — the region where the institutional algo had to execute faster than the LOB could absorb, leaving an unfilled gap. A BMS with a visible FVG = permanent price impact confirmed = follow it. A BMS with NO FVG = temporary impact only = retail noise = fade or skip.
 
 PRINCIPLE 2 — ADVERSE SELECTION & ORDER IMBALANCE (Glosten-Milgrom / Cartea Ch.12):
-When order flow is BUY-HEAVY (more buy market orders than sell orders arriving = bid > ask side dominance), future price jumps are biased UPWARD by ~28% more often than neutral. When SELL-HEAVY, price jumps downward 21% more frequently. In practice on synthetics: a bullish DISPLACEMENT candle with a large body means the informed buyer executed aggressively — buy-heavy imbalance regime — making the resulting FVG/OB a HIGH-QUALITY entry zone. Conversely, a bearish DISPLACEMENT with large body = sell-heavy regime = FVG below is high-quality for shorts. Weak, small-body breakouts = neutral or opposing imbalance = low quality, skip.
+When order flow is BUY-HEAVY (more buy market orders than sell orders arriving = bid > ask side dominance), future price jumps are biased UPWARD by ~28% more often than neutral. When SELL-HEAVY, price jumps downward 21% more frequently. In practice on forex: a bullish DISPLACEMENT candle with a large body means the informed buyer executed aggressively — buy-heavy imbalance regime — making the resulting FVG/OB a HIGH-QUALITY entry zone. Conversely, a bearish DISPLACEMENT with large body = sell-heavy regime = FVG below is high-quality for shorts. Weak, small-body breakouts = neutral or opposing imbalance = low quality, skip.
 
 PRINCIPLE 3 — VOLUME-VOLATILITY CLUSTERING & SESSION TIMING (Cartea Ch.3-4):
 Empirically: spreads are WIDEST at market open (high uncertainty, informed + noise traders both active), narrow through mid-session, then narrow again at close. Volume is U-shaped: peak at open, trough at mid-day, peak at close. Implication for entry timing: the London/NY sweep (Manipulation phase) fires at the SESSION OPEN spike. Do NOT enter on the very first candle of the session — that is the maximum-noise environment. Wait 1-3 candles (30-90 minutes) for the sweep to complete and the spread/noise to decline. The best entry candle is 1-3 periods AFTER the ALGO_CANDLE prints, when order imbalance has stabilised and the retracement into FVG begins.
@@ -391,7 +393,7 @@ PRINCIPLE 4 — OPTIMAL EXECUTION & OTE ENTRY (Almgren-Chriss / Cartea Ch.6):
 The Optimal Trade Entry (OTE, 61.8–79% Fibonacci retracement) is mathematically equivalent to the stochastic optimal control solution for minimising execution cost while capturing a directional trend. Trading at OTE = the agent is waiting for temporary price impact to fully dissipate (the retracement) before the permanent impact trend resumes. Entering before OTE = paying the full execution cost = suboptimal. Entering AT OTE or deeper into the FVG = near-zero temporary impact cost = maximum expected profit per unit of risk. Never chase — let price retrace to OTE/FVG then enter.
 
 PRINCIPLE 5 — ORNSTEIN-UHLENBECK MEAN REVERSION & FAILURE SWING TIMING (Cartea Ch.11):
-Price around a mean-reverting level follows an OU process: dC = κ(θ − C)dt + σdW. The mean-reversion speed κ is HIGHEST when price is far from equilibrium. This mathematically explains the failure swing: when price makes a new high but FAILS to make a higher high, the OU pull (κ × distance) has overcome the trend drift (μ). This is the precise moment to enter a reversal. Exit your position BEFORE price reaches a distant liquidity pool (BSL/SSL) that is itself close to an opposite OU equilibrium — the mean-reversion force there will pull price back, cutting your profit. Always set Target 2 at the next MAJOR external liquidity (HOW/LOW), not beyond it. The OU model also validates the 3-5 day cycle: κ typically restores price to equilibrium within 3-5 synthetic trading days — perfectly matching the HTF liquidity cycle observation.
+Price around a mean-reverting level follows an OU process: dC = κ(θ − C)dt + σdW. The mean-reversion speed κ is HIGHEST when price is far from equilibrium. This mathematically explains the failure swing: when price makes a new high but FAILS to make a higher high, the OU pull (κ × distance) has overcome the trend drift (μ). This is the precise moment to enter a reversal. Exit your position BEFORE price reaches a distant liquidity pool (BSL/SSL) that is itself close to an opposite OU equilibrium — the mean-reversion force there will pull price back, cutting your profit. Always set Target 2 at the next MAJOR external liquidity (HOW/LOW), not beyond it. The OU model also validates the 3-5 day cycle: κ typically restores price to equilibrium within 3-5 trading days — perfectly matching the HTF liquidity cycle observation.
 
 INTEGRATION RULES (apply these alongside ICT):
 - FVG confirmation = REQUIRED (Principle 1: permanent impact). No FVG = no trade.
@@ -447,7 +449,7 @@ WEEKLY: Bullish = expect Judas Swing BELOW weekly open Mon–Wed (week LOW forms
 ▸ SMART MONEY REVERSAL (SMR) TYPES (LumiTraders ICT 2022):
 Type 1 (IDEAL): price sweeps BSL above old high → immediately breaks below old swing low with FVG in the expansion leg. Strongest reversal. FVG in that expansion leg = entry zone.
 Type 2: price fails to reach previous high (lower high) → then breaks below old swing low with FVG. Valid but less aggressive. Requires FVG confirmation just like Type 1.
-SMT Divergence: for extra confirmation, check a correlated synthetic (e.g. R_75 vs R_100). If one makes a new high but the other makes a lower high → bearish SMT divergence → reversal signal is validated.
+SMT Divergence: for extra confirmation, check a correlated forex pair sharing a leg (e.g. EURUSD vs GBPUSD, or an inverse pair like EURUSD vs USDCHF). If one makes a new high but the other makes a lower high → bearish SMT divergence → reversal signal is validated. Only use a pair actually supplied in the candle evidence — do not claim to have observed a pair that was not provided.
 
 ▸ FVG DIRECTION FILTER AT RETRACEMENT (LumiTraders ICT 2022):
 When price returns INTO a FVG zone — do NOT enter on the first touch. Wait for the reaction candle:
@@ -464,18 +466,18 @@ Always mark D1 FVGs first, then H4 FVGs. Only use LTF FVGs for entry precision i
 ▸ BREAK-EVEN SL MANAGEMENT (ICT Algo Concept Book):
 Once price breaks structure in your direction (first BOS after entry), consider moving SL to break-even (entry price). Do not claim an outcome unless it is shown by the supplied candles.
 
-═══ KEY RULES FOR SYNTHETICS ═══
+═══ KEY RULES FOR FOREX ═══
 Eligible ingestion concepts and persisted sample-adjusted scores (structured evidence; concept weights are hit weights from the C++ ingestion scanner):
 ${conceptEvidence}
 - Prefer concepts with stronger scanner hit weight and higher sample-adjusted historical score. Do not use a concept absent from this eligible list.
-- Synthetics are 24/7 with uniform volatility — daily/weekly/session cycles still apply (algo runs on NY time)
-- No news/spread distortions — structure is cleaner but liquidity grabs are faster (1-3 candles)
-- R_75/R_100: Best for OB + FVG setups, cleanest structure
-- Jump indices (JD25/JD75): Strong trends, multiplier OB entries work well
-- stpRNG: AMD model works cleanly, accumulation ranges are clear
+- Real institutional market: news events and spread widen at session opens and around high-impact releases — this signal was only generated because the code-side news blackout and session gate already passed for this instrument at scan time; still favour setups AWAY from the immediate post-release spike.
+- Forex is closed Sat 00:00 UTC – Sun 21:00 UTC and thinly traded right at that reopen; a setup at the very start of the week deserves extra caution.
+- EURUSD/GBPUSD: highest liquidity, tightest cost, cleanest London/NY structure.
+- USDJPY: watch for BoJ-driven volatility spikes distinct from pure ICT structure.
+- GBPJPY: wider ranges and faster liquidity grabs than the USD majors — widen the noise-stop assumption accordingly.
 
 CRITICAL RULES:
-- EVIDENCE BOUNDARY: the supplied data is OHLC and UTC timestamps only. Do not state that volume, order flow, spreads, news, order-book depth, institutional intent, or an unprovided timeframe was observed. Treat theoretical/microstructure descriptions above as hypotheses, not facts about these candles. Verify every claimed sweep, structure break, FVG, session time, stop, and target against supplied values; otherwise do not claim it.
+- EVIDENCE BOUNDARY: the supplied data is OHLC and UTC timestamps only. Do not state that volume, order flow, order-book depth, institutional intent, or an unprovided timeframe was observed. Treat theoretical/microstructure descriptions above as hypotheses, not facts about these candles. Verify every claimed sweep, structure break, FVG, session time, stop, and target against supplied values; otherwise do not claim it.
 - NEVER trade if DOL is unclear — always identify DOL first
 - Only enter Distribution phase (after confirmed Manipulation grab)
 - Real BMS requires FVG in the expansion leg — no FVG = fake, skip it
@@ -690,11 +692,19 @@ interface SignalRow {
 
 let dispatchQueue: Promise<void> = Promise.resolve();
 
+interface ForexDispatchParams {
+  killzones: string;
+  newsBlackoutBeforeMin: number;
+  newsBlackoutAfterMin: number;
+  maxSpreadCostPct: number;
+}
+
 async function dispatchTrade(
   signal: SignalRow,
   riskPerTradePct: number,
   maxConcurrentPositions: number,
   maxDailyLossPct: number,
+  forex: ForexDispatchParams,
 ): Promise<void> {
   const previous = dispatchQueue;
   let release!: () => void;
@@ -707,7 +717,7 @@ async function dispatchTrade(
       if (signal.id != null) await recordGeneratedReason(signal.id, lock.reason ?? LOCK_MSG);
       return;
     }
-    await dispatchTradeUnlocked(signal, riskPerTradePct, maxConcurrentPositions, maxDailyLossPct);
+    await dispatchTradeUnlocked(signal, riskPerTradePct, maxConcurrentPositions, maxDailyLossPct, forex);
   } catch (err) {
     // A claim already written as awaiting_broker is intentionally left
     // untouched; if its state cannot be verified, fail closed globally.
@@ -737,6 +747,7 @@ async function dispatchTradeUnlocked(
   riskPerTradePct: number,
   maxConcurrentPositions: number,
   maxDailyLossPct: number,
+  forex: ForexDispatchParams,
 ): Promise<void> {
   if (signal.id == null) {
     logger.error({ symbol: signal.symbol }, "Signal has no persisted ID; refusing untrackable execution");
@@ -755,9 +766,9 @@ async function dispatchTradeUnlocked(
     logger.info({ symbol: signal.symbol, signalId: signal.id }, "Expired or undated signal refused by dispatcher");
     return;
   }
-  if (!isSyntheticMarketCode(signal.symbol)) {
-    await recordGeneratedReason(signal.id, "Non-synthetic market refused: safe market-hours/news handling is unavailable");
-    logger.warn({ symbol: signal.symbol }, "Non-synthetic market refused: safe market-hours/news handling is unavailable");
+  if (!isForexCode(signal.symbol)) {
+    await recordGeneratedReason(signal.id, "Non-forex instrument refused: only forex is traded and analyzed");
+    logger.warn({ symbol: signal.symbol }, "Non-forex instrument refused: only forex is traded and analyzed");
     return;
   }
 
@@ -806,6 +817,27 @@ async function dispatchTradeUnlocked(
     await recordGeneratedReason(signal.id, "Connected broker has no credential token");
     logger.warn({ broker: conn.label }, "Broker has no credential token — skipping trade");
     return;
+  }
+
+  {
+    const newsEvents = await getNewsEvents();
+    const costPct = await getIndicativeCostPct(token, wantEnv, signal.symbol);
+    const dispatchReadiness = forexDispatchGate({
+      symbol: signal.symbol,
+      now: new Date(),
+      killzones: forex.killzones,
+      newsEvents,
+      newsBlackoutBeforeMin: forex.newsBlackoutBeforeMin,
+      newsBlackoutAfterMin: forex.newsBlackoutAfterMin,
+      costPct,
+      maxCostPct: forex.maxSpreadCostPct,
+    });
+    if (!dispatchReadiness.ok) {
+      await recordGeneratedReason(signal.id, dispatchReadiness.reason ?? "Forex readiness gate failed");
+      recordRejection({ symbol: signal.symbol, stage: "forex_readiness", reason: dispatchReadiness.reason ?? "Forex readiness gate failed" });
+      logger.warn({ symbol: signal.symbol, reason: dispatchReadiness.reason }, "Forex readiness gate refused dispatch");
+      return;
+    }
   }
 
   if (conn.accountId == null) {
@@ -1135,6 +1167,12 @@ async function runWorkerTick(): Promise<void> {
     }
     activeMode = config.autotradeMode === "auto_demo" || config.autotradeMode === "auto_live" ? config.autotradeMode : null;
     activeConfig = { smallAccountMaxRiskPct: parseFloat(config.smallAccountMaxRiskPct) };
+    const forexParams: ForexDispatchParams = {
+      killzones: config.killzones,
+      newsBlackoutBeforeMin: config.newsBlackoutBeforeMin,
+      newsBlackoutAfterMin: config.newsBlackoutAfterMin,
+      maxSpreadCostPct: parseFloat(config.maxSpreadCostPct),
+    };
     const thresholds: QuantThresholds = {
       atrPercentileMin: parseFloat(config.atrPercentileMin),
       atrPercentileMax: parseFloat(config.atrPercentileMax),
@@ -1155,11 +1193,17 @@ async function runWorkerTick(): Promise<void> {
           .filter(Boolean)
           .map((s) => getSyntheticSymbol(s)?.code ?? s)
       : DEFAULT_INSTRUMENTS;
-    const instruments = requestedInstruments.filter((symbol) => {
-      if (isSyntheticMarketCode(symbol)) return true;
-      logger.warn({ symbol }, "Configured non-synthetic market skipped: safe market-hours/news handling is unavailable");
+    let instruments = requestedInstruments.filter((symbol) => {
+      if (isForexCode(symbol)) return true;
+      logger.warn({ symbol }, "Configured non-forex instrument skipped: only forex is traded and analyzed");
       return false;
     });
+    if (instruments.length === 0) {
+      logger.warn({ requestedInstruments }, "Configured allow-list had no forex symbols; falling back to all forex majors");
+      instruments = DEFAULT_INSTRUMENTS;
+    }
+    const newsEvents = await getNewsEvents();
+    const scanTime = new Date();
 
     // The synthesized mega-strategy (single row produced by the C++ expert system).
     const { getMegaStrategyRow } = await import("./expert-system.js");
@@ -1301,6 +1345,7 @@ async function runWorkerTick(): Promise<void> {
           parseFloat(config.riskPerTradePct),
           config.maxConcurrentPositions,
           parseFloat(config.maxDailyLossPct),
+          forexParams,
         ).catch((err) => {
           logger.error({ symbol: p.symbol, err }, "Replay dispatch error");
         });
@@ -1329,6 +1374,20 @@ async function runWorkerTick(): Promise<void> {
         .limit(1);
 
       if (existing.length > 0) continue;
+
+      const preScan = forexPreScanGate({
+        symbol,
+        now: scanTime,
+        killzones: config.killzones,
+        newsEvents,
+        newsBlackoutBeforeMin: config.newsBlackoutBeforeMin,
+        newsBlackoutAfterMin: config.newsBlackoutAfterMin,
+      });
+      if (!preScan.ok) {
+        recordRejection({ symbol, stage: "forex_readiness", reason: preScan.reason ?? "Forex readiness gate failed" });
+        logger.info({ symbol, reason: preScan.reason }, "Signal worker: forex readiness gate skipped this symbol");
+        continue;
+      }
 
       // ── FIX 3: Ensure the symbol is subscribed so we have real price data.
       // Without this, symbols beyond the boot set have no tick and the LLM
@@ -1604,6 +1663,7 @@ async function runWorkerTick(): Promise<void> {
           parseFloat(config.riskPerTradePct),
           config.maxConcurrentPositions,
           parseFloat(config.maxDailyLossPct),
+          forexParams,
         ).catch((err) => {
           logger.error({ symbol, err }, "Trade dispatch error");
         });

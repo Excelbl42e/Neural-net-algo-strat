@@ -4,9 +4,13 @@ import { SYNTHETIC_CATALOG, isSyntheticCode, getSyntheticSymbol } from "../lib/s
 
 const router: IRouter = Router();
 
+// Only forex is traded and analyzed; the chart/dashboard catalog matches that
+// scope rather than listing instruments the bot will never scan.
+const FOREX_ONLY_CATALOG = SYNTHETIC_CATALOG.filter((s) => s.group === "Forex");
+
 // Literal-path routes MUST come before any param routes
 router.get("/symbols", (_req, res): void => {
-  res.json(SYNTHETIC_CATALOG);
+  res.json(FOREX_ONLY_CATALOG);
 });
 
 router.get("/candles/feeder-status", (_req, res): void => {

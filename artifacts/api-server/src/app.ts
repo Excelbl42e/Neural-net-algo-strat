@@ -15,6 +15,7 @@ import { ensureSchema } from "./lib/migrate.js";
 import { startBalanceSync } from "./lib/balance-sync.js";
 import { startContractMonitor } from "./lib/contract-monitor.js";
 import { startReconciler } from "./lib/reconciler.js";
+import { getNewsEvents } from "./lib/news-calendar.js";
 
 const app: Express = express();
 app.set("trust proxy", 1);
@@ -82,6 +83,7 @@ export async function boot(): Promise<void> {
   safeStart("contract_monitor", startContractMonitor);
   safeStart("reconciler", startReconciler);
   processPendingSources().catch(() => { /* surfaced per-source */ });
+  getNewsEvents().catch(() => { /* surfaced via news_calendar system-status component */ });
   logger.info({ started }, "Startup self-check: workers started");
 }
 

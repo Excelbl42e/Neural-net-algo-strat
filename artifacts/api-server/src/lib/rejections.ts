@@ -7,7 +7,7 @@ let queue: Promise<void> = Promise.resolve();
 export interface RejectionEntry {
   at: string;
   symbol: string;
-  stage: "pre_gpt" | "post_gpt" | "portfolio" | "sizing" | "execution";
+  stage: "pre_gpt" | "post_gpt" | "portfolio" | "sizing" | "execution" | "forex_readiness";
   reason: string;
   metrics?: Record<string, unknown>;
 }

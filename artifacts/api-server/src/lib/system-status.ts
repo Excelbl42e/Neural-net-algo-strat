@@ -7,6 +7,7 @@ import { getContractMonitorStatus } from "./contract-monitor.js";
 import { getBalanceSyncStatus } from "./balance-sync.js";
 import { getSecret } from "./secrets.js";
 import { isAIConfigured } from "./ai-client.js";
+import { getNewsCalendarStatus } from "./news-calendar.js";
 
 export type Health = "ok" | "degraded" | "down" | "idle";
 export interface Component { name: string; status: Health; reason: string }
@@ -30,6 +31,10 @@ export async function getSystemStatus() {
       : conns.length ? `no connected broker; last errors: ${conns.map((c) => c.lastError).filter(Boolean).join(" | ") || "none"}` : "no broker connection added yet");
 
   push("ai", isAIConfigured() ? "ok" : "degraded", isAIConfigured() ? "AI client configured" : "AI unavailable: integration env vars missing; scans are skipped");
+
+  const news = getNewsCalendarStatus();
+  push("news_calendar", news.trusted ? "ok" : "degraded",
+    news.trusted ? `${news.cachedEvents} events cached, fetched ${news.fetchedAt}` : `Calendar unreachable or stale (${news.lastError ?? "never fetched yet"}); forex trading fails closed until it recovers`);
 
   const w = getWorkerStatus();
   let cfg: typeof botConfigTable.$inferSelect | undefined;

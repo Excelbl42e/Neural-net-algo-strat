@@ -109,15 +109,12 @@ export function getSyntheticSymbol(code: string): SyntheticSymbol | null {
 }
 
 /**
- * Symbols the candle feeder subscribes to on boot. Keep this to the most
- * actively-traded synthetics so the WS handshake is fast — the rest
- * lazy-subscribe the first time a chart or the signal worker requests them.
+ * Symbols the candle feeder subscribes to on boot. Only forex is traded and
+ * analyzed, so this is the forex major list; anything else lazy-subscribes
+ * the first time a chart requests it.
  */
 export const DEFAULT_FEED_SYMBOLS = [
-  "R_75", "R_100", "R_50", "R_25", "R_10",
-  "BOOM1000", "BOOM500",
-  "CRASH1000", "CRASH500",
-  "JD25", "JD75",
+  "frxEURUSD", "frxGBPUSD", "frxUSDJPY", "frxAUDUSD", "frxUSDCAD", "frxGBPJPY",
 ];
 
 /**
@@ -138,4 +135,9 @@ export const ALL_CRYPTO_INSTRUMENTS = SYNTHETIC_CATALOG
 export function isSyntheticMarketCode(code: string): boolean {
   const symbol = getSyntheticSymbol(code);
   return Boolean(symbol && !["Forex", "Crypto", "Commodities"].includes(symbol.group));
+}
+
+/** Only forex is traded and analyzed by the bot (synthetics/crypto/commodities are not). */
+export function isForexCode(code: string): boolean {
+  return getSyntheticSymbol(code)?.group === "Forex";
 }
