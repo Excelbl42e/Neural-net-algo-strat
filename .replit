@@ -1,26 +1,28 @@
 modules = ["nodejs-20", "elixir-1_15", "web", "postgresql-16"]
 
 [deployment]
+router = "application"
 deploymentTarget = "vm"
-build = ["sh", "-c", "pnpm run build"]
-run = ["sh", "-c", "PORT=8080 pnpm run start"]
 
 [deployment.postBuild]
 args = ["pnpm", "store", "prune"]
 env = { "CI" = "true" }
 
 [workflows]
-runButton = "App"
+runButton = "Project"
 
 [[workflows.workflow]]
-name = "App"
-mode = "sequential"
+name = "Project"
+mode = "parallel"
 author = "agent"
 
 [[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "PORT=8080 BASE_PATH=/ pnpm run build && PORT=8080 pnpm run start"
-waitForPort = 8080
+task = "workflow.run"
+args = "typecheck"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "healthcheck"
 
 [[workflows.workflow]]
 name = "typecheck"
@@ -54,6 +56,14 @@ timeoutMs = 20000
 
 [[ports]]
 localPort = 8080
+externalPort = 8080
+
+[[ports]]
+localPort = 8081
+externalPort = 8081
+
+[[ports]]
+localPort = 24210
 externalPort = 80
 
 [[ports]]
