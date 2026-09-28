@@ -1,0 +1,13 @@
+kind = "api"
+previewPath = "/elixir"
+title = "Elixir Execution Engine"
+version = "1.0.0"
+id = "elixir-execution-engine"
+
+[[services]]
+localPort = 4001
+name = "Elixir Engine"
+paths = ["/elixir"]
+
+[services.development]
+run = "mix run --no-halt"

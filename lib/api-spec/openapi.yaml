@@ -1,0 +1,1761 @@
+openapi: 3.1.0
+info:
+  # Do not change the title, if the title changes, the import paths will be broken
+  title: Api
+  version: 0.1.0
+  description: AI Trading Bot API
+servers:
+  - url: /api
+    description: Base API path
+tags:
+  - name: health
+    description: Health operations
+  - name: auth
+    description: Dashboard write-key verification
+  - name: accounts
+    description: Broker account management
+  - name: trades
+    description: Trade lifecycle and logging
+  - name: signals
+    description: AI-generated trade signals
+  - name: strategies
+    description: ICT/CRT mega-strategy concepts
+  - name: reports
+    description: Daily and monthly performance reports
+  - name: dashboard
+    description: Aggregated dashboard data
+  - name: brain
+    description: Neural network layer status
+  - name: education
+    description: Knowledge base — books, videos, playlists, raw text
+  - name: brokers
+    description: Broker connections (Deriv)
+  - name: config
+    description: Bot configuration (risk, autotrade, killzones, instruments)
+  - name: analysis
+    description: On-demand brain analysis for a symbol
+  - name: journal
+    description: Persisted reviews of closed trades and performance aggregates
+
+paths:
+  /auth/check:
+    get:
+      operationId: checkWriteKey
+      tags: [auth]
+      summary: Validate the browser's app write key without modifying data
+      responses:
+        "200":
+          description: Key accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok]
+                properties:
+                  ok: { type: boolean }
+        "401":
+          description: Missing or invalid key
+        "503":
+          description: Server write key is not configured
+    post:
+      operationId: checkWriteKeyWriteMethod
+      tags: [auth]
+      summary: Validate write authorization without modifying data
+      responses:
+        "200":
+          description: Key accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok]
+                properties:
+                  ok: { type: boolean }
+        "401":
+          description: Missing or invalid key
+        "503":
+          description: Server write key is not configured
+  /healthz:
+    get:
+      operationId: healthCheck
+      tags: [health]
+      summary: Health check
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+
+  # ──────────────── ACCOUNTS ────────────────
+  /accounts:
+    get:
+      operationId: listAccounts
+      tags: [accounts]
+      summary: List all trading accounts
+      responses:
+        "200":
+          description: Account list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Account"
+    post:
+      operationId: createAccount
+      tags: [accounts]
+      summary: Add a trading account
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AccountInput"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Account"
+
+  /accounts/summary:
+    get:
+      operationId: getAccountsSummary
+      tags: [accounts]
+      summary: Aggregated summary across all accounts
+      responses:
+        "200":
+          description: Accounts summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AccountsSummary"
+
+  /accounts/{id}:
+    get:
+      operationId: getAccount
+      tags: [accounts]
+      summary: Get account by id
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Account
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Account"
+        "404":
+          description: Not found
+    patch:
+      operationId: updateAccount
+      tags: [accounts]
+      summary: Update account
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AccountUpdate"
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Account"
+        "404":
+          description: Not found
+    delete:
+      operationId: deleteAccount
+      tags: [accounts]
+      summary: Delete an account
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Deleted
+        "404":
+          description: Not found
+
+  # ──────────────── TRADES ────────────────
+  /trades:
+    get:
+      operationId: listTrades
+      tags: [trades]
+      summary: List trades with optional filters
+      parameters:
+        - name: accountId
+          in: query
+          schema:
+            type: integer
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [open, closed, pending]
+        - name: symbol
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+      responses:
+        "200":
+          description: Trade list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Trade"
+    post:
+      operationId: createTrade
+      tags: [trades]
+      summary: Log a new trade
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TradeInput"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Trade"
+
+  /trades/recent:
+    get:
+      operationId: getRecentTrades
+      tags: [trades]
+      summary: Most recent trades with reasoning chains
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 10
+      responses:
+        "200":
+          description: Recent trades
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Trade"
+
+  /trades/{id}:
+    get:
+      operationId: getTrade
+      tags: [trades]
+      summary: Get trade by id
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Trade
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Trade"
+        "404":
+          description: Not found
+    patch:
+      operationId: updateTrade
+      tags: [trades]
+      summary: Update trade (close, update PnL, etc)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TradeUpdate"
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Trade"
+        "404":
+          description: Not found
+    delete:
+      operationId: deleteTrade
+      tags: [trades]
+      summary: Delete a trade by id
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Deleted
+        "404":
+          description: Not found
+
+  /trades/bulk-delete:
+    post:
+      operationId: bulkDeleteTrades
+      tags: [trades]
+      summary: Bulk delete trades by status or all
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status:
+                  type: string
+                  enum: [open, closed, pending]
+                  description: Delete only trades with this status. Omit to delete all.
+      responses:
+        "200":
+          description: Number of deleted trades
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [deleted]
+                properties:
+                  deleted:
+                    type: integer
+
+  # ──────────────── SIGNALS ────────────────
+  /signals:
+    get:
+      operationId: listSignals
+      tags: [signals]
+      summary: List AI-generated signals
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [active, executed, expired, cancelled]
+        - name: symbol
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Signal list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Signal"
+    post:
+      operationId: createSignal
+      tags: [signals]
+      summary: Create a new signal
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SignalInput"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Signal"
+
+  /signals/{id}:
+    get:
+      operationId: getSignal
+      tags: [signals]
+      summary: Get signal by id
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Signal
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Signal"
+        "404":
+          description: Not found
+    patch:
+      operationId: updateSignal
+      tags: [signals]
+      summary: Update signal status
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SignalUpdate"
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Signal"
+        "404":
+          description: Not found
+    delete:
+      operationId: deleteSignal
+      tags: [signals]
+      summary: Delete a signal
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Deleted
+        "404":
+          description: Not found
+
+  # ──────────────── SYMBOLS ────────────────
+  /symbols:
+    get:
+      operationId: listSymbols
+      tags: [candles]
+      summary: List every Deriv synthetic instrument the bot can chart and trade.
+      responses:
+        "200":
+          description: Symbol catalog
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/SyntheticSymbol" }
+
+  # ──────────────── CANDLES ────────────────
+  /candles:
+    get:
+      operationId: listCandles
+      tags: [candles]
+      summary: Return historical OHLCV candles for a symbol/timeframe (latest first).
+      parameters:
+        - name: symbol
+          in: query
+          required: true
+          schema: { type: string }
+        - name: timeframe
+          in: query
+          required: true
+          schema: { type: string, enum: [M1, M5, M15, M30, H1, H4, D1] }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 1000, default: 200 }
+      responses:
+        "200":
+          description: Candle list (oldest first)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CandleResponse"
+
+  /candles/feeder-status:
+    get:
+      operationId: getCandleFeederStatus
+      tags: [candles]
+      summary: Live status of the Deriv WebSocket candle feeder
+      responses:
+        "200":
+          description: Feeder status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CandleFeederStatus"
+
+  # ──────────────── STRATEGIES ────────────────
+  /strategies:
+    get:
+      operationId: listStrategies
+      tags: [strategies]
+      summary: List all ICT/CRT strategy concepts
+      responses:
+        "200":
+          description: Strategy list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Strategy"
+    post:
+      operationId: createStrategy
+      tags: [strategies]
+      summary: Create a strategy concept
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StrategyInput"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Strategy"
+
+  /strategies/synthesize:
+    post:
+      operationId: synthesizeStrategy
+      tags: [strategies]
+      summary: Run the C++ expert system across all knowledge chunks and (re)synthesize the single mega-strategy.
+      responses:
+        "200":
+          description: Synthesized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SynthesizeResult"
+        "400":
+          description: No knowledge available
+
+  /strategies/mega:
+    get:
+      operationId: getMegaStrategy
+      tags: [strategies]
+      summary: Return the current synthesized mega-strategy (or 404 if none has been synthesized yet).
+      responses:
+        "200":
+          description: The mega strategy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Strategy"
+        "404":
+          description: Not synthesized yet
+
+  /strategies/{id}:
+    patch:
+      operationId: updateStrategy
+      tags: [strategies]
+      summary: Update a strategy concept
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StrategyUpdate"
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Strategy"
+        "404":
+          description: Not found
+
+  # ──────────────── REPORTS ────────────────
+  /reports:
+    get:
+      operationId: listReports
+      tags: [reports]
+      summary: List all reports
+      parameters:
+        - name: type
+          in: query
+          schema:
+            type: string
+            enum: [daily, monthly]
+      responses:
+        "200":
+          description: Report list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Report"
+    post:
+      operationId: generateReport
+      tags: [reports]
+      summary: Generate a new performance report
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReportInput"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Report"
+
+  /reports/scoring:
+    get:
+      operationId: getLatestScoring
+      tags: [reports]
+      summary: Latest enterprise scoring rubric grades
+      responses:
+        "200":
+          description: Scoring rubric
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScoringResult"
+
+  /reports/{id}:
+    get:
+      operationId: getReport
+      tags: [reports]
+      summary: Get report by id
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Report
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Report"
+        "404":
+          description: Not found
+
+  # ──────────────── DASHBOARD ────────────────
+  /dashboard/overview:
+    get:
+      operationId: getDashboardOverview
+      tags: [dashboard]
+      summary: Aggregated bot overview for the main dashboard
+      responses:
+        "200":
+          description: Dashboard overview
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardOverview"
+
+  /dashboard/workflow:
+    get:
+      operationId: getWorkflowStatus
+      tags: [dashboard]
+      summary: Neural network layer-by-layer workflow status
+      responses:
+        "200":
+          description: Workflow status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkflowStatus"
+
+  # ──────────────── EDUCATION ────────────────
+  /education/sources:
+    get:
+      operationId: listEducationSources
+      tags: [education]
+      summary: List all knowledge base sources
+      responses:
+        "200":
+          description: Education sources list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/EducationSource"
+    post:
+      operationId: createEducationSource
+      tags: [education]
+      summary: Add a new knowledge source (book, video, playlist, raw text)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EducationSourceInput"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EducationSource"
+
+  /education/sources/{id}/file:
+    post:
+      operationId: uploadSourceFile
+      tags: [education]
+      summary: Upload a PDF, EPUB, or supported book-page image for ingestion
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: "Supported extensions: PDF, EPUB, JPG, JPEG, PNG, WEBP, GIF, BMP, TIF, TIFF; declared media type must match the extension (application/octet-stream is permitted when the client omits a specific type)."
+      responses:
+        "200":
+          description: File uploaded and ingestion triggered
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SimpleOk"
+        "404":
+          description: Source not found
+        "400":
+          description: Missing file, unsupported extension, or mismatched media type
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error: { type: string }
+        "413":
+          description: File exceeds the 100 MB upload limit
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error: { type: string }
+
+  /education/sources/{id}/ingest:
+    post:
+      operationId: triggerEducationSourceIngest
+      tags: [education]
+      summary: Run or retry ingestion for an existing education source
+      description: Ready sources return successfully without reprocessing; processing sources return 409 without starting a duplicate; pending and error sources are ingested/retried synchronously.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, minimum: 1 }
+      responses:
+        "200":
+          description: Ingestion completed, or the source was already ready
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IngestResult"
+        "400":
+          description: Invalid source id
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IngestResult"
+        "404":
+          description: Source not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IngestResult"
+        "409":
+          description: Source is already processing; no duplicate ingestion was started
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IngestResult"
+        "500":
+          description: Ingestion failed; error detail is persisted on the source
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IngestResult"
+
+  /education/sources/{id}:
+    patch:
+      operationId: updateEducationSource
+      tags: [education]
+      summary: Update ingestion status / metadata (called by C++ ingestion engine)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EducationSourceUpdate"
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EducationSource"
+        "404":
+          description: Not found
+    delete:
+      operationId: deleteEducationSource
+      tags: [education]
+      summary: Remove a knowledge source from the system
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Deleted
+        "404":
+          description: Not found
+
+  # ──────────────── BROKER CONNECTIONS ────────────────
+  /brokers/connections:
+    get:
+      operationId: listBrokerConnections
+      tags: [brokers]
+      summary: List broker connections
+      responses:
+        "200":
+          description: Connection list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/BrokerConnection"
+    post:
+      operationId: createBrokerConnection
+      tags: [brokers]
+      summary: Add a broker connection
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BrokerConnectionInput"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BrokerConnection"
+
+  /brokers/connections/{id}:
+    patch:
+      operationId: updateBrokerConnection
+      tags: [brokers]
+      summary: Update a broker connection
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BrokerConnectionUpdate"
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BrokerConnection"
+        "404": { description: Not found }
+    delete:
+      operationId: deleteBrokerConnection
+      tags: [brokers]
+      summary: Delete a broker connection
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        "204": { description: Deleted }
+        "404": { description: Not found }
+
+  /brokers/connections/{id}/sync:
+    post:
+      operationId: syncBrokerConnection
+      tags: [brokers]
+      summary: Pull live balance and open positions from the broker
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Sync result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BrokerSyncResult"
+        "404": { description: Not found }
+        "502":
+          description: Broker error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BrokerSyncResult"
+
+  # ──────────────── BOT CONFIGURATION ────────────────
+  /config:
+    get:
+      operationId: getBotConfig
+      tags: [config]
+      summary: Get current bot configuration
+      responses:
+        "200":
+          description: Bot configuration
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BotConfig"
+    put:
+      operationId: updateBotConfig
+      tags: [config]
+      summary: Replace bot configuration
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BotConfigInput"
+      responses:
+        "200":
+          description: Updated config
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BotConfig"
+
+  # ──────────────── ON-DEMAND ANALYSIS ────────────────
+  /analysis/run:
+    post:
+      operationId: runAnalysis
+      tags: [analysis]
+      summary: Ask the brain to analyze a symbol right now
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AnalysisRequest"
+      responses:
+        "200":
+          description: Analysis result (may indicate brain-not-ready)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AnalysisResult"
+
+  # ──────────────── BRAIN / INGESTION / WORKERS ────────────────
+  /brain/ingest/{id}:
+    post:
+      operationId: ingestSource
+      tags: [brain]
+      summary: Trigger ingestion of a specific education source
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Ingestion result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IngestResult"
+        "500":
+          description: Error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IngestResult"
+
+  /brain/ingest/all:
+    post:
+      operationId: ingestAllPending
+      tags: [brain]
+      summary: Process all pending education sources
+      responses:
+        "200":
+          description: Started
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SimpleOk"
+
+  /brain/worker-status:
+    get:
+      operationId: getWorkerStatus
+      tags: [brain]
+      summary: Get signal worker status
+      responses:
+        "200":
+          description: Worker status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkerStatus"
+
+  /brain/generate-signals:
+    post:
+      operationId: generateSignalsNow
+      tags: [brain]
+      summary: Manually trigger one signal generation cycle
+      responses:
+        "200":
+          description: Started
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SimpleOk"
+
+  /brain/layers:
+    get:
+      operationId: listBrainLayers
+      tags: [brain]
+      summary: Get neural network layer statuses
+      responses:
+        "200":
+          description: Brain layers
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/BrainLayer"
+
+  # ──────────────── TRADE JOURNAL ────────────────
+  /journal/reviews:
+    get:
+      operationId: listTradeReviews
+      tags: [journal]
+      summary: Read persisted candle-evidence reviews for settled trades
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+        - name: offset
+          in: query
+          schema: { type: integer, minimum: 0, default: 0 }
+        - name: symbol
+          in: query
+          schema: { type: string }
+        - name: classification
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: Reviews ordered newest first; claimed concepts are structured arrays
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/TradeReview" }
+
+  /journal/performance:
+    get:
+      operationId: listTradePerformance
+      tags: [journal]
+      summary: Read persisted per-concept and per-symbol closed-trade performance
+      parameters:
+        - name: dimension
+          in: query
+          schema: { type: string, enum: [concept, symbol] }
+        - name: search
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: Persisted aggregate performance statistics
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/TradePerformance" }
+        "400":
+          description: Invalid dimension
+
+components:
+  schemas:
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+      required: [status]
+
+    # ──────────── Account ────────────
+    Account:
+      type: object
+      required: [id, name, broker, balance, equity, margin, currency, accountType, status, createdAt]
+      properties:
+        id:          { type: integer }
+        name:        { type: string }
+        broker:      { type: string }
+        balance:     { type: number }
+        equity:      { type: number }
+        margin:      { type: number }
+        marginLevel: { type: ["number", "null"] }
+        currency:    { type: string }
+        accountType: { type: string, enum: [live, demo, prop] }
+        status:      { type: string, enum: [active, inactive, suspended] }
+        notes:       { type: ["string", "null"] }
+        createdAt:   { type: string, format: date-time }
+        updatedAt:   { type: string, format: date-time }
+
+    AccountInput:
+      type: object
+      required: [name, broker, currency, accountType]
+      properties:
+        name:        { type: string, minLength: 1 }
+        broker:      { type: string, minLength: 1 }
+        balance:     { type: number, default: 0 }
+        equity:      { type: number, default: 0 }
+        margin:      { type: number, default: 0 }
+        marginLevel: { type: number }
+        currency:    { type: string, default: "USD" }
+        accountType: { type: string, enum: [live, demo, prop] }
+        status:      { type: string, enum: [active, inactive, suspended], default: active }
+        notes:       { type: string }
+
+    AccountUpdate:
+      type: object
+      properties:
+        name:        { type: string }
+        balance:     { type: number }
+        equity:      { type: number }
+        margin:      { type: number }
+        marginLevel: { type: number }
+        status:      { type: string, enum: [active, inactive, suspended] }
+        notes:       { type: string }
+
+    AccountsSummary:
+      type: object
+      required: [totalBalance, totalEquity, totalMargin, accountCount, activeAccounts, totalPnlToday]
+      properties:
+        totalBalance:   { type: number }
+        totalEquity:    { type: number }
+        totalMargin:    { type: number }
+        accountCount:   { type: integer }
+        activeAccounts: { type: integer }
+        totalPnlToday:  { type: number }
+
+    # ──────────── Trade ────────────
+    Trade:
+      type: object
+      required: [id, accountId, symbol, direction, openPrice, lotSize, openedAt, status, strategy, signalId, createdAt]
+      properties:
+        id:           { type: integer }
+        accountId:    { type: integer }
+        signalId:     { type: ["integer", "null"], description: "Associated signal id when the trade originated from a persisted signal." }
+        symbol:       { type: string }
+        direction:    { type: string, enum: [buy, sell] }
+        openPrice:    { type: number }
+        closePrice:   { type: ["number", "null"] }
+        stopLoss:     { type: ["number", "null"] }
+        takeProfit:   { type: ["number", "null"] }
+        lotSize:      { type: number }
+        openedAt:     { type: string, format: date-time }
+        closedAt:     { type: ["string", "null"], format: date-time }
+        status:       { type: string, enum: [open, closed, pending, cancelled] }
+        pnl:          { type: ["number", "null"] }
+        pips:         { type: ["number", "null"] }
+        riskReward:   { type: ["number", "null"] }
+        strategy:     { type: string }
+        reasonChain:  { type: string }
+        annotations:  { type: ["string", "null"] }
+        holdingTime:  { type: ["integer", "null"] }
+        createdAt:    { type: string, format: date-time }
+        updatedAt:    { type: string, format: date-time }
+
+    TradeInput:
+      type: object
+      required: [accountId, symbol, direction, openPrice, lotSize, strategy, reasonChain]
+      properties:
+        accountId:   { type: integer }
+        signalId:    { type: integer, description: "Optional persisted signal associated with this trade." }
+        symbol:      { type: string, minLength: 1 }
+        direction:   { type: string, enum: [buy, sell] }
+        openPrice:   { type: number }
+        stopLoss:    { type: number }
+        takeProfit:  { type: number }
+        lotSize:     { type: number }
+        openedAt:    { type: string, format: date-time }
+        status:      { type: string, enum: [open, pending], default: open }
+        strategy:    { type: string, minLength: 1 }
+        reasonChain: { type: string, minLength: 1 }
+        annotations: { type: string }
+
+    TradeUpdate:
+      type: object
+      properties:
+        closePrice:  { type: number }
+        stopLoss:    { type: number }
+        takeProfit:  { type: number }
+        closedAt:    { type: string, format: date-time }
+        status:      { type: string, enum: [open, closed, pending, cancelled] }
+        pnl:         { type: number }
+        pips:        { type: number }
+        riskReward:  { type: number }
+        annotations: { type: string }
+        holdingTime: { type: integer }
+
+    TradeReview:
+      type: object
+      required: [id, tradeId, accountId, symbol, direction, strategy, reasoning, claimedConcepts, entryPrice, outcome, classification, evidenceStatus, evidenceSummary, candlesExamined, createdAt]
+      properties:
+        id: { type: integer }
+        tradeId: { type: integer }
+        accountId: { type: integer }
+        symbol: { type: string }
+        direction: { type: string }
+        strategy: { type: string }
+        reasoning: { type: string }
+        claimedConcepts: { type: array, items: { type: string } }
+        entryPrice: { type: number }
+        stopPrice: { type: ["number", "null"] }
+        targetPrice: { type: ["number", "null"] }
+        closePrice: { type: ["number", "null"] }
+        outcome: { type: string, enum: [win, loss, breakeven, unknown] }
+        pnl: { type: ["number", "null"] }
+        classification: { type: string }
+        evidenceStatus: { type: string, enum: [sufficient, insufficient] }
+        evidenceSummary: { type: string }
+        candlesExamined: { type: integer }
+        closedAt: { type: ["string", "null"], format: date-time }
+        createdAt: { type: string, format: date-time }
+
+    TradePerformance:
+      type: object
+      required: [dimension, key, tradeCount, winCount, lossCount, totalPnl, winRate, sampleAdjustedWinRate, weightedSampleCount]
+      properties:
+        dimension: { type: string, enum: [concept, symbol] }
+        key: { type: string }
+        tradeCount: { type: integer }
+        winCount: { type: integer }
+        lossCount: { type: integer }
+        totalPnl: { type: number }
+        winRate: { type: ["number", "null"] }
+        sampleAdjustedWinRate: { type: number }
+        weightedSampleCount: { type: number }
+        lastOutcomeAt: { type: ["string", "null"], format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    # ──────────── Synthetic Symbol Catalog ────────────
+    SyntheticSymbol:
+      type: object
+      required: [code, display, group, pipDecimals]
+      properties:
+        code:        { type: string, description: "Deriv WS code (e.g. R_75, BOOM1000)" }
+        display:     { type: string, description: "Human-readable name (e.g. Volatility 75)" }
+        group:       { type: string, description: "UI grouping (Volatility, Boom, Crash, Jump, Step, Range Break)" }
+        pipDecimals: { type: integer }
+
+    # ──────────── Candles ────────────
+    Candle:
+      type: object
+      required: [time, open, high, low, close]
+      properties:
+        time:   { type: integer }
+        open:   { type: number }
+        high:   { type: number }
+        low:    { type: number }
+        close:  { type: number }
+        volume: { type: number, nullable: true }
+
+    LastTick:
+      type: object
+      required: [price, at]
+      properties:
+        price: { type: number }
+        at:    { type: integer }
+
+    CandleResponse:
+      type: object
+      required: [symbol, timeframe, candles]
+      properties:
+        symbol:    { type: string }
+        timeframe: { type: string }
+        candles:
+          type: array
+          items: { $ref: "#/components/schemas/Candle" }
+        lastTick:
+          allOf:
+            - $ref: "#/components/schemas/LastTick"
+          nullable: true
+
+    CandleFeederStatus:
+      type: object
+      required: [connected, symbols, bucketsFlushed, reconnectAttempts]
+      properties:
+        connected:         { type: boolean }
+        connectedAt:       { type: string, format: date-time, nullable: true }
+        symbols:           { type: array, items: { type: string } }
+        bucketsFlushed:    { type: integer }
+        lastError:         { type: string, nullable: true }
+        lastErrorAt:       { type: string, format: date-time, nullable: true }
+        reconnectAttempts: { type: integer }
+
+    # ──────────── Signal ────────────
+    Signal:
+      type: object
+      required: [id, symbol, direction, confidence, strategy, entryZone, status, executionStatus, executionReason, contractId, createdAt]
+      properties:
+        id:           { type: integer }
+        symbol:       { type: string }
+        direction:    { type: string, enum: [buy, sell] }
+        confidence:   { type: number }
+        strategy:     { type: string }
+        concepts:     { type: ["string", "null"] }
+        entryZone:    { type: string }
+        targetZone:   { type: ["string", "null"] }
+        stopZone:     { type: ["string", "null"] }
+        entryLow:     { type: ["number", "null"], description: "Numeric low edge of entry zone for chart rendering" }
+        entryHigh:    { type: ["number", "null"] }
+        stopLevel:    { type: ["number", "null"] }
+        target1Level: { type: ["number", "null"] }
+        target2Level: { type: ["number", "null"] }
+        levels:       { type: ["string", "null"], description: "JSON-encoded array of chart annotations: {kind, low, high, label}" }
+        reasoning:    { type: ["string", "null"] }
+        status:       { type: string, enum: [active, executed, expired, cancelled] }
+        executionStatus:
+          type: string
+          enum: [generated, awaiting_broker, executed, rejected, ambiguous]
+          description: "Execution lifecycle distinct from signal status: generated means no confirmed dispatch; awaiting_broker means dispatch is in flight; executed requires a confirmed broker acceptance; rejected means definitive rejection; ambiguous means dispatch outcome is uncertain and needs reconciliation."
+        executionReason:
+          type: ["string", "null"]
+          description: "Operational detail/rejection reason or ambiguity context. A status field alone does not confirm broker connectivity."
+        contractId:
+          type: ["integer", "null"]
+          format: int64
+          description: "Broker contract identifier populated only after a confirmed execution response."
+        expiresAt:    { type: ["string", "null"], format: date-time }
+        createdAt:    { type: string, format: date-time }
+        updatedAt:    { type: string, format: date-time }
+
+    SignalInput:
+      type: object
+      required: [symbol, direction, confidence, strategy, entryZone]
+      properties:
+        symbol:      { type: string, minLength: 1 }
+        direction:   { type: string, enum: [buy, sell] }
+        confidence:  { type: number, minimum: 0, maximum: 1 }
+        strategy:    { type: string, minLength: 1 }
+        concepts:    { type: string }
+        entryZone:   { type: string, minLength: 1 }
+        targetZone:  { type: string }
+        stopZone:    { type: string }
+        status:      { type: string, enum: [active, executed, expired, cancelled], default: active }
+        expiresAt:   { type: string, format: date-time }
+
+    SignalUpdate:
+      type: object
+      properties:
+        status:     { type: string, enum: [active, executed, expired, cancelled] }
+        expiresAt:  { type: string, format: date-time }
+
+    # ──────────── Strategy ────────────
+    Strategy:
+      type: object
+      required: [id, name, type, description, active, createdAt]
+      properties:
+        id:             { type: integer }
+        name:           { type: string }
+        type:           { type: string, description: "Strategy kind. The synthesized mega-strategy uses 'mega'." }
+        description:    { type: string }
+        explanation:    { type: ["string", "null"] }
+        weight:         { type: ["number", "null"] }
+        active:         { type: boolean }
+        parameters:     { type: ["string", "null"] }
+        tradeCount:     { type: integer }
+        winRate:        { type: ["number", "null"] }
+        concepts:       { type: ["string", "null"], description: "JSON-encoded list of detected ICT concepts with weights and evidence." }
+        rules:          { type: ["string", "null"], description: "JSON-encoded execution rules synthesized by the C++ expert system." }
+        sourcesUsed:    { type: integer }
+        wordsAnalyzed:  { type: integer }
+        summary:        { type: ["string", "null"] }
+        synthesizedAt:  { type: ["string", "null"], format: date-time }
+        createdAt:      { type: string, format: date-time }
+        updatedAt:      { type: string, format: date-time }
+
+    StrategyInput:
+      type: object
+      required: [name, type, description]
+      properties:
+        name:        { type: string, minLength: 1 }
+        type:        { type: string, minLength: 1 }
+        description: { type: string, minLength: 1 }
+        explanation: { type: string }
+        active:      { type: boolean, default: true }
+        parameters:  { type: string }
+
+    StrategyUpdate:
+      type: object
+      properties:
+        name:        { type: string }
+        description: { type: string }
+        explanation: { type: string }
+        active:      { type: boolean }
+        parameters:  { type: string }
+
+    SynthesizeResult:
+      type: object
+      required: [strategy, conceptsCount, rulesCount, sourcesUsed]
+      properties:
+        strategy:       { $ref: "#/components/schemas/Strategy" }
+        conceptsCount:  { type: integer }
+        rulesCount:     { type: integer }
+        sourcesUsed:    { type: integer }
+        wordsAnalyzed:  { type: integer }
+
+    # ──────────── Report ────────────
+    Report:
+      type: object
+      required: [id, type, period, winRate, totalPnl, tradesCount, createdAt]
+      properties:
+        id:                 { type: integer }
+        type:               { type: string, enum: [daily, monthly] }
+        period:             { type: string }
+        winRate:            { type: number }
+        totalPnl:           { type: number }
+        maxDrawdown:        { type: number }
+        tradesCount:        { type: integer }
+        longCount:          { type: integer }
+        shortCount:         { type: integer }
+        avgHoldingTime:     { type: ["number", "null"] }
+        riskReward:         { type: ["number", "null"] }
+        strategyAdherence:  { type: number }
+        gamblingScore:      { type: number }
+        uptimePercent:      { type: ["number", "null"] }
+        scores:             { type: ["string", "null"] }
+        totalScore:         { type: ["number", "null"] }
+        createdAt:          { type: string, format: date-time }
+
+    ReportInput:
+      type: object
+      required: [type, period]
+      properties:
+        type:    { type: string, enum: [daily, monthly] }
+        period:  { type: string, minLength: 1 }
+
+    ScoringResult:
+      type: object
+      required: [period, scores, totalScore, enterpriseViable]
+      properties:
+        period:          { type: string }
+        scores:          { type: string }
+        totalScore:      { type: number }
+        enterpriseViable: { type: boolean }
+        threshold:       { type: number }
+
+    # ──────────── Dashboard ────────────
+    DashboardOverview:
+      type: object
+      required: [botStatus, totalEquity, dailyPnl, winRate, openTrades, activeSignals, maxDrawdown]
+      properties:
+        botStatus:      { type: string, enum: [running, paused, stopped, error] }
+        totalEquity:    { type: number }
+        dailyPnl:       { type: number }
+        weeklyPnl:      { type: number }
+        monthlyPnl:     { type: number }
+        winRate:        { type: number }
+        openTrades:     { type: integer }
+        activeSignals:  { type: integer }
+        maxDrawdown:    { type: number }
+        accountCount:   { type: integer }
+        strategyCount:  { type: integer }
+        lastSignalAt:   { type: ["string", "null"], format: date-time }
+        lastTradeAt:    { type: ["string", "null"], format: date-time }
+
+    WorkflowStatus:
+      type: object
+      required: [stages, overallStatus, lastUpdated]
+      properties:
+        stages:        { type: string }
+        overallStatus: { type: string, enum: [running, paused, error, idle] }
+        lastUpdated:   { type: string, format: date-time }
+
+    # ──────────── Education ────────────
+    EducationSource:
+      type: object
+      required: [id, kind, title, status, chunksCount, vectorCount, createdAt]
+      properties:
+        id:                 { type: integer }
+        kind:               { type: string, enum: [book, video, playlist, text] }
+        title:              { type: string }
+        author:             { type: ["string", "null"] }
+        sourceUrl:          { type: ["string", "null"] }
+        contentText:        { type: ["string", "null"] }
+        status:             { type: string, enum: [pending, processing, ready, partial, error] }
+        chunksCount:        { type: integer }
+        vectorCount:        { type: integer }
+        transcriptPreview:  { type: ["string", "null"] }
+        metadata:           { type: ["string", "null"] }
+        errorMessage:       { type: ["string", "null"] }
+        createdAt:          { type: string, format: date-time }
+        updatedAt:          { type: string, format: date-time }
+
+    EducationSourceInput:
+      type: object
+      required: [kind, title]
+      properties:
+        kind:        { type: string, enum: [book, video, playlist, text] }
+        title:       { type: string, minLength: 1 }
+        author:      { type: string }
+        sourceUrl:   { type: string }
+        contentText: { type: string }
+        metadata:    { type: string }
+
+    EducationSourceUpdate:
+      type: object
+      properties:
+        status:            { type: string, enum: [pending, processing, ready, partial, error] }
+        chunksCount:       { type: integer, minimum: 0 }
+        vectorCount:       { type: integer, minimum: 0 }
+        transcriptPreview: { type: string }
+        metadata:          { type: string }
+        errorMessage:      { type: string }
+
+    # ──────────── Broker Connections ────────────
+    BrokerConnection:
+      type: object
+      required: [id, broker, label, environment, status, enabled, createdAt, updatedAt]
+      properties:
+        id:           { type: integer }
+        broker:       { type: string, enum: [deriv] }
+        label:        { type: string }
+        environment:  { type: string, enum: [real, demo] }
+        accountId:    { type: ["integer", "null"] }
+        status:       { type: string, enum: [disconnected, connecting, connected, error] }
+        lastSyncAt:   { type: ["string", "null"], format: date-time }
+        lastError:    { type: ["string", "null"] }
+        enabled:      { type: boolean }
+        createdAt:    { type: string, format: date-time }
+        updatedAt:    { type: string, format: date-time }
+
+    BrokerConnectionInput:
+      type: object
+      required: [broker, label, credential]
+      properties:
+        broker:       { type: string, enum: [deriv] }
+        label:        { type: string, minLength: 1 }
+        environment:  { type: string, enum: [real, demo] }
+        accountId:    { type: integer }
+        credential:   { type: string, minLength: 1, description: "Deriv API token (Read + Trade scopes)" }
+        enabled:      { type: boolean }
+
+    BrokerConnectionUpdate:
+      type: object
+      properties:
+        label:       { type: string, minLength: 1 }
+        environment: { type: string, enum: [real, demo] }
+        accountId:   { type: integer }
+        credential:  { type: string, minLength: 1 }
+        enabled:     { type: boolean }
+
+    BrokerSyncResult:
+      type: object
+      required: [ok, broker, status]
+      properties:
+        ok:        { type: boolean }
+        broker:    { type: string }
+        status:    { type: string }
+        balance:   { type: ["number", "null"] }
+        equity:    { type: ["number", "null"] }
+        currency:  { type: ["string", "null"] }
+        openPositions: { type: ["integer", "null"] }
+        message:   { type: ["string", "null"] }
+
+    # ──────────── Bot Config ────────────
+    BotConfig:
+      type: object
+      required: [id, enabled, autotradeMode, riskPerTradePct, maxConcurrentPositions, maxDailyLossPct, minConfidence, allowedInstruments, killzones, updatedAt]
+      properties:
+        id:                     { type: integer }
+        enabled:                { type: boolean }
+        autotradeMode:          { type: string, enum: [off, auto_demo, auto_live] }
+        riskPerTradePct:        { type: number }
+        maxConcurrentPositions: { type: integer }
+        maxDailyLossPct:        { type: number }
+        minConfidence:          { type: number }
+        allowedInstruments:     { type: string, description: "Comma-separated symbols, e.g. EURUSD,XAUUSD,BTCUSD" }
+        killzones:              { type: string, description: "Comma-separated session names, e.g. london,newyork" }
+        smallAccountMaxRiskPct: { type: number, minimum: 0, maximum: 100 }
+        minRiskReward:          { type: number, minimum: 0, maximum: 20 }
+        atrPercentileMin:       { type: number, minimum: 0, maximum: 100 }
+        atrPercentileMax:       { type: number, minimum: 0, maximum: 100 }
+        efficiencyRatioMin:     { type: number, minimum: 0, maximum: 1 }
+        minStopAtr:             { type: number, minimum: 0, maximum: 20 }
+        maxPerAssetClass:       { type: integer, minimum: 1, maximum: 100 }
+        newsBlackoutBeforeMin:  { type: integer, minimum: 0, maximum: 1440 }
+        newsBlackoutAfterMin:   { type: integer, minimum: 0, maximum: 1440 }
+        maxSpreadCostPct:       { type: number, minimum: 0, maximum: 100 }
+        notes:                  { type: ["string", "null"] }
+        updatedAt:              { type: string, format: date-time }
+
+    BotConfigInput:
+      type: object
+      required: [enabled, autotradeMode, riskPerTradePct, maxConcurrentPositions, maxDailyLossPct, minConfidence, allowedInstruments, killzones]
+      properties:
+        enabled:                { type: boolean }
+        autotradeMode:          { type: string, enum: [off, auto_demo, auto_live] }
+        riskPerTradePct:        { type: number, minimum: 0, maximum: 100 }
+        maxConcurrentPositions: { type: integer, minimum: 0, maximum: 100 }
+        maxDailyLossPct:        { type: number, minimum: 0, maximum: 100 }
+        minConfidence:          { type: number, minimum: 0, maximum: 1 }
+        allowedInstruments:     { type: string }
+        killzones:              { type: string }
+        smallAccountMaxRiskPct: { type: number, minimum: 0, maximum: 100 }
+        minRiskReward:          { type: number, minimum: 0, maximum: 20 }
+        atrPercentileMin:       { type: number, minimum: 0, maximum: 100 }
+        atrPercentileMax:       { type: number, minimum: 0, maximum: 100 }
+        efficiencyRatioMin:     { type: number, minimum: 0, maximum: 1 }
+        minStopAtr:             { type: number, minimum: 0, maximum: 20 }
+        maxPerAssetClass:       { type: integer, minimum: 1, maximum: 100 }
+        newsBlackoutBeforeMin:  { type: integer, minimum: 0, maximum: 1440 }
+        newsBlackoutAfterMin:   { type: integer, minimum: 0, maximum: 1440 }
+        maxSpreadCostPct:       { type: number, minimum: 0, maximum: 100 }
+        notes:                  { type: string }
+
+    # ──────────── Analysis ────────────
+    AnalysisRequest:
+      type: object
+      required: [symbol]
+      properties:
+        symbol:
+          type: string
+          minLength: 1
+        timeframe:
+          type: string
+
+    AnalysisResult:
+      type: object
+      required: [ok, status, symbol, timeframe, message]
+      properties:
+        ok: { type: boolean }
+        status:
+          type: string
+          enum: [no_data, brain_not_trained, brain_warming, ready]
+        symbol: { type: string }
+        timeframe: { type: string }
+        message: { type: string }
+        readySources: { type: integer }
+        pendingSources: { type: integer }
+        activeStrategies: { type: integer }
+        connectedBrokers: { type: integer }
+
+    SimpleOk:
+      type: object
+      required: [ok]
+      properties:
+        ok: { type: boolean }
+        message: { type: string }
+
+    IngestResult:
+      type: object
+      required: [ok]
+      properties:
+        ok: { type: boolean }
+        sourceId: { type: integer }
+        error: { type: string }
+        status: { type: string, enum: [pending, processing, ready, partial, error] }
+        message: { type: string }
+
+    WorkerStatus:
+      type: object
+      required: [running, signalsGeneratedTotal, intervalMs]
+      properties:
+        running: { type: boolean }
+        lastRunAt: { type: ["string", "null"], format: date-time }
+        lastError: { type: ["string", "null"] }
+        signalsGeneratedTotal: { type: integer }
+        intervalMs: { type: integer }
+
+    BrainLayer:
+      type: object
+      required: [id, layerType, name, description, status, createdAt]
+      properties:
+        id:           { type: integer }
+        layerType:    { type: string, enum: [input, hidden, output] }
+        name:         { type: string }
+        description:  { type: string }
+        status:       { type: string, enum: [active, idle, processing, error] }
+        metrics:      { type: ["string", "null"] }
+        outputSignal: { type: ["string", "null"] }
+        createdAt:    { type: string, format: date-time }
+        updatedAt:    { type: string, format: date-time }

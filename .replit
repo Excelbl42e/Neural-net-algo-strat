@@ -1,0 +1,60 @@
+modules = ["nodejs-24", "python-3.11", "postgresql-16"]
+
+[deployment]
+deploymentTarget = "vm"
+build = ["sh", "-c", "pnpm run build"]
+run = ["sh", "-c", "PORT=8080 pnpm run start"]
+
+[deployment.postBuild]
+args = ["pnpm", "store", "prune"]
+env = { "CI" = "true" }
+
+[workflows]
+runButton = "App"
+
+[[workflows.workflow]]
+name = "App"
+mode = "sequential"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "PORT=8080 BASE_PATH=/ pnpm run build && PORT=8080 pnpm run start"
+waitForPort = 8080
+
+[[workflows.workflow]]
+name = "typecheck"
+author = "agent"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "pnpm --filter @workspace/api-server run typecheck && pnpm --filter @workspace/trading-dashboard run typecheck"
+
+[[workflows.workflow]]
+name = "healthcheck"
+author = "agent"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scripts/src/daily-healthcheck.mjs"
+
+[agent]
+stack = "PNPM_WORKSPACE"
+expertMode = true
+
+[postMerge]
+path = "scripts/post-merge.sh"
+timeoutMs = 20000
+
+[[ports]]
+localPort = 8080
+externalPort = 80
+
+[nix]
+channel = "stable-25_05"
