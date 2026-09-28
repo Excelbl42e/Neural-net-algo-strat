@@ -435,6 +435,27 @@ async function runSourceIngestion(sourceId: number): Promise<void> {
   }
 }
 
+/**
+ * Recovers sources left stuck at "processing" by a process restart
+ * (deploy, crash) mid-ingestion. The in-memory sourceIngestions map that
+ * tracks in-flight work is always empty right after boot, so any row still
+ * marked "processing" at that point cannot actually have an owner — it was
+ * orphaned, not just slow. Reset it to "pending" so processPendingSources
+ * picks it back up, instead of leaving it stuck forever (the ingest route
+ * refuses to restart anything already marked "processing").
+ */
+export async function recoverStuckIngestions(): Promise<void> {
+  const recovered = await db
+    .update(educationSourcesTable)
+    .set({ status: "pending" })
+    .where(eq(educationSourcesTable.status, "processing"))
+    .returning({ id: educationSourcesTable.id });
+  if (recovered.length > 0) {
+    logger.warn({ count: recovered.length, ids: recovered.map((r) => r.id) },
+      "Recovered education sources stuck in processing (interrupted by a restart)");
+  }
+}
+
 // ── Background sweep: process all pending sources ───────────────────────────
 
 export async function processPendingSources(): Promise<void> {
