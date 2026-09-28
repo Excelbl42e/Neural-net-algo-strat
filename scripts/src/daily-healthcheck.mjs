@@ -6,7 +6,7 @@
 
 import { randomBytes } from "node:crypto";
 
-const BASE = (process.env.HEALTHCHECK_API_BASE ?? "http://localhost:80/api").replace(/\/$/, "");
+const BASE = (process.env.HEALTHCHECK_API_BASE ?? `http://localhost:${process.env.PORT ?? "8080"}/api`).replace(/\/$/, "");
 let passed = 0;
 let failed = 0;
 

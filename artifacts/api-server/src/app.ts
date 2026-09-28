@@ -1,3 +1,5 @@
+import path from "node:path";
+import { existsSync } from "node:fs";
 import express, { type Express, type NextFunction, type Request, type Response } from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
@@ -37,6 +39,20 @@ app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 
 app.use("/api", (req, res, next) => { void requireAuth(req, res, next); }, router);
+
+// Single-process deploy: this same server also serves the built dashboard, so
+// Replit only needs one always-on port. dist/public is a sibling of this
+// server's own dist (or src, in dev) under artifacts/, so the relative path
+// resolves the same way whether running bundled or via tsx.
+const dashboardDist = path.resolve(import.meta.dirname, "../../trading-dashboard/dist/public");
+if (existsSync(dashboardDist)) {
+  app.use(express.static(dashboardDist, { index: false }));
+  app.get(/^(?!\/api).*/, (_req, res) => {
+    res.sendFile(path.join(dashboardDist, "index.html"));
+  });
+} else {
+  logger.warn({ dashboardDist }, "Dashboard build not found; run the dashboard build before starting in production");
+}
 
 // JSON error handler (Express 5 forwards async route rejections here).
 app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {

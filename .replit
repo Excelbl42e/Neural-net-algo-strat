@@ -1,28 +1,26 @@
 modules = ["nodejs-24", "python-3.11", "postgresql-16"]
 
 [deployment]
-router = "application"
 deploymentTarget = "vm"
+build = ["sh", "-c", "pnpm run build"]
+run = ["sh", "-c", "PORT=8080 pnpm run start"]
 
 [deployment.postBuild]
 args = ["pnpm", "store", "prune"]
 env = { "CI" = "true" }
 
 [workflows]
-runButton = "Project"
+runButton = "App"
 
 [[workflows.workflow]]
-name = "Project"
-mode = "parallel"
+name = "App"
+mode = "sequential"
 author = "agent"
 
 [[workflows.workflow.tasks]]
-task = "workflow.run"
-args = "typecheck"
-
-[[workflows.workflow.tasks]]
-task = "workflow.run"
-args = "healthcheck"
+task = "shell.exec"
+args = "PORT=8080 BASE_PATH=/ pnpm run build && PORT=8080 pnpm run start"
+waitForPort = 8080
 
 [[workflows.workflow]]
 name = "typecheck"
@@ -56,14 +54,6 @@ timeoutMs = 20000
 
 [[ports]]
 localPort = 8080
-externalPort = 8080
-
-[[ports]]
-localPort = 8081
-externalPort = 8081
-
-[[ports]]
-localPort = 24210
 externalPort = 80
 
 [nix]
