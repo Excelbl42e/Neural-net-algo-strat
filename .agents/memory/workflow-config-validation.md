@@ -14,3 +14,9 @@ A managed artifact workflow can report a failed restart with `EADDRINUSE` while 
 **Why:** During workflow reconciliation after configuration changes, replacement service processes attempted to bind ports held by the previous instances; the workflow statuses became failed even though the routes still returned 200.
 
 **How to apply:** If the managed status and routed HTTP disagree, inspect the port owners, stop the affected managed workflows, confirm their listeners exit, then start each once through its managed workflow. Do not add a second service workflow or infer readiness from HTTP alone.
+
+When staging `.replit` from Git content for the validator, normalize line endings before writing the temporary file. The code-execution shell callback can return CRLF even when the Git blob is LF, making an otherwise identical file appear fully changed.
+
+**Why:** A validated replacement contained the correct visible configuration but differed on every line until the staging content was normalized to LF.
+
+**How to apply:** Compare the resulting file byte-for-byte with the intended Git blob, not just by reading the visible TOML or trusting successful schema validation.
