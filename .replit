@@ -1,4 +1,4 @@
-modules = ["nodejs-20", "elixir-1_15", "web"]
+modules = ["nodejs-20", "elixir-1_15", "web", "postgresql-16"]
 
 [deployment]
 deploymentTarget = "vm"
@@ -55,6 +55,10 @@ timeoutMs = 20000
 [[ports]]
 localPort = 8080
 externalPort = 80
+
+[[ports]]
+localPort = 24210
+externalPort = 3000
 
 [nix]
 channel = "stable-25_05"

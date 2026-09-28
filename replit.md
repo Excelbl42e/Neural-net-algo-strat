@@ -16,6 +16,12 @@ pre-scan and dispatch stages (`lib/forex-readiness.ts`).
 - **expert-system** (C++): counts a fixed ICT concept list in ingested text. It does NOT compute quant rules.
 - **elixir-engine**: dormant, not used.
 
+## Run on Replit
+- Install workspace dependencies with `pnpm install --frozen-lockfile` on a fresh checkout.
+- For the development preview, start the existing `artifacts/api-server: API Server` and `artifacts/trading-dashboard: web` workflows. Open `/` for the dashboard; the API is routed under `/api` (`/api/healthz` is the public health check).
+- The separate `App` run-button workflow builds and serves both through the API server on port 8080. Use it **instead of**, not alongside, the artifact API workflow, since both bind port 8080. The artifact web workflow is the development preview.
+- On first launch, create your own owner password in the dashboard. No broker account is connected and the bot starts disabled. Connect a Deriv account and run the demo self-test before considering any live mode.
+
 ## Signal pipeline
 1. Deriv candles -> `candles` table (M1..D1), forex majors only.
 2. `lib/forex-readiness.ts`: weekend/market-hours closure, killzone session gate (`botConfig.killzones`, e.g. "london,newyork"), and a high-impact news blackout (free ForexFactory-style calendar feed, cached, **fails closed** — if the calendar can't be fetched and the cache is too stale to trust, forex trading is refused rather than trading blind). Runs before the GPT call (skip symbol) and again right before order placement, where it additionally requires a readable live indicative cost quote under `botConfig.maxSpreadCostPct`.
