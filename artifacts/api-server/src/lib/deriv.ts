@@ -103,7 +103,7 @@ export async function placeDerivTrade(params: DerivTradeParams): Promise<DerivTr
   try {
     // From here on the request may have reached Deriv: never treat failure as retryable.
     const res = await session.request<{
-      error?: { message?: string; code?: string };
+      error?: { message?: string; code?: string; details?: unknown };
       buy?: { contract_id?: number; buy_price?: number | string };
     }>(
       { buy: "1", price: params.stakeAmount, parameters, passthrough: { signal_id: params.signalId ?? null } },
@@ -111,7 +111,11 @@ export async function placeDerivTrade(params: DerivTradeParams): Promise<DerivTr
     );
     if (res.error) {
       consecutiveBrokerErrors = 0;
-      return { ok: false, message: res.error.message ?? "Deriv rejected the buy request" };
+      // Deriv's `details` often names the exact invalid field/reason that the
+      // top-level message alone doesn't; surface it instead of discarding it,
+      // it's also always visible in the redacted raw frame in Diagnostics.
+      const details = res.error.details !== undefined ? ` — details: ${JSON.stringify(res.error.details)}` : "";
+      return { ok: false, message: `${res.error.message ?? "Deriv rejected the buy request"}${details}` };
     }
     if (!res.buy?.contract_id) return { ok: false, ambiguous: true, message: "Buy response missing contract_id" };
     consecutiveBrokerErrors = 0;
