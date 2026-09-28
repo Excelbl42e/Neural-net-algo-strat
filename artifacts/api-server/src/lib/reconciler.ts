@@ -71,7 +71,13 @@ async function createTradeFor(signal: SignalRow, contractId: number, info: Deriv
     stopLoss: signal.stopLevel, takeProfit: signal.target1Level,
     status: "open", strategy: signal.strategy,
     reasonChain: signal.reasoning ?? "Recovered by reconciler",
-    annotations: JSON.stringify({ contractId, recoveredByReconciler: true, confidence: signal.confidence }),
+    annotations: JSON.stringify({
+      contractId, recoveredByReconciler: true, confidence: signal.confidence,
+      // Unknown when Deriv doesn't echo contract_type back (or wasn't fetched):
+      // the max-hold-time safety net then can't tell this is a multiplier
+      // position and won't force-close it. Manual close is still available.
+      ...(info?.contractType ? { contractType: info.contractType } : {}),
+    }),
   });
 }
 
