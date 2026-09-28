@@ -1,0 +1,2 @@
+- [Workflow configuration validation](workflow-config-validation.md) — edit .replit through the platform validator; direct patches are rejected.
+- [Deriv protocol migration](deriv-protocol-migration.md) — legacy WebSocket 520 is not proof of its cause; verify current public and OTP account channels independently.
