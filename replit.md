@@ -19,7 +19,7 @@ pre-scan and dispatch stages (`lib/forex-readiness.ts`).
 ## Run on Replit
 - Install workspace dependencies with `pnpm install --frozen-lockfile` on a fresh checkout.
 - For the development preview, start the existing `artifacts/api-server: API Server` and `artifacts/trading-dashboard: web` workflows. Open `/` for the dashboard; the API is routed under `/api` (`/api/healthz` is the public health check).
-- The separate `App` run-button workflow builds and serves both through the API server on port 8080. Use it **instead of**, not alongside, the artifact API workflow, since both bind port 8080. The artifact web workflow is the development preview.
+- `.replit` uses `router = "application"` with per-artifact services: `artifacts/trading-dashboard: web` serves `/` and `artifacts/api-server: API Server` serves `/api`. The `Project` run button runs `typecheck` and `healthcheck`; it does not start another app server.
 - On first launch, create your own owner password in the dashboard. No broker account is connected and the bot starts disabled. Connect a Deriv account and run the demo self-test before considering any live mode.
 
 ## Signal pipeline
