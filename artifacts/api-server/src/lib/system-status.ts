@@ -35,7 +35,10 @@ export async function getSystemStatus() {
   // actually driving signals. This just reports whether GPT credentials exist to swap
   // back to later; their absence is not a problem today, so it's never "degraded".
   push("ai", isAIConfigured() ? "ok" : "idle", isAIConfigured() ? "AI client configured (unused — see signal_judge)" : "Not configured — has no effect while the deterministic judge is active (see signal_judge)");
-  push("signal_judge", "ok", "Deterministic expert-system judge active (no LLM, no API cost): liquidity sweep -> structure break -> FVG. To use GPT instead, see runExpertJudge()'s call site in signal-worker.ts.");
+  // Kept short: this string is rendered in the dashboard's System health panel,
+  // so it reads as operator status rather than a code pointer. The swap-back
+  // instructions live next to runExpertJudge()'s call site in signal-worker.ts.
+  push("signal_judge", "ok", "Deterministic expert-system judge active — no LLM, no API cost");
 
   const news = getNewsCalendarStatus();
   push("news_calendar", news.trusted ? "ok" : "degraded",
