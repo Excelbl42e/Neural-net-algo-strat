@@ -1,5 +1,12 @@
 # Changes in this build (vs. your Replit export)
 
+## Update: integration test — a judge signal survives every downstream gate
+Closes the one seam the audit flagged but never actually proved. `runExpertJudge()` being correct is not the same as its output being *tradeable*: between the judge and a real order sit `geometryGate`, `verifyClaims` (which re-checks the judge's own cited levels against the candles) and `portfolioGate`. If any of those quietly rejected the judge's own output — a units mismatch, or the zero-width sweep range failing its own tolerance check — every signal would die at the last step, and the symptom would once again be "nothing ever trades" with nothing obviously broken.
+
+The new test runs the exact chain `signal-worker.ts` runs after the judge returns, on the same fixture: geometry gate with real thresholds (R:R ≥ 2, stop ≥ 1 ATR, premium/discount), then `verifyClaims` for every cited level against M30/H1/H4, then portfolio caps. All pass. It also pins that the padded H1 fixture has enough history for `atrPercentile` — the worker asserts that non-null, relying on `preTradeGate` having already guaranteed it.
+
+24 tests pass. No production code changed.
+
 ## Update: honest confidence scale + real concurrent-position capacity
 Both of these were flagged by the audit as "you should know this"; fixed properly rather than left as advice.
 
