@@ -23,8 +23,9 @@ export default function StrategyPage() {
           Curated once in code, not scanned from uploaded books. Every concept below is individually gated by real closed-trade
           performance — a concept with a poor historical win rate is automatically suppressed from future signals until its
           sample-adjusted score recovers. While no AI budget is configured, the signal worker runs a deterministic expert-system
-          judge instead of GPT, which only ever fires on 4 of these entries (Liquidity Sweep, MSS, FVG, 2022 Entry Model) — the
-          rest stay listed and scored, ready for when GPT is reconnected.
+          judge instead of GPT: a liquidity-sweep + FVG setup still sets the actual entry/stop/target, but whether it fires is a
+          live confluence vote across most of the entries below, computed on real candles — only Parabolic SAR, Pivot Point
+          Confluence, SMT Divergence, and Inducement aren't independently computed yet (still listed and scored, ready for GPT).
         </p>
       </header>
 
