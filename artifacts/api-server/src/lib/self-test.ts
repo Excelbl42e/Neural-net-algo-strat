@@ -2,15 +2,23 @@
  * Demo self-test. Refuses unless Deriv itself reports the account as virtual.
  * Checks both order paths real signals can take: a quote-only multiplier
  * proposal (never opens a position — this codebase cannot close one early),
- * then places ONE minimum-stake binary demo order and walks it pending ->
- * confirmed -> closed with timings. Nothing else calls this path. A passed
- * run is what unlocks auto_live.
+ * then the binary path used by small-account signals — a real buy walked
+ * pending -> confirmed -> closed if Deriv's own reported minimum duration is
+ * short enough to wait out here, otherwise a quote-only proposal check at
+ * the same duration production code actually uses. Nothing else calls this
+ * path. A passed run is what unlocks auto_live.
  */
 import { brokerConnectionsTable } from "@workspace/db";
 import { decryptSecret } from "./crypto.js";
-import { fetchContractStatuses, placeDerivTrade, checkMultiplierProposal } from "./deriv.js";
+import {
+  fetchContractStatuses, placeDerivTrade, checkMultiplierProposal,
+  queryBinaryMinDuration, checkBinaryProposal, binaryDurationMs, defaultBinaryDurationDays,
+} from "./deriv.js";
 import { inspectDerivAccount } from "./deriv-account.js";
 import { setSecret } from "./secrets.js";
+
+/** Past this, don't try to synchronously wait for a real binary contract to settle inside the self-test. */
+const MAX_SYNCHRONOUS_WAIT_MS = 20 * 60_000;
 
 type Conn = typeof brokerConnectionsTable.$inferSelect;
 let busy = false;
@@ -53,31 +61,52 @@ export async function runDemoSelfTest(conn: Conn): Promise<SelfTestResult> {
       return await finish(false, `Multiplier order path rejected by Deriv (this is what real signals will use): ${multiplierCheck.message}`);
     }
 
-    // Test the actual instrument class the bot trades (forex, via a binary
-    // CALL for a fast, self-settling round trip) rather than a leftover
-    // synthetic-index symbol from before this app became forex-only.
+    // Test the actual instrument class the bot trades (forex, via binary
+    // CALL/PUT — the small-account fallback real signals use when their
+    // computed stake is below the multiplier minimum) rather than a
+    // leftover synthetic-index symbol from before this app became
+    // forex-only.
     //
-    // stakeAmount: 0.50 — live-verified. A real self-test run against this
-    // exact binary CALL request returned InvalidtoBuy/InvalidMinStake:
-    // "Please enter a stake amount that's at least 0.50." DERIV_MIN_STAKE
-    // (0.35, execution-risk.ts) is the MULTIPLIER minimum, not binary's —
-    // this path never affects live forex signals (they only ever place
-    // multiplier contracts; forceBinary is set only here), so the fix is
-    // scoped to this diagnostic, not to real trade sizing.
-    mark("pending", "buy request sent: frxEURUSD CALL, 5 minutes, stake 0.50");
+    // A hardcoded "5 minutes" guess was live-rejected: Deriv's
+    // TradingDurationNotAllowed — forex binaries need a longer minimum
+    // than synthetic/volatility indices, and no reachable doc states the
+    // exact number. Ask Deriv itself via contracts_for instead of guessing
+    // again. If that can't be read, or the discovered minimum is too long
+    // to wait out synchronously here, fall back to a quote-only proposal
+    // check at the same duration real production code already uses
+    // (defaultBinaryDurationDays) — still proves the field shape is
+    // accepted, without a multi-day wait or a fourth blind guess.
+    const minDuration = await queryBinaryMinDuration(token, "demo", "frxEURUSD");
+    const useDuration = minDuration ?? { value: defaultBinaryDurationDays(), unit: "d" as const };
+    const canWaitForSettlement = minDuration != null && binaryDurationMs(minDuration) <= MAX_SYNCHRONOUS_WAIT_MS;
+
+    if (!canWaitForSettlement) {
+      mark("duration_discovery", minDuration
+        ? `Deriv's minimum (${useDuration.value}${useDuration.unit}) is too long to wait out here; checking via proposal instead`
+        : "Could not read Deriv's minimum duration via contracts_for; checking via proposal at the production default instead");
+      const proposalCheck = await checkBinaryProposal(token, "demo", "frxEURUSD", useDuration);
+      mark(proposalCheck.ok ? "binary_path_ok" : "binary_path_failed", proposalCheck.message);
+      if (!proposalCheck.ok) {
+        return await finish(false, `Binary order path rejected by Deriv (this is what small-account signals will use): ${proposalCheck.message}`);
+      }
+      return await finish(true, `Passed: multiplier and binary order paths both accepted by Deriv (binary checked by quote only, at ${useDuration.value}${useDuration.unit} — too long to buy-and-wait in a self-test)`);
+    }
+
+    mark("pending", `buy request sent: frxEURUSD CALL, ${useDuration.value}${useDuration.unit} (Deriv's own reported minimum), stake 0.50`);
     const buy = await placeDerivTrade({
       token, environment: "demo", symbol: "frxEURUSD", direction: "buy", stakeAmount: 0.50,
-      currency: account.currency, forceBinary: true, binaryDuration: { value: 5, unit: "m" },
+      currency: account.currency, forceBinary: true, binaryDuration: useDuration,
     });
     if (!buy.ok || !buy.contractId) {
       return await finish(false, `Buy did not confirm: ${buy.message ?? "unknown"}${buy.ambiguous ? " (ambiguous; check Diagnostics frames)" : ""}`);
     }
     mark("confirmed", `contract ${buy.contractId} bought at ${buy.buyPrice}`);
 
-    // 5-minute contract + settlement lag + polling overhead: give it a
-    // generous window rather than the tick-contract-sized 120s this used
-    // to have when it tested a synthetic instead of forex.
-    const deadline = Date.now() + 420_000;
+    // Wait proportional to the actual contract duration plus a buffer for
+    // settlement lag and polling overhead, rather than a value hardcoded
+    // for a specific duration guess.
+    const waitMs = binaryDurationMs(useDuration) + 120_000;
+    const deadline = Date.now() + waitMs;
     while (Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, 3_000));
       const m = await fetchContractStatuses(token, "demo", [buy.contractId]);
@@ -87,7 +116,7 @@ export async function runDemoSelfTest(conn: Conn): Promise<SelfTestResult> {
         return await finish(true, `Passed: order confirmed and settled in ${((Date.now() - t0) / 1000).toFixed(1)}s`, buy.contractId);
       }
     }
-    return await finish(false, "Order confirmed but did not settle within 120s", buy.contractId);
+    return await finish(false, `Order confirmed but did not settle within ${Math.round(waitMs / 1000)}s`, buy.contractId);
   } catch (err) {
     return await finish(false, err instanceof Error ? err.message.replace(/otp=[^&\s]+/g, "otp=[redacted]") : "self-test error");
   } finally {
