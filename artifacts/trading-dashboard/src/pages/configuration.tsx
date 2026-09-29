@@ -197,7 +197,7 @@ export default function ConfigurationPage() {
                 <FormItem className="flex items-center justify-between rounded-lg border border-border p-3">
                   <div>
                     <FormLabel className="text-base">Enable bot configuration</FormLabel>
-                    <FormDescription className="text-[11px]">This switch saves a configuration setting; it does not confirm broker connectivity, account readiness, or a successful order. Orders only go out when mode is not Off.</FormDescription>
+                    <FormDescription className="text-[11px]">Master switch for the whole scan loop: turned off, the worker skips every tick entirely — no analysis, no signals, no orders. Turned on, it scans and records signals, but orders still only go out when Autotrade mode is not Off. It does not confirm broker connectivity, account readiness, or a successful order.</FormDescription>
                   </div>
                   <FormControl>
                     <Switch checked={field.value} onCheckedChange={field.onChange} className="data-[state=checked]:bg-primary" data-testid="switch-enabled" />
@@ -262,7 +262,12 @@ export default function ConfigurationPage() {
                 <FormItem>
                   <FormLabel>Minimum signal confidence (0–1)</FormLabel>
                   <FormControl><Input type="number" step="0.01" min="0" max="1" {...field} data-testid="input-min-confidence" /></FormControl>
-                  <FormDescription className="text-[11px]">Signals below this are dropped before reaching execution.</FormDescription>
+                  <FormDescription className="text-[11px]">
+                    Signals below this are dropped before reaching execution. The expert-system judge scores
+                    0.50 (bare setup, no supporting confluence) to 0.95 (every voter agrees plus all five structural
+                    confirmations) — it never emits below 0.50, so anything under that accepts every valid setup.
+                    0.70 is the default and already selective; 0.80+ needs near-unanimous confluence and will fire rarely.
+                  </FormDescription>
                   <FormMessage />
                 </FormItem>
               )} />

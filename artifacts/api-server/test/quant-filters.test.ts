@@ -2,7 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   atrSeries, atrPercentile, efficiencyRatio, findFvgs, findSweeps, swingPoints, findDisplacements,
-  premiumDiscount, geometryGate, preTradeGate, verifyClaims, portfolioGate, currencyLegs, DEFAULT_THRESHOLDS as T, type OHLC,
+  premiumDiscount, geometryGate, preTradeGate, verifyClaims, portfolioGate, currencyLegs,
+  orderBlockPresent, srFlipSignal, DEFAULT_THRESHOLDS as T, type OHLC,
 } from "../src/lib/quant-filters.ts";
 import { calculateCappedStake } from "../src/lib/execution-risk.ts";
 
@@ -72,4 +73,53 @@ test("stake table for small accounts", () => {
   assert.equal((calculateCappedStake({ equity: 5, riskPerTradePct: 1, maxConcurrentPositions: 3, openPositions: 0, smallAccountMaxRiskPct: 10 }) as any).stake, 0.35);
   assert.equal(calculateCappedStake({ equity: 5, riskPerTradePct: 1, maxConcurrentPositions: 3, openPositions: 0, smallAccountMaxRiskPct: 5 }).ok, false); // 0.35/5=7% > 5%
   assert.equal((calculateCappedStake({ equity: 200, riskPerTradePct: 1, maxConcurrentPositions: 3, openPositions: 0, smallAccountMaxRiskPct: 10 }) as any).stake, 2);
+});
+
+// ── Regression tests for the audit fixes ────────────────────────────────────
+
+test("preTradeGate actually enforces the efficiency-ratio floor (was computed but ignored)", () => {
+  // Zig-zag chop: price covers ground repeatedly but nets ~nowhere, so the
+  // Kaufman efficiency ratio sits near 0 — exactly what the floor exists to
+  // reject, and exactly what used to sail through because the configured
+  // efficiencyRatioMin was computed into metrics and then never compared.
+  const chop: OHLC[] = [];
+  for (let i = 0; i < 120; i++) {
+    const base = i % 2 === 0 ? 100 : 101;
+    chop.push(k(base, base + 0.5, base - 0.5, base));
+  }
+  const band = { atrPercentileMin: 0, atrPercentileMax: 100 }; // isolate the ER gate
+  const measured = efficiencyRatio(chop.map((c) => c.close), 10)!;
+  assert.ok(measured < 0.15, `chop should score below the default floor, got ${measured}`);
+
+  const enforced = preTradeGate(chop, { ...T, ...band, efficiencyRatioMin: 0.15 });
+  assert.equal(enforced.ok, false, "chop must be rejected once the floor is actually applied");
+  assert.match(String(enforced.reason), /efficiency ratio/i);
+
+  const disabled = preTradeGate(chop, { ...T, ...band, efficiencyRatioMin: 0 });
+  assert.equal(disabled.ok, true, "a zero floor should still let the same series through");
+});
+
+test("orderBlockPresent needs a real displacement, not any big-ish candle", () => {
+  // Flat, displacement-free series: no order block can exist.
+  const flat: OHLC[] = [];
+  for (let i = 0; i < 60; i++) flat.push(k(100, 100.2, 99.8, 100));
+  assert.equal(orderBlockPresent(flat, 0, "buy"), false);
+
+  // Same series plus a down candle followed by a genuine 4-ATR impulse.
+  const impulse = [...flat];
+  impulse.push(k(100, 100.1, 99.4, 99.5));   // the order block (opposite close)
+  impulse.push(k(99.5, 103.5, 99.4, 103.2)); // displacement in the bias direction
+  assert.equal(orderBlockPresent(impulse, 55, "buy"), true);
+});
+
+test("srFlipSignal does not call a failed retest bullish", () => {
+  // Build a swing high at ~101, break above it, then fall back BELOW it.
+  const c: OHLC[] = [];
+  for (let i = 0; i < 30; i++) c.push(k(100, 100.3, 99.7, 100));
+  c.push(k(100, 101.0, 99.9, 100.8)); // swing high forms at 101.0
+  for (let i = 0; i < 4; i++) c.push(k(100.8, 100.9, 100.4, 100.6));
+  c.push(k(100.6, 102.0, 100.5, 101.8)); // breaks above 101
+  for (let i = 0; i < 6; i++) c.push(k(101.8, 101.9, 100.2, 100.5)); // falls back under 101
+  const res = srFlipSignal(c);
+  assert.notEqual(res, "buy", "price back below a broken high is a failed retest, not support");
 });

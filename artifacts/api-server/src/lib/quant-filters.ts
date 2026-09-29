@@ -173,6 +173,14 @@ export function preTradeGate(candles: OHLC[], t: QuantThresholds): GateResult {
   if (vol.percentile < t.atrPercentileMin) return { ok: false, reason: `Dead volatility: ATR percentile ${vol.percentile.toFixed(0)} < ${t.atrPercentileMin}`, metrics };
   if (vol.percentile > t.atrPercentileMax) return { ok: false, reason: `Volatility spike: ATR percentile ${vol.percentile.toFixed(0)} > ${t.atrPercentileMax}`, metrics };
   if (er == null) return { ok: false, reason: "Insufficient H1 history for efficiency ratio", metrics };
+  // The Kaufman efficiency-ratio floor (strategy-library rank 28) is configured
+  // per account as bot_config.efficiencyRatioMin and documented as a hard gate —
+  // it was computed here but never actually compared, so choppy regimes passed
+  // straight through. Enforced now, which is what both the config field and the
+  // strategy write-up have always claimed happens.
+  if (er < t.efficiencyRatioMin) {
+    return { ok: false, reason: `Chop: efficiency ratio ${er.toFixed(3)} < ${t.efficiencyRatioMin}`, metrics };
+  }
   return { ok: true, metrics };
 }
 
@@ -350,10 +358,12 @@ export function maStackSignal(closes: number[]): "buy" | "sell" | null {
 /** Bollinger Band Squeeze Breakout (rank 24): a close outside the bands after a width squeeze. */
 export function bollingerBreakoutSignal(closes: number[], period = 20, mult = 2, lookback = 60): "buy" | "sell" | null {
   if (closes.length < period + lookback) return null;
+  const means = smaSeries(closes, period); // computed once, not re-derived per bar
   const widths: number[] = [];
   let latestUpper = 0, latestLower = 0;
   for (let i = period - 1; i < closes.length; i++) {
-    const mean = smaSeries(closes.slice(0, i + 1), period)[i]!;
+    const mean = means[i]!;
+    if (!Number.isFinite(mean) || mean === 0) return null;
     let variance = 0;
     for (let j = i - period + 1; j <= i; j++) variance += (closes[j]! - mean) ** 2;
     const sd = Math.sqrt(variance / period);
@@ -375,16 +385,26 @@ export function srFlipSignal(c: OHLC[], k = 2): "buy" | "sell" | null {
   const sw = swingPoints(c, k);
   const price = c[c.length - 1]!.close;
   const tol = (atrPercentile(c)?.atr ?? 0) * 0.5;
+  if (tol <= 0) return null;
   for (const s of [...sw].reverse().slice(0, 6)) {
     if (Math.abs(price - s.price) > tol) continue;
-    // A broken prior high, retested from above, is now support (bullish).
-    if (s.kind === "high" && price > s.price - tol && c.slice(s.index + 1).some((x) => x.close > s.price)) return "buy";
-    if (s.kind === "low" && price < s.price + tol && c.slice(s.index + 1).some((x) => x.close < s.price)) return "sell";
+    // The flip only counts when price is retesting from the far side of the
+    // break: a broken high is support only while price holds ABOVE it, a
+    // broken low is resistance only while price stays BELOW it. Without that
+    // side check, a failed retest (broke up, fell back under) read as bullish.
+    if (s.kind === "high" && price >= s.price && c.slice(s.index + 1).some((x) => x.close > s.price)) return "buy";
+    if (s.kind === "low" && price <= s.price && c.slice(s.index + 1).some((x) => x.close < s.price)) return "sell";
   }
   return null;
 }
 
-/** Stochastic Oscillator Reversal (rank 31): %K crossing back out of an extreme zone. */
+/**
+ * Stochastic Oscillator Overbought/Oversold Reversal (rank 31): the library
+ * defines the signal as the %K/%D crossover back OUT of the extreme zone, so
+ * %D is actually computed and required here — an earlier version took the
+ * `dPeriod` argument but only ever looked at %K, which is not the documented
+ * strategy.
+ */
 export function stochasticSignal(c: OHLC[], kPeriod = 14, smoothK = 3, dPeriod = 3): "buy" | "sell" | null {
   if (c.length < kPeriod + smoothK + dPeriod + 1) return null;
   const rawK: number[] = [];
@@ -394,11 +414,16 @@ export function stochasticSignal(c: OHLC[], kPeriod = 14, smoothK = 3, dPeriod =
     rawK.push(hh === ll ? 50 : ((c[i]!.close - ll) / (hh - ll)) * 100);
   }
   const kSeries = smaSeries(rawK, smoothK);
+  const dSeries = smaSeries(kSeries.map((v) => (Number.isFinite(v) ? v : 0)), dPeriod);
   const n = kSeries.length;
   const k1 = kSeries[n - 1]!, k0 = kSeries[n - 2]!;
-  if (!Number.isFinite(k0) || !Number.isFinite(k1)) return null;
-  if (k0 <= 20 && k1 > 20) return "buy";
-  if (k0 >= 80 && k1 < 80) return "sell";
+  const d1 = dSeries[n - 1]!, d0 = dSeries[n - 2]!;
+  if (![k0, k1, d0, d1].every(Number.isFinite)) return null;
+  // Leaving oversold with %K above %D (momentum turning up), or the mirror
+  // image. Requiring the %K/%D cross to land on the exact same bar as the
+  // zone exit is too brittle to ever fire in practice.
+  if (k0 <= 20 && k1 > 20 && k1 > d1) return "buy";
+  if (k0 >= 80 && k1 < 80 && k1 < d1) return "sell";
   return null;
 }
 
@@ -434,6 +459,7 @@ export function adxSignal(c: OHLC[], period = 14, minAdx = 20): "buy" | "sell" |
   const adx = validDx.slice(-period).reduce((a, b) => a + b, 0) / period;
   if (adx < minAdx) return null;
   const i = c.length - 1;
+  if (!Number.isFinite(trS[i]) || trS[i] === 0) return null; // fully flat window: DI is undefined, not neutral
   const plusDI = (100 * plusS[i]!) / trS[i]!, minusDI = (100 * minusS[i]!) / trS[i]!;
   return plusDI > minusDI ? "buy" : plusDI < minusDI ? "sell" : null;
 }
@@ -527,15 +553,29 @@ export function donchianBreakoutSignal(c: OHLC[], period = 20): "buy" | "sell" |
   return null;
 }
 
-/** Order Block (rank 2): the last opposite-direction candle before a displacement move. */
-export function orderBlockPresent(c: OHLC[], fromIndex: number, direction: "buy" | "sell"): boolean {
-  for (let i = Math.max(1, fromIndex - 5); i < c.length; i++) {
-    const isOpposite = direction === "buy" ? c[i]!.close < c[i]!.open : c[i]!.close > c[i]!.open;
-    if (!isOpposite) continue;
-    const next = c[i + 1];
-    if (next && Math.abs(next.close - next.open) > Math.abs(c[i]!.close - c[i]!.open) * 1.5) return true;
-  }
-  return false;
+/**
+ * Order Block (rank 2): the last opposite-direction candle immediately before a
+ * real displacement candle, in the bias direction, at or after `fromIndex`.
+ * Anchored to findDisplacements() (body >= 1.5x the ATR known *before* that
+ * candle) rather than "any candle bigger than its neighbour" — the looser
+ * version matched almost any volatility and so confirmed almost every setup,
+ * which made it worthless as confluence.
+ */
+export function orderBlockPresent(c: OHLC[], fromIndex: number, direction: "buy" | "sell", lookback = 5): boolean {
+  const wanted = direction === "buy" ? "up" : "down";
+  return findDisplacements(c).some((d) => {
+    if (d.index < fromIndex || d.direction !== wanted) return false;
+    // Walk back from the displacement for the LAST opposite-close candle that
+    // started the leg. Checking only the single candle immediately before it is
+    // too rigid — the impulse often begins a couple of bars after the order
+    // block itself (in this system's own canonical setup, the order block is
+    // the sweep candle, two bars back).
+    for (let i = d.index - 1; i >= Math.max(0, d.index - lookback); i--) {
+      const isOpposite = direction === "buy" ? c[i]!.close < c[i]!.open : c[i]!.close > c[i]!.open;
+      if (isOpposite) return true;
+    }
+    return false;
+  });
 }
 
 /** Failure Swing (rank 13): a new extreme that fails to extend further — early reversal evidence. */
@@ -643,7 +683,17 @@ export function runExpertJudge(
   h4: OHLC[],
   minConfidence: number,
   suppressedConcepts: Set<string>,
+  /**
+   * Optional sink for the reason this judge declined. Every `return null`
+   * below writes here first, so "scanned and found nothing" can be shown on
+   * the Analysis page instead of looking identical to "nothing ran at all".
+   */
+  declineReason?: { reason: string },
 ): AnalysisResult | null {
+  const decline = (reason: string): null => {
+    if (declineReason) declineReason.reason = reason;
+    return null;
+  };
   // 1) HTF bias from H1 swing structure: last two confirmed highs AND lows
   // both rising = bullish, both falling = bearish, anything else = no bias.
   const biasFromSwings = (candles: OHLC[]): "buy" | "sell" | null => {
@@ -658,11 +708,11 @@ export function runExpertJudge(
     return null;
   };
   const bias = biasFromSwings(h1);
-  if (!bias) return null;
+  if (!bias) return decline("No clear H1 bias: last two swing highs and lows do not both rise or both fall");
   // Multi-timeframe alignment (strategy-library rank 30): an H4 bias that
   // actively disagrees kills the setup; no clear H4 bias is fine (H1 leads).
   const h4Bias = biasFromSwings(h4);
-  if (h4Bias && h4Bias !== bias) return null;
+  if (h4Bias && h4Bias !== bias) return decline(`H4 bias (${h4Bias}) contradicts H1 bias (${bias})`);
 
   // 2) M30 entry: most recent liquidity sweep opposite the bias, a structure
   // break back in the bias direction, then an FVG in that direction that
@@ -670,25 +720,25 @@ export function runExpertJudge(
   const m30Swings = swingPoints(m30, 2);
   const wantedSweepSide = bias === "buy" ? "sell_side" : "buy_side";
   const recentSweeps = findSweeps(m30, 2).filter((s) => s.side === wantedSweepSide && s.index >= m30.length - 20);
-  if (recentSweeps.length === 0) return null;
+  if (recentSweeps.length === 0) return decline(`No ${wantedSweepSide.replace("_", "-")} liquidity sweep in the last 20 M30 candles`);
   const sweep = recentSweeps[recentSweeps.length - 1]!;
 
   const priorSwing = m30Swings
     .filter((s) => s.index < sweep.index && s.kind === (bias === "buy" ? "high" : "low"))
     .pop();
-  if (!priorSwing) return null;
+  if (!priorSwing) return decline("No prior M30 swing before the sweep to measure a structure break against");
   const brokeStructure = m30.slice(sweep.index + 1).some((k) =>
     bias === "buy" ? k.close > priorSwing.price : k.close < priorSwing.price
   );
-  if (!brokeStructure) return null;
+  if (!brokeStructure) return decline(`Sweep found at ${sweep.level.toFixed(5)} but price never closed beyond the prior structure`);
 
   const wantedFvgKind = bias === "buy" ? "bullish" : "bearish";
   const candidateFvgs = findFvgs(m30).filter((f) => f.kind === wantedFvgKind && f.index >= sweep.index);
-  if (candidateFvgs.length === 0) return null;
+  if (candidateFvgs.length === 0) return decline(`No unfilled ${wantedFvgKind} FVG formed after the sweep`);
   const fvg = candidateFvgs[candidateFvgs.length - 1]!;
   const lastClose = m30[m30.length - 1]!.close;
   const fvgFilled = bias === "buy" ? lastClose < fvg.low : lastClose > fvg.high;
-  if (fvgFilled) return null;
+  if (fvgFilled) return decline("Entry FVG already filled; the setup is no longer live");
 
   // 3) Levels: entry at the FVG's consequent-encroachment midpoint, stop
   // beyond the sweep extreme, target at the next real opposing M30 swing.
@@ -699,7 +749,7 @@ export function runExpertJudge(
   const opposingSwings = m30Swings.filter((s) =>
     bias === "buy" ? (s.kind === "high" && s.price > entry) : (s.kind === "low" && s.price < entry)
   );
-  if (opposingSwings.length === 0) return null;
+  if (opposingSwings.length === 0) return decline("No opposing M30 swing beyond entry to use as a liquidity target");
   const target = bias === "buy"
     ? Math.min(...opposingSwings.map((s) => s.price))
     : Math.max(...opposingSwings.map((s) => s.price));
@@ -722,13 +772,15 @@ export function runExpertJudge(
   const relevantVotes = votes.filter((v) => v.direction != null);
   const agreeingVotes = relevantVotes.filter((v) => v.direction === bias);
   const disagreeingVotes = relevantVotes.filter((v) => v.direction !== bias);
-  if (relevantVotes.length > 0 && agreeingVotes.length < disagreeingVotes.length) return null;
+  if (relevantVotes.length > 0 && agreeingVotes.length < disagreeingVotes.length) {
+    return decline(`Confluence disagrees: ${disagreeingVotes.length} against vs ${agreeingVotes.length} for (${disagreeingVotes.map((v) => v.concept).join(", ")})`);
+  }
 
   const structuralBonuses = [hasDisplacement, inOte, hasOrderBlock, judasTiming, h4Bias === bias].filter(Boolean).length;
   const agreementRatio = relevantVotes.length > 0 ? agreeingVotes.length / relevantVotes.length : 0.5;
   let confidence = 0.5 + agreementRatio * 0.25 + structuralBonuses * 0.04;
   confidence = Math.min(0.97, confidence);
-  if (confidence < minConfidence) return null;
+  if (confidence < minConfidence) return decline(`Confidence ${confidence.toFixed(2)} < minimum ${minConfidence} (${agreeingVotes.length}/${relevantVotes.length} voters agreed, ${structuralBonuses}/5 structural confirmations)`);
 
   // Accumulation-Manipulation-Distribution and Break of Structure are always
   // true by construction whenever this setup fires (the sweep IS the
@@ -744,7 +796,8 @@ export function runExpertJudge(
     ...(h4Bias === bias ? ["Multi-Timeframe Trend Alignment"] : []),
     ...agreeingVotes.map((v) => v.concept),
   ])];
-  if (concepts.some((c) => suppressedConcepts.has(conceptKey(c)))) return null;
+  const blocked = concepts.filter((c) => suppressedConcepts.has(conceptKey(c)));
+  if (blocked.length > 0) return decline(`Self-learning has suppressed a concept this setup relies on: ${blocked.join(", ")}`);
 
   const levels: AnalysisLevel[] = [
     { kind: "sweep", low: sweep.level, high: sweep.level, label: "liquidity sweep" },
