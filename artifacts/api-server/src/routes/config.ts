@@ -23,7 +23,7 @@ const DEFAULTS = {
   newsBlackoutBeforeMin: 30,
   newsBlackoutAfterMin: 30,
   maxSpreadCostPct: 0.5,
-  maxPositionHoldHours: 96,
+  maxPositionHoldHours: 36,
   riskPerTradePct: 1,
   maxConcurrentPositions: 3,
   maxDailyLossPct: 5,
@@ -127,7 +127,7 @@ router.put("/config", async (req, res): Promise<void> => {
     newsBlackoutBeforeMin: d.newsBlackoutBeforeMin ?? prev?.newsBlackoutBeforeMin ?? 30,
     newsBlackoutAfterMin: d.newsBlackoutAfterMin ?? prev?.newsBlackoutAfterMin ?? 30,
     maxSpreadCostPct: keep(d.maxSpreadCostPct, prev?.maxSpreadCostPct, 0.5),
-    maxPositionHoldHours: d.maxPositionHoldHours ?? prev?.maxPositionHoldHours ?? 96,
+    maxPositionHoldHours: d.maxPositionHoldHours ?? prev?.maxPositionHoldHours ?? 36,
     notes: parsed.data.notes ?? null,
   };
   const [row] = await db
