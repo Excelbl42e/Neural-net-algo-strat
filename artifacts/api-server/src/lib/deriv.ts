@@ -225,6 +225,86 @@ export async function checkMultiplierProposal(token: string, environment: "demo"
   }
 }
 
+/**
+ * Ask Deriv itself for the shortest CALL/PUT duration it actually offers on
+ * this symbol, instead of guessing. Discovered the hard way: a hardcoded
+ * "5 minutes" self-test guess was rejected live with
+ * TradingDurationNotAllowed — forex binaries evidently need a longer
+ * minimum than the synthetic/volatility indices this app used to trade,
+ * and no public doc page we could reach from this sandbox states the exact
+ * number. contracts_for is Deriv's own authoritative source for it.
+ *
+ * Evidence label: code review only for the exact response field names
+ * (min_contract_duration inside contracts_for.available) — not verified
+ * against a live response from this sandbox. Parses defensively and
+ * returns null on anything unexpected rather than guessing further;
+ * callers must have a non-buy fallback for that case.
+ */
+export async function queryBinaryMinDuration(
+  token: string, environment: "demo" | "real", symbol: string,
+): Promise<{ value: number; unit: "t" | "s" | "m" | "h" | "d" } | null> {
+  let session: DerivSession | null = null;
+  try {
+    session = await openDerivSession(token, environment);
+    const res = await session.request<{
+      contracts_for?: { available?: Array<Record<string, unknown>> };
+      error?: unknown;
+    }>({ contracts_for: symbol, currency: "USD" }, { timeoutMs: 10_000 });
+    if (res.error) return null;
+    const available = res.contracts_for?.available ?? [];
+    const callEntry = available.find((c) => c.contract_type === "CALL" || c.contract_type === "CALLE");
+    if (!callEntry) return null;
+    const raw = callEntry.min_contract_duration ?? callEntry.min_duration;
+    if (typeof raw !== "string") return null;
+    const m = raw.trim().match(/^(\d+)([tsmhd])$/i);
+    if (!m) return null;
+    const value = Number(m[1]);
+    const unit = m[2]!.toLowerCase() as "t" | "s" | "m" | "h" | "d";
+    if (!Number.isFinite(value) || value <= 0) return null;
+    return { value, unit };
+  } catch {
+    return null;
+  } finally {
+    session?.close();
+  }
+}
+
+/** Rough upper bound past which a self-test shouldn't try to synchronously wait for settlement. */
+export function binaryDurationMs(d: { value: number; unit: "t" | "s" | "m" | "h" | "d" }): number {
+  const perUnit: Record<string, number> = { t: 2_000, s: 1_000, m: 60_000, h: 3_600_000, d: 86_400_000 };
+  return d.value * (perUnit[d.unit] ?? 60_000);
+}
+
+/**
+ * Diagnostic-only check that Deriv accepts the binary (CALL/PUT) parameter
+ * shape at whatever duration the caller supplies — a quote-only `proposal`,
+ * never a `buy`. Used as a fallback when the minimum tradeable duration
+ * either can't be discovered or is too long to wait for real settlement in
+ * a self-test.
+ */
+export async function checkBinaryProposal(
+  token: string, environment: "demo" | "real", symbol: string, d: { value: number; unit: "t" | "s" | "m" | "h" | "d" },
+): Promise<{ ok: boolean; message: string }> {
+  let session: DerivSession | null = null;
+  try {
+    session = await openDerivSession(token, environment);
+    const res = await session.request<{ proposal?: { ask_price?: number | string; id?: string }; error?: { message?: string; details?: unknown } }>(
+      { proposal: 1, amount: 0.5, basis: "stake", contract_type: "CALL", currency: "USD", underlying_symbol: symbol, duration: d.value, duration_unit: d.unit },
+      { timeoutMs: 8_000 },
+    );
+    if (res.error) {
+      const details = res.error.details !== undefined ? ` — details: ${JSON.stringify(res.error.details)}` : "";
+      return { ok: false, message: `${res.error.message ?? "Deriv rejected the binary proposal"}${details}` };
+    }
+    if (!res.proposal?.id) return { ok: false, message: "Binary proposal response missing id" };
+    return { ok: true, message: `Binary proposal accepted at ${d.value}${d.unit} (ask_price ${res.proposal.ask_price})` };
+  } catch (err) {
+    return { ok: false, message: err instanceof Error ? err.message : "Binary proposal check failed" };
+  } finally {
+    session?.close();
+  }
+}
+
 export interface DerivSellResult {
   ok: boolean;
   soldFor?: number;
