@@ -56,9 +56,17 @@ export async function runDemoSelfTest(conn: Conn): Promise<SelfTestResult> {
     // Test the actual instrument class the bot trades (forex, via a binary
     // CALL for a fast, self-settling round trip) rather than a leftover
     // synthetic-index symbol from before this app became forex-only.
-    mark("pending", "buy request sent: frxEURUSD CALL, 5 minutes, stake 0.35");
+    //
+    // stakeAmount: 0.50 — live-verified. A real self-test run against this
+    // exact binary CALL request returned InvalidtoBuy/InvalidMinStake:
+    // "Please enter a stake amount that's at least 0.50." DERIV_MIN_STAKE
+    // (0.35, execution-risk.ts) is the MULTIPLIER minimum, not binary's —
+    // this path never affects live forex signals (they only ever place
+    // multiplier contracts; forceBinary is set only here), so the fix is
+    // scoped to this diagnostic, not to real trade sizing.
+    mark("pending", "buy request sent: frxEURUSD CALL, 5 minutes, stake 0.50");
     const buy = await placeDerivTrade({
-      token, environment: "demo", symbol: "frxEURUSD", direction: "buy", stakeAmount: 0.35,
+      token, environment: "demo", symbol: "frxEURUSD", direction: "buy", stakeAmount: 0.50,
       currency: account.currency, forceBinary: true, binaryDuration: { value: 5, unit: "m" },
     });
     if (!buy.ok || !buy.contractId) {
