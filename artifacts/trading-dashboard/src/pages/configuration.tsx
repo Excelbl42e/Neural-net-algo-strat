@@ -134,6 +134,8 @@ export default function ConfigurationPage() {
 
   const enabled = form.watch("enabled");
   const mode = form.watch("autotradeMode");
+  const riskPerTradePctValue = form.watch("riskPerTradePct");
+  const maxDailyLossPctValue = form.watch("maxDailyLossPct");
 
   return (
     <div className="space-y-6 max-w-4xl">
@@ -245,6 +247,14 @@ export default function ConfigurationPage() {
                   <FormLabel>Max daily loss (% of equity)</FormLabel>
                   <FormControl><Input type="number" step="0.1" min="0" max="100" {...field} data-testid="input-max-daily-loss" /></FormControl>
                   <FormDescription className="text-[11px]">New orders are refused when today's realized losses plus open-stake reservations exhaust this UTC-day budget.</FormDescription>
+                  {Number(maxDailyLossPctValue) < Number(riskPerTradePctValue) && (
+                    <div className="flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 p-2 text-[11px] text-amber-400">
+                      <AlertCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                      <span>
+                        This is lower than "Risk per trade %" ({Number(riskPerTradePctValue)}%) above. This budget is checked after per-trade sizing and can only shrink the stake further — so on a small account it can silently refuse every trade (or force it down to the $1 multiplier floor or below) even though risk-per-trade alone would allow a bigger one. If you need the full {Number(riskPerTradePctValue)}% to go through, raise this to at least {Number(riskPerTradePctValue)}% too.
+                      </span>
+                    </div>
+                  )}
                   <FormMessage />
                 </FormItem>
               )} />
@@ -261,6 +271,16 @@ export default function ConfigurationPage() {
                   <FormLabel>Risk per trade % (hard ceiling)</FormLabel>
                   <FormControl><Input type="number" step="0.1" min="0" max="100" {...field} data-testid="input-risk-per-trade" /></FormControl>
                   <FormDescription className="text-[11px]">The computed stake cannot exceed this share of verified USD equity; trades below the broker minimum are refused.</FormDescription>
+                  {Number(riskPerTradePctValue) >= 10 && (
+                    <div className="flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 p-2 text-[11px] text-amber-400">
+                      <AlertCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                      <span>
+                        At {Number(riskPerTradePctValue)}%, a single losing multiplier trade (max loss = stake) can cost roughly {Number(riskPerTradePctValue)}% of your equity in one shot
+                        {equity > 0 ? ` — about $${(equity * Number(riskPerTradePctValue) / 100).toFixed(2)} on your current $${equity.toFixed(2)} balance` : ""}.
+                        This is well above the 1% fixed-fractional default. It's a deliberate way to clear Deriv's $1 multiplier minimum on a very small account, not a setting to leave in place once equity grows — lower it back toward 1-2% as your balance increases.
+                      </span>
+                    </div>
+                  )}
                   <FormMessage />
                 </FormItem>
               )} />
