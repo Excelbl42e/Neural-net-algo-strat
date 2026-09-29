@@ -1,5 +1,14 @@
 # Changes in this build (vs. your Replit export)
 
+## Update: System health panel on the Dashboard
+The readiness check that decides whether it is safe to fund or go live — `signal_judge`, `candle_feed`, `news_calendar` and the rest — was only reachable by opening DevTools or typing `/api/status` into the address bar. That is a bad answer for the one thing you check before risking money.
+
+The data was already there: `app-layout.tsx` has been polling `/api/system/status` every 15 seconds for the mode banner, using `bot`/`executionLock`/`hosting` and **discarding the entire `components` array**. The Dashboard — whose heading is literally "Trading system status" — now renders it: one row per component with a colour-coded dot, its status, and its reason, plus an overall badge ("All systems go" / degraded / down). Same query key, so it shares the layout's existing poll rather than adding a second one.
+
+Also trimmed the `signal_judge` reason string, which pointed at `runExpertJudge()`'s call site in `signal-worker.ts` — useful in a log, out of place in a panel an operator reads before funding. The swap-back instructions stay in the code comment where they belong.
+
+Verified in a browser against a running server: renders correctly (green/amber/red/idle states all exercised, including a genuinely-down candle feed), zero page errors, zero horizontal overflow at 375px.
+
 ## Update: integration test — a judge signal survives every downstream gate
 Closes the one seam the audit flagged but never actually proved. `runExpertJudge()` being correct is not the same as its output being *tradeable*: between the judge and a real order sit `geometryGate`, `verifyClaims` (which re-checks the judge's own cited levels against the candles) and `portfolioGate`. If any of those quietly rejected the judge's own output — a units mismatch, or the zero-width sweep range failing its own tolerance check — every signal would die at the last step, and the symptom would once again be "nothing ever trades" with nothing obviously broken.
 

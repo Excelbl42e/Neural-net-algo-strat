@@ -1,11 +1,30 @@
 import { Link } from "wouter";
-import { Activity, ArrowUpRight, CandlestickChart, Crosshair, Radio, ShieldAlert, Workflow } from "lucide-react";
+import { Activity, ArrowUpRight, CandlestickChart, Crosshair, HeartPulse, Radio, ShieldAlert, Workflow } from "lucide-react";
 import {
   useGetWorkerStatus, getGetWorkerStatusQueryKey,
   useGetCandleFeederStatus, getGetCandleFeederStatusQueryKey,
   useListStrategies, useListSignals, useListBrokerConnections,
 } from "@workspace/api-client-react";
+import { useQuery } from "@tanstack/react-query";
 import { Skeleton } from "@/components/ui/skeleton";
+import { cn } from "@/lib/utils";
+import type { SystemStatus } from "@/components/layout/app-layout";
+
+/** ok / degraded / down / idle -> dot colour + label colour. */
+const HEALTH_STYLE: Record<string, { dot: string; text: string }> = {
+  ok: { dot: "bg-emerald-400", text: "text-emerald-300" },
+  degraded: { dot: "bg-amber-400", text: "text-amber-300" },
+  down: { dot: "bg-red-500", text: "text-red-300" },
+  idle: { dot: "bg-muted-foreground/50", text: "text-muted-foreground" },
+};
+
+/** signal_judge -> Signal judge, ai -> AI */
+const NAME_OVERRIDES: Record<string, string> = { ai: "AI (unused)" };
+const humanize = (name: string) => {
+  if (NAME_OVERRIDES[name]) return NAME_OVERRIDES[name]!;
+  const spaced = name.replace(/_/g, " ");
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1);
+};
 
 export default function Dashboard() {
   const worker = useGetWorkerStatus({ query: { queryKey: getGetWorkerStatusQueryKey(), refetchInterval: 10000 } });
@@ -13,6 +32,14 @@ export default function Dashboard() {
   const strategies = useListStrategies();
   const signals = useListSignals();
   const brokers = useListBrokerConnections();
+  // Same endpoint the layout already polls for the mode banner — it carries a
+  // per-component health list that was being fetched and then discarded, which
+  // left "is the system actually ready?" answerable only from DevTools.
+  const system = useQuery<SystemStatus>({
+    queryKey: ["system-status"],
+    queryFn: async () => { const r = await fetch("/api/system/status", { cache: "no-store" }); if (!r.ok) throw new Error(String(r.status)); return r.json(); },
+    refetchInterval: 15000,
+  });
   const loading = [worker, feeder, strategies, signals, brokers].some(q => q.isLoading);
   const failed = [worker, feeder, strategies, signals, brokers].some(q => q.isError);
   const activeStrategies = strategies.data?.filter(s => s.active).length;
@@ -36,6 +63,54 @@ export default function Dashboard() {
           <StatusPanel icon={<Activity className="w-5 h-5" />} label="Signal worker" value={worker.data?.running ? "Running" : "Not running"} detail={`${worker.data?.signalsGeneratedTotal ?? 0} generated (worker counter) · ${activeSignals ?? 0} active records`} href="/analysis" />
           <StatusPanel icon={<Radio className="w-5 h-5" />} label="Deriv connectivity" value={`${connectedBrokers ?? 0} broker connections`} detail={`Candle feeder: ${feeder.data?.connected ? "connected" : "disconnected"} · ${feeder.data?.symbols.length ?? 0} subscribed symbols`} href="/brokers" />
         </section>
+        <section className="rounded-xl border border-border bg-card p-5 md:p-6">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2 text-primary font-mono-numbers text-[11px] tracking-widest uppercase">
+              <HeartPulse className="w-4 h-4" /> System health
+            </div>
+            {system.data && (
+              <span
+                className={cn(
+                  "text-[11px] font-mono-numbers uppercase tracking-wider px-2 py-0.5 rounded border",
+                  system.data.status === "ok" ? "border-emerald-500/40 text-emerald-300"
+                    : system.data.status === "degraded" ? "border-amber-500/40 text-amber-300"
+                    : "border-red-500/40 text-red-300",
+                )}
+                data-testid="badge-system-status"
+              >
+                {system.data.status === "ok" ? "All systems go" : system.data.status}
+              </span>
+            )}
+          </div>
+          <p className="text-[11px] text-muted-foreground mt-2">
+            Live component check, refreshed every 15s. Before funding or switching to live, the ones that matter are
+            <span className="text-foreground"> signal judge</span>,<span className="text-foreground"> candle feed</span> and
+            <span className="text-foreground"> news calendar</span> — a stalled feed or an unreachable calendar stops trades
+            entirely.
+          </p>
+          {system.isLoading ? <Skeleton className="h-28 mt-4" /> : system.data ? (
+            <div className="mt-4 grid gap-x-6 gap-y-2 md:grid-cols-2">
+              {system.data.components.map((c) => {
+                const style = HEALTH_STYLE[c.status] ?? HEALTH_STYLE.idle!;
+                return (
+                  <div key={c.name} className="flex items-start gap-2.5 border-t border-border/60 pt-2 min-w-0" data-testid={`health-${c.name}`}>
+                    <span className={cn("w-2 h-2 rounded-full mt-1.5 shrink-0", style.dot)} />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-baseline justify-between gap-3">
+                        <span className="text-xs font-medium">{humanize(c.name)}</span>
+                        <span className={cn("text-[10px] font-mono-numbers uppercase tracking-wider shrink-0", style.text)}>{c.status}</span>
+                      </div>
+                      <div className="text-[11px] text-muted-foreground leading-snug break-words">{c.reason}</div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="mt-4 text-xs text-amber-300">Could not read system status — treat readiness as unknown.</div>
+          )}
+        </section>
+
         <section className="grid gap-3 lg:grid-cols-[1.35fr_1fr]">
           <div className="rounded-xl border border-violet-500/25 bg-violet-500/[.04] p-5 md:p-7">
             <div className="flex items-center gap-2 text-violet-300 font-mono-numbers text-[11px] tracking-widest uppercase"><Workflow className="w-4 h-4" /> What happens next</div>
