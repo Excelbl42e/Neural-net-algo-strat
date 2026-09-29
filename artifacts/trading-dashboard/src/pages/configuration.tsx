@@ -195,6 +195,30 @@ export default function ConfigurationPage() {
             <TrendingUp className="w-3.5 h-3.5 mt-0.5 shrink-0 text-primary" />
             <span>Multiplier max loss equals the stake, so stake is the true risk. Not a quote; the daily-loss budget can lower it further at order time. When the stake falls below Deriv's $1 multiplier minimum, the trade is placed as a binary option instead — with a fixed 3-day expiry, separate from the strategy's usual 4-hour to 1-day target hold, and not affected by the "Force-close after" setting below (that only applies to multipliers).</span>
           </div>
+          {yourRow?.ok && yourRow.stake != null && yourRow.stake >= 1 && yourRow.stake < 1.2 && (
+            <div className="flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-[11px] text-amber-400" data-testid="warn-multiplier-boundary">
+              <AlertCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+              <span>
+                You are sitting right on Deriv's $1.00 multiplier boundary — your stake is
+                ${yourRow.stake.toFixed(2)}. The moment your balance dips below
+                ${(1 / (Number(riskPerTradePctValue) / 100)).toFixed(2)}, the stake falls under $1.00 and every trade
+                becomes a 3-day binary instead: no stop-loss, no take-profit, the full stake at risk until expiry, and
+                the force-close setting will not apply. One losing trade is enough to cross it. Winning trades push you
+                back over.
+              </span>
+            </div>
+          )}
+          {yourRow?.ok && yourRow.stake != null && yourRow.stake < 1 && (
+            <div className="flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-[11px] text-amber-400" data-testid="warn-binary-mode">
+              <AlertCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+              <span>
+                Your ${yourRow.stake.toFixed(2)} stake is below Deriv's $1.00 multiplier minimum, so trades are being
+                placed as 3-day binaries — no stop-loss, no take-profit, full stake at risk until expiry. A balance of
+                ${(1 / (Number(riskPerTradePctValue) / 100)).toFixed(2)} or more at your current risk setting returns
+                you to multiplier contracts.
+              </span>
+            </div>
+          )}
         </CardContent>
       </Card>
 

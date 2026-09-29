@@ -1,5 +1,25 @@
 # Changes in this build (vs. your Replit export)
 
+## Update: warn about the $1.00 multiplier boundary before it is crossed
+Final pre-funding check, run by walking a $5 account through the real sizing functions rather than reasoning about them.
+
+At 20% risk, a $5.00 balance produces a stake of exactly **$1.00** — precisely Deriv's multiplier minimum, with zero margin. Verified against the real code:
+
+| balance | stake | contract |
+|---|---|---|
+| $5.00 | $1.00 | multiplier |
+| $4.99 | $0.99 | **binary** |
+
+So a single losing trade of any size — even a few cents — drops the account under the line, and every subsequent trade becomes a 3-day binary: no stop-loss, no take-profit, full stake at risk until expiry, and `maxPositionHoldHours` does not apply to it. Winning trades push back over. Nothing in the code is wrong here; it is the arithmetic of a $5 balance against a $1 floor, and no risk setting avoids it (20% is already the *minimum* that reaches $1.00 at $5).
+
+That is too consequential to leave as a thing you discover after the fact, so the stake-preview card now warns on it directly, computing the exact crossover balance from the configured risk percentage:
+- **Near the boundary** (stake ≥ $1.00 but < $1.20): names the balance at which the drop happens and what changes.
+- **Already below it** (stake < $1.00): says trades are currently 3-day binaries and what balance restores multipliers.
+
+Also worth recording from the same pass: the forex multiplier is **100×** (live-verified for `frxEURUSD`), so P&L ≈ stake × 100 × (price move ÷ entry). With the geometry gate's minimum stop of 1× H1 ATR (~0.1% of price on the majors), a typical loss on a $1.00 stake is roughly **$0.10–$0.15**, not the $0.80 the 80%-of-stake cap suggests — that cap is a backstop for unusually wide stops, not the normal case.
+
+Verified in a browser at a real $5.00 synced balance: the warning renders correctly, zero page errors. 24 tests pass.
+
 ## Update: System health panel on the Dashboard
 The readiness check that decides whether it is safe to fund or go live — `signal_judge`, `candle_feed`, `news_calendar` and the rest — was only reachable by opening DevTools or typing `/api/status` into the address bar. That is a bad answer for the one thing you check before risking money.
 
