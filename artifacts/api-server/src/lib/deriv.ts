@@ -78,7 +78,7 @@ export async function placeDerivTrade(params: DerivTradeParams): Promise<DerivTr
   const meta = getSyntheticSymbol(params.symbol);
   const symbol = meta?.code ?? params.symbol;
   const useMultiplier = meta?.tradeType === "multiplier" && !params.forceBinary;
-  const multiplier = meta?.multiplier ?? 30;
+  const multiplier = meta?.multiplier ?? 100;
   const currency = params.currency ?? "USD";
   // Verified live against Deriv, twice: the field is not named `symbol` at
   // all anymore in this API — confirmed via Deriv's own current docs, the
@@ -173,7 +173,7 @@ function classifyContractType(raw: unknown): "multiplier" | "binary" | null {
  */
 export async function getIndicativeCostPct(token: string, environment: "demo" | "real", symbol: string): Promise<number | null> {
   const meta = getSyntheticSymbol(symbol);
-  const multiplier = meta?.multiplier ?? 30;
+  const multiplier = meta?.multiplier ?? 100;
   let session: DerivSession | null = null;
   try {
     session = await openDerivSession(token, environment);
@@ -204,7 +204,7 @@ export async function getIndicativeCostPct(token: string, environment: "demo" | 
  */
 export async function checkMultiplierProposal(token: string, environment: "demo" | "real", symbol: string): Promise<{ ok: boolean; message: string }> {
   const meta = getSyntheticSymbol(symbol);
-  const multiplier = meta?.multiplier ?? 30;
+  const multiplier = meta?.multiplier ?? 100;
   let session: DerivSession | null = null;
   try {
     session = await openDerivSession(token, environment);
