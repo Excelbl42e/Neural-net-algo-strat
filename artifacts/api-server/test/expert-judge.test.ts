@@ -1,6 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { runExpertJudge, computeConfluence, conceptKey, type OHLC } from "../src/lib/quant-filters.ts";
+import {
+  runExpertJudge, computeConfluence, conceptKey, atrPercentile, premiumDiscount,
+  geometryGate, verifyClaims, portfolioGate, DEFAULT_THRESHOLDS as T, type OHLC,
+} from "../src/lib/quant-filters.ts";
 
 const k = (o: number, h: number, l: number, c: number): OHLC => ({ open: o, high: h, low: l, close: c });
 
@@ -152,4 +155,59 @@ test("confidence spans a real 0-1 band, so a configured threshold means what it 
   // ceiling can never accept anything.
   assert.ok(runExpertJudge(h1Bull, m30Setup, h4Flat, 0.35, new Set()), "0.35 should accept a bare valid setup");
   assert.equal(runExpertJudge(h1Bull, m30Setup, h4Flat, 0.99, new Set()), null, "0.99 is above the 0.98 ceiling");
+});
+
+// ── Integration: a judge-produced signal must survive every downstream gate ──
+// runExpertJudge() being correct is not the same as its output being
+// *tradeable*. Between the judge and an actual order sit geometryGate,
+// verifyClaims (which re-checks the judge's own cited levels against the
+// candles) and portfolioGate. If any of those quietly rejected the judge's
+// own output — a units mismatch, a zero-width sweep range failing its own
+// tolerance check — every signal would die at the last step with the symptom
+// being, once again, "nothing ever trades".
+
+test("a judge-produced signal passes geometry, claim verification and portfolio caps", () => {
+  // h1Bull is only 20 candles; atrPercentile needs >= 20 valid ATR samples,
+  // which the worker guarantees via preTradeGate before it asserts non-null.
+  // Front-padding keeps the last two swings (and so the bias) unchanged.
+  const padded: OHLC[] = [];
+  for (let i = 0; i < 45; i++) {
+    const base = 1.0880 + i * 0.00018;
+    padded.push(k(base, base + 0.0006, base - 0.0004, base + 0.0004));
+  }
+  const h1Long = [...padded, ...h1Bull];
+
+  const result = runExpertJudge(h1Long, m30Setup, h4Flat, 0.35, new Set());
+  assert.ok(result, "fixture should still produce a signal");
+
+  const h1Atr = atrPercentile(h1Long);
+  assert.ok(h1Atr, "padded H1 must have enough history for ATR percentile (the worker relies on this)");
+
+  // 1) Geometry gate — the same call the worker makes.
+  const entryMid = (result!.entryLow! + result!.entryHigh!) / 2;
+  const pd = premiumDiscount(h1Long, entryMid, 2, result!.direction);
+  const geo = geometryGate(
+    { direction: result!.direction, entry: entryMid, stop: result!.stopLevel!, target: result!.target1Level! },
+    h1Atr!.atr, pd, T,
+  );
+  assert.equal(geo.ok, true, `geometry gate rejected the judge's own signal: ${geo.reason}`);
+
+  // 2) Claim verification — every cited structure must be findable in the
+  // candles the judge detected it from. The sweep level is emitted as a
+  // zero-width range, so this also pins that it still clears its own
+  // tolerance check.
+  const m30Atr = atrPercentile(m30Setup)?.atr ?? h1Atr!.atr / 2;
+  const h4Atr = atrPercentile(h4Flat)?.atr ?? h1Atr!.atr * 2;
+  for (const lvl of result!.levels) {
+    if (lvl.kind !== "fvg" && lvl.kind !== "sweep") continue;
+    const found =
+      verifyClaims([lvl], m30Setup, m30Atr).ok ||
+      verifyClaims([lvl], h1Long, h1Atr!.atr).ok ||
+      verifyClaims([lvl], h4Flat, h4Atr).ok;
+    assert.ok(found, `verifyClaims could not confirm the judge's own ${lvl.kind} at ${lvl.low}-${lvl.high}`);
+  }
+
+  // 3) Portfolio caps on a clean book.
+  const pf = portfolioGate([], { symbol: "frxEURUSD", direction: result!.direction }, T);
+  assert.equal(pf.ok, true, `portfolio gate rejected a first position: ${pf.reason}`);
 });
