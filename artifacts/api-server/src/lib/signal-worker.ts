@@ -115,8 +115,9 @@ import {
 } from "./quant-filters.js";
 import { STRATEGY_LIBRARY, strategySummaryList, quantKnowledgeContext } from "./strategy-library.js";
 
-// H1 entry timing and 1–4 day holding do not justify a paid GPT scan every
-// five minutes. Feed and open-contract monitors run on their own schedules.
+// M30 entry timing and 4h–1 day holding do not justify a paid GPT scan
+// every five minutes; 30 minutes also lines up with each new M30 candle
+// close. Feed and open-contract monitors run on their own schedules.
 const SIGNAL_INTERVAL_MS = 30 * 60 * 1000;
 const DEFAULT_CONCEPT_SCORE_THRESHOLD = 0.4;
 const DEFAULT_CONCEPT_MIN_SAMPLES = 8;
@@ -245,7 +246,7 @@ async function analyzeSymbol(
     : "Current market price: unavailable — do not invent price levels; set setup_found false";
 
   const conceptEvidence = JSON.stringify(scoredConcepts, null, 2);
-  const systemPrompt = `You are an ICT (Inner Circle Trader) / SMC (Smart Money Concepts) analyst specialising in spot forex majors traded as Deriv multiplier contracts. Use only the supplied candle evidence and knowledge context. Analyze H4/D1 for directional bias, H1 for entry timing, and target an expected 1–4 day hold.
+  const systemPrompt = `You are an ICT (Inner Circle Trader) / SMC (Smart Money Concepts) analyst specialising in spot forex majors traded as Deriv multiplier contracts. Use only the supplied candle evidence and knowledge context. Analyze H4/H1 for directional bias, M30 for entry timing, and target an expected 4-hour to 1-day hold.
 
 ═══ CORE FRAMEWORK: THE ALGO MODEL ═══
 Markets are engineered by a central bank algorithm (IPDA — Interbank Price Delivery Algorithm). Its only objective: seek liquidity, grab it, reverse. Every move follows: BUILD UP LIQUIDITY → AGGRESSIVE GRAB → REVERSAL → DISTRIBUTION.
@@ -354,10 +355,10 @@ Phase 5 — Sellside Delivery: Price runs to SSL targets; redistribution pauses 
 • EXTERNAL liquidity: The HIGH or LOW of the entire leg (BSL above / SSL below) — this is the TARGET after the sweep
 
 ═══ HTF LIQUIDITY CYCLE ═══
-• Every 3–5 trading days, price changes direction (short-term algo cycle)
+Background context only — these are multi-day/multi-week cycles, longer than the H4/H1/M30 data you're actually given and longer than this trade's 4-hour to 1-day horizon. Do not count D1 candles or claim a specific day-count since no D1 series is supplied; use this only as a reason to be more cautious about counter-trend entries if the H4 structure you CAN see already looks stretched.
+• Every 3–5 trading days, price changes direction (short-term algo cycle) — an informal reason for caution on an H4 trend that already looks extended, not something to count directly from unsupplied D1 data
 • Every 20–40–60–90 days: major pivots (IPDA data range lookback)
 • After a major liquidity grab + momentum shift, the next reversal typically occurs within 20 days
-• For D1 trades: count 3-5 days since the last major directional change — if price has been running one way for 4+ days without a significant pullback, the reversal probability is HIGH
 
 ═══ FAILURE SWING ═══
 • Bullish failure swing: Price makes a new low, then FAILS to create another lower low → buyers are defending → bullish reversal incoming
@@ -459,9 +460,9 @@ When price returns INTO a FVG zone — do NOT enter on the first touch. Wait for
   - Weak drift with no decisive candle = low conviction, DO NOT enter, wait for next candle.
 
 ▸ HTF FVG HIERARCHY (ICT Algo Concept Book):
-HTF FVG (D1/H4) > LTF FVG (H1/M30/M15) in magnetic force.
-When price approaches a D1 FVG, expect a strong reaction; a fully-filled D1 FVG has HIGH probability of reversal.
-Always mark D1 FVGs first, then H4 FVGs. Only use LTF FVGs for entry precision inside the HTF zone.
+HTF FVG (H4/H1) > entry-timeframe FVG (M30) in magnetic force.
+When price approaches an H4 FVG, expect a strong reaction; a fully-filled H4 FVG has HIGH probability of reversal.
+Always mark H4 FVGs first, then H1 FVGs. Only use the M30 FVG for entry precision inside the HTF zone.
 
 ▸ BREAK-EVEN SL MANAGEMENT (ICT Algo Concept Book):
 Once price breaks structure in your direction (first BOS after entry), consider moving SL to break-even (entry price). Do not claim an outcome unless it is shown by the supplied candles.
@@ -523,7 +524,7 @@ If the DOL is unclear, BMS has no FVG confirmation, or entry is in wrong premium
 
   const userPrompt = `Symbol: ${symbol}
 ${priceLine}
-Expected hold: 1–4 days. Use D1/H4 candles for directional bias and H1 candles for entry timing. Do not assume a one-week hold or refer to candle intervals not present below. Make every price claim traceable to the supplied data.
+Expected hold: 4 hours to 1 day. Use H4/H1 candles for directional bias and M30 candles for entry timing. Do not assume a multi-day hold or refer to candle intervals not present below. Make every price claim traceable to the supplied data.
 ${candleSection}${performanceSection}
 Hardcoded strategy library reference (ICT concept index + full quant/TA strategy rules):
 ---
@@ -531,13 +532,13 @@ ${knowledgeContext}
 ---
 
 TOP-DOWN ANALYSIS STEPS (work through these in order):
-1. D1/H4 STRUCTURE & BIAS: Use only supplied D1/H4 candles. State observable swing structure and nearest supported liquidity draw; do not invent a previous-week level absent from the series.
-2. DOL: Identify the nearest supported buyside or sellside liquidity level from supplied D1/H4 candles and state why.
-3. HTF BIAS: Assess D1/H4 direction and note whether an FVG-confirmed structure break is actually visible in those candles.
+1. H4/H1 STRUCTURE & BIAS: Use only supplied H4/H1 candles. State observable swing structure and nearest supported liquidity draw; do not invent a level from a longer lookback absent from the series.
+2. DOL: Identify the nearest supported buyside or sellside liquidity level from supplied H4/H1 candles and state why.
+3. HTF BIAS: Assess H4/H1 direction and note whether an FVG-confirmed structure break is actually visible in those candles.
 4. PHASE: Assess accumulation/manipulation/distribution only when the supplied candles support it; otherwise skip.
 5. PREMIUM/DISCOUNT: Use a visible supplied swing range; if one cannot be identified, do not force a setup.
-6. ENTRY TIMING: Use supplied H1 candles to assess retracement/reaction and select an entry; do not claim session or intraday evidence that the H1 timestamps/data do not show.
-7. STOPS & TARGETS: Anchor stop and target to levels visible in supplied data. Target a plausible 1–4 day move, not a full-week projection.
+6. ENTRY TIMING: Use supplied M30 candles to assess retracement/reaction and select an entry; do not claim session or intraday evidence that the M30 timestamps/data do not show.
+7. STOPS & TARGETS: Anchor stop and target to levels visible in supplied data. Target a plausible 4-hour to 1-day move, not a multi-day projection.
 
 Apply these steps, use the candle data as evidence, then respond with your JSON.`;
 
@@ -1316,9 +1317,11 @@ async function runWorkerTick(): Promise<void> {
       }
     }
 
-    // Cooldown window: H4/D1 swing setups need time to develop — don't
-    // generate a second signal on the same symbol within 2 hours.
-    const COOLDOWN_MIN = 120;
+    // Cooldown window: H4/H1 setups need time to develop — don't generate
+    // a second signal on the same symbol within 1 hour. Scaled down from
+    // the old 2 hours to stay proportionate to the new 4h-1day hold
+    // (was 2h against a 1-4 day hold; kept roughly the same fraction).
+    const COOLDOWN_MIN = 60;
     const cooldownCutoff = new Date(Date.now() - COOLDOWN_MIN * 60 * 1000);
 
     let generated = 0;
@@ -1368,21 +1371,7 @@ async function runWorkerTick(): Promise<void> {
         continue;
       }
 
-      // Fetch the actual D1 sample used for higher-timeframe directional bias.
-      const d1Candles = await db
-        .select({
-          openTime: candlesTable.openTime,
-          open: candlesTable.open,
-          high: candlesTable.high,
-          low: candlesTable.low,
-          close: candlesTable.close,
-        })
-        .from(candlesTable)
-        .where(and(eq(candlesTable.symbol, symbol), eq(candlesTable.timeframe, "D1")))
-        .orderBy(desc(candlesTable.openTime))
-        .limit(30);
-
-      // Fetch the actual H4 sample for higher-timeframe structure.
+      // Fetch the actual H4 sample used for higher-timeframe directional bias.
       const h4Candles = await db
         .select({
           openTime: candlesTable.openTime,
@@ -1396,8 +1385,7 @@ async function runWorkerTick(): Promise<void> {
         .orderBy(desc(candlesTable.openTime))
         .limit(30);
 
-      // Fetch H1 candles for entry timing; prompt claims must remain anchored
-      // to this actual series rather than inferred lower-timeframe data.
+      // Fetch the actual H1 sample for higher-timeframe structure.
       const h1Candles = await db
         .select({
           openTime: candlesTable.openTime,
@@ -1411,10 +1399,25 @@ async function runWorkerTick(): Promise<void> {
         .orderBy(desc(candlesTable.openTime))
         .limit(30);
 
-      if (d1Candles.length === 0 || h4Candles.length === 0 || h1Candles.length === 0) {
+      // Fetch M30 candles for entry timing; prompt claims must remain
+      // anchored to this actual series rather than inferred lower-timeframe data.
+      const m30Candles = await db
+        .select({
+          openTime: candlesTable.openTime,
+          open: candlesTable.open,
+          high: candlesTable.high,
+          low: candlesTable.low,
+          close: candlesTable.close,
+        })
+        .from(candlesTable)
+        .where(and(eq(candlesTable.symbol, symbol), eq(candlesTable.timeframe, "M30")))
+        .orderBy(desc(candlesTable.openTime))
+        .limit(30);
+
+      if (h4Candles.length === 0 || h1Candles.length === 0 || m30Candles.length === 0) {
         logger.info(
-          { symbol, d1: d1Candles.length, h4: h4Candles.length, h1: h1Candles.length },
-          "Signal worker: missing fetched D1/H4/H1 candle evidence; skipping analysis",
+          { symbol, h4: h4Candles.length, h1: h1Candles.length, m30: m30Candles.length },
+          "Signal worker: missing fetched H4/H1/M30 candle evidence; skipping analysis",
         );
         continue;
       }
@@ -1468,16 +1471,16 @@ async function runWorkerTick(): Promise<void> {
         }).join("\n");
       }
 
-      const candleContext = (d1Candles.length > 0 || h4Candles.length > 0 || h1Candles.length > 0)
+      const candleContext = (h4Candles.length > 0 || h1Candles.length > 0 || m30Candles.length > 0)
         ? [
-            d1Candles.length > 0
-              ? `D1 candles (oldest→newest) — directional-bias structure:\n${annotateCandles(d1Candles)}`
-              : "",
             h4Candles.length > 0
-              ? `\nH4 candles (oldest→newest) — higher-timeframe structure:\n${annotateCandles(h4Candles)}`
+              ? `H4 candles (oldest→newest) — directional-bias structure:\n${annotateCandles(h4Candles)}`
               : "",
             h1Candles.length > 0
-              ? `\nH1 candles (oldest→newest) — entry timing:\n${annotateCandles(h1Candles)}`
+              ? `\nH1 candles (oldest→newest) — higher-timeframe structure:\n${annotateCandles(h1Candles)}`
+              : "",
+            m30Candles.length > 0
+              ? `\nM30 candles (oldest→newest) — entry timing:\n${annotateCandles(m30Candles)}`
               : "",
           ].filter(Boolean).join("\n")
         : null;
@@ -1492,21 +1495,21 @@ async function runWorkerTick(): Promise<void> {
           .limit(n);
         return rows.reverse().map((r) => ({ open: +r.o, high: +r.h, low: +r.l, close: +r.c, t: r.t.getTime() }));
       };
-      const h4Long = await loadAsc("H4", 250);
-      const h1Long = await loadAsc("H1", 150);
-      const pre = preTradeGate(h4Long, thresholds);
+      const h1Long = await loadAsc("H1", 250);
+      const m30Long = await loadAsc("M30", 150);
+      const pre = preTradeGate(h1Long, thresholds);
       if (!pre.ok) {
         logger.info({ symbol, reason: pre.reason }, "Quant pre-filter skipped symbol");
         recordRejection({ symbol, stage: "pre_gpt", reason: pre.reason ?? "pre-filter", metrics: pre.metrics });
         continue;
       }
-      const h4Atr = atrPercentile(h4Long)!;
-      const pdNow = premiumDiscount(h4Long, lastTick.price, 2, "buy");
+      const h1Atr = atrPercentile(h1Long)!;
+      const pdNow = premiumDiscount(h1Long, lastTick.price, 2, "buy");
       const measuredFacts = [
         "MEASURED FACTS (computed in code from the candles above; treat as ground truth):",
-        `H4 ATR(14)=${h4Atr.atr.toFixed(5)} (percentile ${h4Atr.percentile.toFixed(0)} of own last ${h4Atr.samples} bars)`,
-        `H4 Kaufman efficiency ratio(10)=${Number(pre.metrics.efficiencyRatio).toFixed(3)} (0=chop, 1=clean trend)`,
-        pdNow ? `H4 swing range ${pdNow.rangeLow}–${pdNow.rangeHigh}; price is in ${pdNow.zone} (position ${(pdNow.position * 100).toFixed(0)}%). Buys belong in discount, sells in premium.` : "H4 swing range: not enough confirmed swings",
+        `H1 ATR(14)=${h1Atr.atr.toFixed(5)} (percentile ${h1Atr.percentile.toFixed(0)} of own last ${h1Atr.samples} bars)`,
+        `H1 Kaufman efficiency ratio(10)=${Number(pre.metrics.efficiencyRatio).toFixed(3)} (0=chop, 1=clean trend)`,
+        pdNow ? `H1 swing range ${pdNow.rangeLow}–${pdNow.rangeHigh}; price is in ${pdNow.zone} (position ${(pdNow.position * 100).toFixed(0)}%). Buys belong in discount, sells in premium.` : "H1 swing range: not enough confirmed swings",
         `Signals need RR >= ${thresholds.minRiskReward} and a stop >= ${thresholds.minStopAtr} ATR. Every FVG or sweep you cite must exist in the candles or the signal is discarded.`,
       ].join("\n");
       const candleContextWithFacts = candleContext ? `${candleContext}\n\n${measuredFacts}` : measuredFacts;
@@ -1525,7 +1528,7 @@ async function runWorkerTick(): Promise<void> {
 
       // ── Hard structural filters: reject small-timeframe scalps ─────────────
       // These are mechanical guardrails enforced regardless of LLM output.
-      // An H4/D1 setup must have a stop wide enough to sit beyond structure.
+      // An H4/H1 setup must have a stop wide enough to sit beyond structure.
       const entryMid =
         result.entryLow != null && result.entryHigh != null
           ? (result.entryLow + result.entryHigh) / 2
@@ -1535,24 +1538,24 @@ async function runWorkerTick(): Promise<void> {
         recordRejection({ symbol, stage: "post_gpt", reason: "Missing entry, stop or target level" });
         continue;
       }
-      const pd = premiumDiscount(h4Long, entryMid, 2, result.direction);
+      const pd = premiumDiscount(h1Long, entryMid, 2, result.direction);
       const geo = geometryGate(
         { direction: result.direction, entry: entryMid, stop: result.stopLevel, target: result.target1Level },
-        h4Atr.atr, pd, thresholds,
+        h1Atr.atr, pd, thresholds,
       );
       if (!geo.ok) {
         logger.info({ symbol, reason: geo.reason }, "Signal rejected by geometry gate");
         recordRejection({ symbol, stage: "post_gpt", reason: geo.reason ?? "geometry", metrics: geo.metrics });
         continue;
       }
-      const h1Atr = atrPercentile(h1Long)?.atr ?? h4Atr.atr / 2;
-      const d1Asc: OHLC[] = [...d1Candles].reverse().map((r) => ({ open: +r.open, high: +r.high, low: +r.low, close: +r.close }));
-      const d1Atr = atrPercentile(d1Asc)?.atr ?? h4Atr.atr * 2;
+      const m30Atr = atrPercentile(m30Long)?.atr ?? h1Atr.atr / 2;
+      const h4Asc: OHLC[] = [...h4Candles].reverse().map((r) => ({ open: +r.open, high: +r.high, low: +r.low, close: +r.close }));
+      const h4Atr = atrPercentile(h4Asc)?.atr ?? h1Atr.atr * 2;
       const claimFailures: string[] = [];
       for (const lvl of result.levels) {
         if (lvl.kind !== "fvg" && lvl.kind !== "sweep") continue;
         const found =
-          verifyClaims([lvl], h1Long, h1Atr).ok || verifyClaims([lvl], h4Long, h4Atr.atr).ok || verifyClaims([lvl], d1Asc, d1Atr).ok;
+          verifyClaims([lvl], m30Long, m30Atr).ok || verifyClaims([lvl], h1Long, h1Atr.atr).ok || verifyClaims([lvl], h4Asc, h4Atr).ok;
         if (!found) claimFailures.push(`${lvl.kind} ${lvl.low}-${lvl.high}`);
       }
       if (claimFailures.length > 0) {
@@ -1573,8 +1576,8 @@ async function runWorkerTick(): Promise<void> {
       }
       // ────────────────────────────────────────────────────────────────────────
 
-      // Signals expire at the maximum intended 1–4 day analysis horizon.
-      const expiresAt = new Date(Date.now() + 4 * 24 * 60 * 60 * 1000);
+      // Signals expire at the maximum intended 4-hour to 1-day analysis horizon.
+      const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
 
       const [inserted] = await db
         .insert(signalsTable)

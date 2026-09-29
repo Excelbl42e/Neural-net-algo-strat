@@ -122,7 +122,7 @@ async function runCycle(): Promise<void> {
       .select({ maxPositionHoldHours: botConfigTable.maxPositionHoldHours })
       .from(botConfigTable)
       .where(eq(botConfigTable.id, 1));
-    const maxHoldHours = cfg?.maxPositionHoldHours ?? 96;
+    const maxHoldHours = cfg?.maxPositionHoldHours ?? 36;
     const now = Date.now();
     const settledIds = new Set(settled.map((s) => s.contractId));
     const staleTrades = tradesToCheck.filter((entry) => {

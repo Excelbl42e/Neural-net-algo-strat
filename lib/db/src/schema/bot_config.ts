@@ -27,7 +27,7 @@ export const botConfigTable = pgTable("bot_config", {
   // contract-monitor force-closes one at market, in case price never
   // reaches either level. Binary contracts already expire on their own via
   // their configured duration and are unaffected by this.
-  maxPositionHoldHours: integer("max_position_hold_hours").notNull().default(96),
+  maxPositionHoldHours: integer("max_position_hold_hours").notNull().default(36),
   notes: text("notes"),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
 });
