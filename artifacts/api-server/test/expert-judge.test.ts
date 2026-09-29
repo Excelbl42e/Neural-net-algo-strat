@@ -121,3 +121,18 @@ test("computeConfluence: flat/choppy data never throws and mostly abstains", () 
   assert.equal(votes.length, 14);
   assert.ok(votes.every((v) => v.direction === "buy" || v.direction === "sell" || v.direction === null));
 });
+
+test("runExpertJudge reports WHY it declined, so a quiet scan is not indistinguishable from a broken one", () => {
+  const sink = { reason: "" };
+  const result = runExpertJudge(h4Flat, m30Setup, h4Flat, 0.5, new Set(), sink);
+  assert.equal(result, null);
+  assert.match(sink.reason, /H1 bias/i, `expected a bias-specific reason, got: ${sink.reason}`);
+
+  const sink2 = { reason: "" };
+  assert.equal(runExpertJudge(h1Bull, m30Flat, h4Flat, 0.5, new Set(), sink2), null);
+  assert.match(sink2.reason, /sweep/i, `expected a sweep-specific reason, got: ${sink2.reason}`);
+
+  const sink3 = { reason: "" };
+  assert.equal(runExpertJudge(h1Bull, m30Setup, h4Flat, 0.99, new Set(), sink3), null);
+  assert.match(sink3.reason, /confidence/i, `expected a confidence reason, got: ${sink3.reason}`);
+});

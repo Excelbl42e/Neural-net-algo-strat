@@ -1127,7 +1127,7 @@ async function runWorkerTick(): Promise<void> {
     if (eligibleConcepts.length === 0) {
       logger.info(
         { threshold: conceptScoreOptions.threshold },
-        "Signal worker: persisted score gate suppressed every library concept, skipping GPT analysis",
+        "Signal worker: persisted score gate suppressed every library concept, skipping analysis",
       );
       return;
     }
@@ -1236,11 +1236,15 @@ async function runWorkerTick(): Promise<void> {
       ensureSymbolSubscribed(symbol);
       const lastTick = getLastTick(symbol);
 
-      // Skip analysis if the tick is stale (>5 min old) or missing — no price
-      // data means the LLM cannot anchor levels to real market structure.
+      // Skip analysis if the tick is stale (>5 min old) or missing — without a
+      // current price there is nothing to anchor entry/stop/target against.
       const tickAgeMs = lastTick ? Date.now() - lastTick.at : Infinity;
       if (!lastTick || tickAgeMs > 5 * 60 * 1000) {
+        const reason = lastTick
+          ? `No fresh price tick: last one is ${Math.round(tickAgeMs / 1000)}s old (candle feed may be disconnected)`
+          : "No price tick received yet for this symbol (candle feed may be disconnected)";
         logger.info({ symbol, tickAgeMs }, "Signal worker: no fresh tick yet — skipping this symbol this cycle");
+        recordRejection({ symbol, stage: "no_tick", reason });
         continue;
       }
 
@@ -1319,8 +1323,16 @@ async function runWorkerTick(): Promise<void> {
       // No AI budget: analyzeSymbol() (GPT) is left in this file, unused.
       // runExpertJudge() is the active, deterministic, zero-cost replacement —
       // see its own comment above for what it does and how to swap GPT back.
-      const result = runExpertJudge(h1Long, m30Long, h4Asc, minConfidence, suppressedConcepts);
-      if (!result) continue;
+      // A declined setup is the normal case, but it must still be visible:
+      // silently continuing here is what made "the AI was never configured"
+      // look identical to "the market just wasn't offering anything".
+      const declined = { reason: "No qualifying setup" };
+      const result = runExpertJudge(h1Long, m30Long, h4Asc, minConfidence, suppressedConcepts, declined);
+      if (!result) {
+        logger.info({ symbol, reason: declined.reason }, "Expert judge found no setup");
+        recordRejection({ symbol, stage: "expert_judge", reason: declined.reason });
+        continue;
+      }
 
       // ── Hard structural filters: reject small-timeframe scalps ─────────────
       // These are mechanical guardrails enforced regardless of LLM output.

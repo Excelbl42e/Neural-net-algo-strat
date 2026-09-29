@@ -15,7 +15,14 @@ export interface NewsEvent {
   impact: "High" | "Medium" | "Low" | string;
 }
 
-const CALENDAR_URL = "https://nfs.faireconomy.media/ff_calendar_thisweek.json";
+/**
+ * The whole forex path fails closed when this feed can't be reached, so a
+ * single unreachable host means zero trades until it recovers. The default is
+ * the usual ForexFactory mirror; NEWS_CALENDAR_URL allows pointing at another
+ * mirror (or a local cache) without a code change if that host ever goes dark
+ * or a deployment's network policy blocks it.
+ */
+const CALENDAR_URL = process.env.NEWS_CALENDAR_URL?.trim() || "https://nfs.faireconomy.media/ff_calendar_thisweek.json";
 const FETCH_TIMEOUT_MS = 10_000;
 const CACHE_TTL_MS = 30 * 60_000;
 /** Beyond this age a cached calendar is no longer trusted even as a fallback. */

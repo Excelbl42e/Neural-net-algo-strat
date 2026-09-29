@@ -1,7 +1,7 @@
 import { getSystemStatus } from "../lib/system-status.js";
 import { Router, type IRouter } from "express";
 import { eq, desc } from "drizzle-orm";
-import { db, accountsTable, tradesTable, signalsTable, strategiesTable, brainLayersTable, botConfigTable } from "@workspace/db";
+import { db, accountsTable, tradesTable, signalsTable, strategiesTable, botConfigTable } from "@workspace/db";
 import { computeMaxDrawdown } from "../lib/trade-stats.js";
 
 const router: IRouter = Router();
@@ -18,7 +18,15 @@ router.get("/dashboard/overview", async (_req, res): Promise<void> => {
 
   const totalEquity = accounts.reduce((sum, a) => sum + parseFloat(a.equity ?? "0"), 0);
   const totalBalance = accounts.reduce((sum, a) => sum + parseFloat(a.balance ?? "0"), 0);
-  const dailyPnl = totalEquity - totalBalance;
+  // Realized P&L for the current UTC day — the same definition the daily-loss
+  // guard sizes against, so the number on screen and the number that can halt
+  // trading agree. This used to report equity-minus-balance (i.e. unrealized
+  // P&L on open positions) under a "daily" label, which is a different thing.
+  const utcDayStart = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), new Date().getUTCDate()));
+  const dailyPnl = closedTrades
+    .filter((t) => t.closedAt != null && new Date(t.closedAt) >= utcDayStart)
+    .reduce((sum, t) => sum + parseFloat(t.pnl ?? "0"), 0);
+  const openPnl = totalEquity - totalBalance;
   const wins = closedTrades.filter(t => parseFloat(t.pnl ?? "0") > 0);
   const winRate = closedTrades.length > 0 ? wins.length / closedTrades.length : 0;
   const totalPnl = closedTrades.reduce((sum, t) => sum + parseFloat(t.pnl ?? "0"), 0);
@@ -36,8 +44,13 @@ router.get("/dashboard/overview", async (_req, res): Promise<void> => {
     botStatus,
     totalEquity,
     dailyPnl,
+    openPnl,
+    // weeklyPnl has never been computed and no caller reads it; monthlyPnl is
+    // really "P&L across the last 200 closed trades", so it is reported under
+    // that name rather than a calendar one it does not measure.
     weeklyPnl: null,
     monthlyPnl: totalPnl,
+    recentClosedPnl: totalPnl,
     winRate,
     openTrades: openTrades.length,
     activeSignals: activeSignals.length,
@@ -61,7 +74,7 @@ router.get("/dashboard/workflow", async (_req, res): Promise<void> => {
   const stages = [
     stage(1, "data", "Market data", "Deriv candle feed into the candles table", ["candle_feed"]),
     stage(2, "filters", "Quant filters", "ATR percentile, efficiency ratio, geometry, premium/discount, portfolio caps (code, not AI)", ["database"]),
-    stage(3, "ai", "AI analysis", "GPT reads candles plus measured facts; cited structures are verified in code", ["ai", "signal_worker"]),
+    stage(3, "judge", "Signal judge", "Deterministic expert system (no LLM): liquidity sweep -> structure break -> FVG entry, gated by a confluence vote across the strategy library", ["signal_judge", "signal_worker"]),
     stage(4, "execution", "Order execution", "Deriv order path, reconciler, contract monitor", ["broker", "reconciler", "contract_monitor"]),
     stage(5, "accounts", "Balance sync", "Deriv balance polling", ["balance_sync"]),
   ];
