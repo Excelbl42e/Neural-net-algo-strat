@@ -5,7 +5,7 @@ import { UpdateBotConfigBody } from "@workspace/api-zod";
 import { brokerConnectionsTable } from "@workspace/db";
 import { and } from "drizzle-orm";
 import { getSecret } from "../lib/secrets.js";
-import { calculateCappedStake } from "../lib/execution-risk.js";
+import { calculateCappedStake, maxFundablePositions } from "../lib/execution-risk.js";
 
 const router: IRouter = Router();
 
@@ -80,9 +80,28 @@ router.get("/config/stake-preview", async (req, res): Promise<void> => {
       equity, riskPerTradePct: cfg.riskPerTradePct, maxConcurrentPositions: cfg.maxConcurrentPositions,
       openPositions: 0, smallAccountMaxRiskPct: (cfg as { smallAccountMaxRiskPct: number }).smallAccountMaxRiskPct,
     });
+    // The configured concurrent-position cap is aspirational on a small
+    // account: the daily-loss budget reserves each open stake, so the first
+    // trade can consume the whole day's allowance. Report what is actually
+    // fundable alongside the stake, rather than a number the dispatcher
+    // cannot honour.
+    const slots = maxFundablePositions({
+      equity,
+      riskPerTradePct: cfg.riskPerTradePct,
+      maxConcurrentPositions: cfg.maxConcurrentPositions,
+      maxDailyLossPct: cfg.maxDailyLossPct,
+      smallAccountMaxRiskPct: (cfg as { smallAccountMaxRiskPct: number }).smallAccountMaxRiskPct,
+    });
     return r.ok
-      ? { equity, ok: true, stake: r.stake, riskPct: Number(((r.stake / equity) * 100).toFixed(2)), contract: r.stake < 1 ? "binary (multiplier needs >= $1)" : "multiplier or binary" }
-      : { equity, ok: false, reason: r.reason };
+      ? {
+          equity, ok: true, stake: r.stake,
+          riskPct: Number(((r.stake / equity) * 100).toFixed(2)),
+          contract: r.stake < 1 ? "binary (multiplier needs >= $1)" : "multiplier or binary",
+          fundablePositions: slots.fundable,
+          configuredPositions: slots.configured,
+          positionsLimitedBy: slots.limitedBy,
+        }
+      : { equity, ok: false, reason: r.reason, fundablePositions: 0, configuredPositions: slots.configured, positionsLimitedBy: slots.limitedBy };
   });
   res.json(rows);
 });

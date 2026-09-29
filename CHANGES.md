@@ -1,5 +1,23 @@
 # Changes in this build (vs. your Replit export)
 
+## Update: honest confidence scale + real concurrent-position capacity
+Both of these were flagged by the audit as "you should know this"; fixed properly rather than left as advice.
+
+**Confidence now spans a real 0–1 band.** The judge scored `0.50 + ratio*0.25 + bonuses*0.04`, which could only ever land between 0.50 and 0.95 — so a configured minimum of 0.78 silently meant "near-unanimous confluence required" rather than the plain 0–1 reading the Configuration field advertises. The fix is on the producer side, so an existing stored threshold immediately starts meaning what it says without anyone editing it:
+- `0.35` baseline for clearing the structural trigger itself (sweep → structure break → unfilled FVG, plus the geometry and R:R gates) — real evidence, so it earns a floor rather than starting at zero.
+- `+0.40 × agreement ratio` across the strategy-library voters that have an opinion. With no voter holding an opinion this now contributes **nothing** rather than a free half-share (the old formula handed out 0.125 for silence).
+- `+0.25 × (structural confirmations / 5)` — displacement, OTE zone, order block, Judas timing, H4 agreement.
+- Capped at 0.98; it is an evidence-strength score, not a win probability, and the field description now says so along with the band.
+- `minConfidence` default unified to **0.70** across the schema, bootstrap SQL, boot seed, API defaults and the form — it was previously 0.780/0.780/0.78/0.7/0.78 in five places.
+
+**"Max positions" no longer advertises capacity the account cannot fund.** New `maxFundablePositions()` in `execution-risk.ts` walks the *real* sizing functions one position at a time exactly as the dispatcher does (rather than duplicating the interaction), so the number shown is the number the trading path will honour. Surfaced two ways: a new "Trades at once" column in the stake preview (`1 of 3`, amber when short), and a warning under the field itself naming the binding constraint.
+
+This immediately surfaced something worth knowing: **at 20% risk with a 20% daily-loss cap, the answer is "1 of 3" at *every* balance** — $5 or $10,000. That is not a small-account artifact; when risk-per-trade equals the daily budget, the first trade always consumes the whole allowance. Two or three concurrent positions require the daily cap to be roughly 2–3× risk-per-trade.
+
+It also caught a genuine trap in the existing sizing math: each stake is capped at `equity / slots`, so **raising Max positions shrinks every stake**. At $5, going 3 → 8 drops the first trade from $1.00 to $0.62 — back under Deriv's $1.00 multiplier minimum, i.e. silently from multiplier contracts to 3-day binaries, purely from raising a number that looks like it can only ever permit more. The warning says this explicitly and a regression test pins it.
+
+Verified live in a browser against a running server and fresh database: both the column and the warning render correctly with zero page errors. 23 tests pass (three new).
+
 ## Update: full system audit — real bugs found and fixed, plus first live UI verification
 Requested as a deliberate high-focus pass over every field, page and config before funding. Ran the built server against a local Postgres and drove all 11 pages in a real headless Chromium, rather than reasoning from source alone.
 

@@ -5,7 +5,7 @@ import {
   premiumDiscount, geometryGate, preTradeGate, verifyClaims, portfolioGate, currencyLegs,
   orderBlockPresent, srFlipSignal, DEFAULT_THRESHOLDS as T, type OHLC,
 } from "../src/lib/quant-filters.ts";
-import { calculateCappedStake } from "../src/lib/execution-risk.ts";
+import { calculateCappedStake, maxFundablePositions } from "../src/lib/execution-risk.ts";
 
 const k = (o: number, h: number, l: number, c: number): OHLC => ({ open: o, high: h, low: l, close: c });
 
@@ -122,4 +122,44 @@ test("srFlipSignal does not call a failed retest bullish", () => {
   for (let i = 0; i < 6; i++) c.push(k(101.8, 101.9, 100.2, 100.5)); // falls back under 101
   const res = srFlipSignal(c);
   assert.notEqual(res, "buy", "price back below a broken high is a failed retest, not support");
+});
+
+test("maxFundablePositions reports what really fits, not the configured ceiling", () => {
+  // $5 at 20%/20%: the first $1.00 stake consumes the entire daily budget, so
+  // the configured 3 is unreachable however it is set.
+  const small = maxFundablePositions({
+    equity: 5, riskPerTradePct: 20, maxConcurrentPositions: 3, maxDailyLossPct: 20, smallAccountMaxRiskPct: 10,
+  });
+  assert.equal(small.configured, 3);
+  assert.equal(small.fundable, 1, "only one trade fits inside a $1.00 daily budget");
+  assert.equal(small.limitedBy, "daily_loss_budget");
+
+  // Raising the ceiling does NOT buy meaningfully more capacity, and it has a
+  // trap: calculateCappedStake also caps each trade at equity/slots, so a
+  // higher ceiling shrinks every stake. At $5 that drops the first trade from
+  // $1.00 to $0.62 — back under Deriv's $1.00 multiplier minimum, i.e. from
+  // multiplier contracts to 3-day binaries, purely from raising a number that
+  // looks like it should only ever permit more.
+  const raised = maxFundablePositions({
+    equity: 5, riskPerTradePct: 20, maxConcurrentPositions: 8, maxDailyLossPct: 20, smallAccountMaxRiskPct: 10,
+  });
+  assert.ok(raised.fundable <= 2, `a higher ceiling cannot conjure budget that is not there, got ${raised.fundable}`);
+  assert.ok(
+    raised.stakes[0]! < small.stakes[0]!,
+    `raising the ceiling should shrink the per-trade stake (equity/slots), got ${raised.stakes[0]} vs ${small.stakes[0]}`,
+  );
+  assert.ok(raised.stakes[0]! < 1, "and at $5 that shrink pushes the stake under the $1 multiplier minimum");
+
+  // A wider daily-loss budget is what actually unlocks more positions.
+  const wider = maxFundablePositions({
+    equity: 5, riskPerTradePct: 20, maxConcurrentPositions: 3, maxDailyLossPct: 60, smallAccountMaxRiskPct: 10,
+  });
+  assert.ok(wider.fundable > 1, `a 60% daily budget should fund more than one, got ${wider.fundable}`);
+
+  // A funded account reaches its configured ceiling normally.
+  const funded = maxFundablePositions({
+    equity: 1000, riskPerTradePct: 1, maxConcurrentPositions: 3, maxDailyLossPct: 5, smallAccountMaxRiskPct: 10,
+  });
+  assert.equal(funded.fundable, 3);
+  assert.equal(funded.limitedBy, "configured");
 });
