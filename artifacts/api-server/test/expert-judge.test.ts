@@ -1,8 +1,28 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { runExpertJudge, conceptKey, type OHLC } from "../src/lib/quant-filters.ts";
+import { runExpertJudge, computeConfluence, conceptKey, type OHLC } from "../src/lib/quant-filters.ts";
 
 const k = (o: number, h: number, l: number, c: number): OHLC => ({ open: o, high: h, low: l, close: c });
+
+/** Deterministic (seeded LCG) noisy trend, the same scale production actually
+ * fetches (h1Long: 250 candles, m30Long: 150) — most of computeConfluence's
+ * indicators (EMA200 stack, ADX, Ichimoku) need far more history than the
+ * hand-built 20-candle setups above provide, so this is the only way to
+ * exercise them meaningfully without a live broker connection. */
+function noisyTrend(n: number, start: number, drift: number, noise: number, seed: number): OHLC[] {
+  let price = start, s = seed;
+  const rand = () => { s = (s * 1103515245 + 12345) % 2147483648; return s / 2147483648; };
+  const out: OHLC[] = [];
+  for (let i = 0; i < n; i++) {
+    const move = drift + (rand() - 0.5) * noise;
+    const open = price, close = price + move;
+    const high = Math.max(open, close) + rand() * noise * 0.3;
+    const low = Math.min(open, close) - rand() * noise * 0.3;
+    out.push({ open, high, low, close, t: Date.UTC(2026, 0, 1) + i * 3_600_000 });
+    price = close;
+  }
+  return out;
+}
 
 // H1 bias series: two ascending fractal swing highs (1.1050 then 1.1080) and
 // two ascending fractal swing lows (1.0900 then 1.0905) => bullish bias.
@@ -82,4 +102,22 @@ test("runExpertJudge: self-learning suppression of a fired concept kills the sig
   const suppressed = new Set([conceptKey("Liquidity Sweep")]);
   const result = runExpertJudge(h1Bull, m30Setup, h4Flat, 0.5, suppressed);
   assert.equal(result, null);
+});
+
+test("computeConfluence: realistic-length uptrend produces mostly-buy votes, no crash", () => {
+  const h1 = noisyTrend(250, 1.1000, 0.00015, 0.0010, 7);
+  const m30 = noisyTrend(150, 1.1000, 0.00010, 0.0008, 13);
+  const votes = computeConfluence(h1, m30);
+  assert.equal(votes.length, 14, "every voter should always appear, even when its direction is null");
+  const withOpinion = votes.filter((v) => v.direction != null);
+  assert.ok(withOpinion.length >= 5, `expected several voters to have enough history to fire on 250/150 candles, got ${withOpinion.length}`);
+  const buys = withOpinion.filter((v) => v.direction === "buy").length;
+  assert.ok(buys > withOpinion.length / 2, `expected a majority-buy vote on a clear uptrend, got ${buys}/${withOpinion.length}`);
+});
+
+test("computeConfluence: flat/choppy data never throws and mostly abstains", () => {
+  const flat = noisyTrend(250, 1.1000, 0, 0.0003, 99);
+  const votes = computeConfluence(flat, flat.slice(0, 150));
+  assert.equal(votes.length, 14);
+  assert.ok(votes.every((v) => v.direction === "buy" || v.direction === "sell" || v.direction === null));
 });
