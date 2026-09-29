@@ -2,6 +2,8 @@ import { getSyntheticSymbol } from "./synthetic-catalog.js";
 import { inspectDerivAccount, syncDerivPatAccount, toFiniteNumber } from "./deriv-account.js";
 import { DerivRequestTimeout, openDerivSession, type DerivSession } from "./deriv-session.js";
 
+export type BinaryDuration = { value: number; unit: "t" | "s" | "m" | "h" | "d" };
+
 export interface DerivTradeParams {
   token: string;
   environment: "demo" | "real";
@@ -17,8 +19,8 @@ export interface DerivTradeParams {
   targetPrice?: number | null;
   /** Use binary CALL/PUT (stake < $1 makes multipliers ineligible). */
   forceBinary?: boolean;
-  /** Override binary duration. Default: DERIV_BINARY_DURATION_DAYS (3) days. */
-  binaryDuration?: { value: number; unit: "t" | "s" | "m" | "h" | "d" };
+  /** Override binary duration, skipping the probe. Default: the shortest duration Deriv accepts, preferring DERIV_BINARY_DURATION_DAYS (1) day. */
+  binaryDuration?: BinaryDuration;
 }
 
 export interface DerivTradeResult {
@@ -40,9 +42,73 @@ const CIRCUIT_OPEN_MS = 60_000;
 let consecutiveBrokerErrors = 0;
 let circuitOpenUntil = 0;
 
+/**
+ * The only binary duration ever confirmed live on Deriv for forex (a 5-minute
+ * attempt came back `TradingDurationNotAllowed`). Nothing shorter is assumed
+ * to work — it is *probed* per symbol below, and this is what we fall back to
+ * so the binary path can never go dead.
+ */
+export const VERIFIED_BINARY_FALLBACK_DAYS = 3;
+
+/**
+ * Preferred binary duration. 1 day by default so a binary settles inside the
+ * intended 4h–1day holding window instead of running for most of a week;
+ * `resolveBinaryDuration()` falls back to VERIFIED_BINARY_FALLBACK_DAYS when
+ * Deriv refuses it for a symbol.
+ */
 export function defaultBinaryDurationDays(): number {
-  const raw = Number(process.env.DERIV_BINARY_DURATION_DAYS ?? "3");
-  return Number.isFinite(raw) && raw >= 1 && raw <= 4 ? Math.floor(raw) : 3;
+  const raw = Number(process.env.DERIV_BINARY_DURATION_DAYS ?? "1");
+  return Number.isFinite(raw) && raw >= 1 && raw <= 4 ? Math.floor(raw) : 1;
+}
+
+/** Cache of the probe result, so the extra round-trip is paid once per symbol, not once per trade. */
+const binaryDurationCache = new Map<string, { d: BinaryDuration; at: number }>();
+const BINARY_DURATION_CACHE_MS = 6 * 60 * 60 * 1000;
+
+/** Exported for tests / diagnostics: forget what was probed so the next trade re-asks Deriv. */
+export function clearBinaryDurationCache(): void { binaryDurationCache.clear(); }
+
+/**
+ * Decide which binary duration to actually send.
+ *
+ * Asks Deriv for a quote-only `proposal` at the preferred (shorter) duration
+ * first. A proposal never creates a contract, so this is safe to run before
+ * the buy: if Deriv refuses the shorter duration, or the probe itself fails,
+ * we send the live-verified fallback instead and the trade still goes out.
+ */
+async function resolveBinaryDuration(
+  session: DerivSession, symbol: string, currency: string,
+): Promise<{ d: BinaryDuration; note: string }> {
+  const preferred: BinaryDuration = { value: defaultBinaryDurationDays(), unit: "d" };
+  const fallback: BinaryDuration = { value: VERIFIED_BINARY_FALLBACK_DAYS, unit: "d" };
+  // Nothing to gain from probing a duration that is not shorter than the fallback.
+  if (preferred.value >= fallback.value) return { d: preferred, note: `${preferred.value}d (not shorter than the verified fallback; sent as-is)` };
+
+  const key = `${symbol}:${preferred.value}${preferred.unit}`;
+  const hit = binaryDurationCache.get(key);
+  if (hit && Date.now() - hit.at < BINARY_DURATION_CACHE_MS) return { d: hit.d, note: `${hit.d.value}${hit.d.unit} (cached probe result)` };
+
+  try {
+    const res = await session.request<{ proposal?: { id?: string }; error?: { message?: string } }>(
+      {
+        proposal: 1, amount: 0.5, basis: "stake", contract_type: "CALL",
+        currency, underlying_symbol: symbol, duration: preferred.value, duration_unit: preferred.unit,
+      },
+      { timeoutMs: 8_000 },
+    );
+    const accepted = !res.error && Boolean(res.proposal?.id);
+    const chosen = accepted ? preferred : fallback;
+    // Only a completed request is a real answer worth caching; a thrown probe is not.
+    binaryDurationCache.set(key, { d: chosen, at: Date.now() });
+    return {
+      d: chosen,
+      note: accepted
+        ? `${preferred.value}d accepted by Deriv`
+        : `${preferred.value}d refused (${res.error?.message ?? "proposal returned no id"}); using verified ${fallback.value}d`,
+    };
+  } catch (err) {
+    return { d: fallback, note: `duration probe failed (${err instanceof Error ? err.message : "unknown"}); using verified ${fallback.value}d` };
+  }
 }
 
 /**
@@ -87,6 +153,8 @@ export async function placeDerivTrade(params: DerivTradeParams): Promise<DerivTr
   // both times); this is the actual fix, not just a placement change.
   let parameters: Record<string, unknown>;
   let duration: string | null = null;
+  /** Why this binary duration was chosen — surfaced so a 3d fallback is never silent. */
+  let durationNote: string | null = null;
   if (useMultiplier) {
     parameters = {
       contract_type: params.direction === "buy" ? "MULTUP" : "MULTDOWN",
@@ -95,7 +163,10 @@ export async function placeDerivTrade(params: DerivTradeParams): Promise<DerivTr
     const limit = computeLimitOrder(params, multiplier);
     if (limit) parameters.limit_order = limit;
   } else {
-    const d = params.binaryDuration ?? { value: defaultBinaryDurationDays(), unit: "d" as const };
+    // An explicit override (the self-test) is obeyed verbatim; otherwise probe.
+    let d: BinaryDuration;
+    if (params.binaryDuration) { d = params.binaryDuration; }
+    else { const r = await resolveBinaryDuration(session, symbol, currency); d = r.d; durationNote = r.note; }
     duration = `${d.value}${d.unit}`;
     parameters = {
       contract_type: params.direction === "buy" ? "CALL" : "PUT",
@@ -127,7 +198,7 @@ export async function placeDerivTrade(params: DerivTradeParams): Promise<DerivTr
     const buyPrice = toFiniteNumber(res.buy.buy_price) ?? undefined;
     return {
       ok: true, contractId: res.buy.contract_id, buyPrice, contractType, duration,
-      message: `Contract ${res.buy.contract_id} opened at ${buyPrice}`,
+      message: `Contract ${res.buy.contract_id} opened at ${buyPrice}${durationNote ? ` — duration ${durationNote}` : ""}`,
     };
   } catch (err) {
     if (err instanceof DerivRequestTimeout || (err instanceof Error && /closed/i.test(err.message))) {

@@ -34,6 +34,21 @@ export async function ensureSchema(): Promise<void> {
     sql`UPDATE bot_config SET autotrade_mode = 'off' WHERE autotrade_mode NOT IN ('off','auto_demo','auto_live') AND autotrade_mode <> 'autonomous'`,
     sql`UPDATE bot_config SET autotrade_mode = 'auto_demo' WHERE autotrade_mode = 'autonomous'`,
     sql`ALTER TABLE bot_config ALTER COLUMN autotrade_mode SET DEFAULT 'off'`,
+    // One-time rescale of the stored confidence threshold. The expert judge
+    // replaced the LLM judge and produces confidence on a different scale
+    // (0.35 base + confluence + structure, capped at 0.98), so a row still
+    // holding the old 0.78 default is stricter than it was ever meant to be
+    // and starves a small account of setups. Runs at most once: the marker
+    // insert is the guard, and it only touches a row that still carries the
+    // old default, never a threshold the operator has since chosen.
+    sql`WITH once AS (
+          INSERT INTO app_secrets (key, value)
+          VALUES ('migration:min_confidence_rescale_v1', now()::text)
+          ON CONFLICT (key) DO NOTHING
+          RETURNING key
+        )
+        UPDATE bot_config SET min_confidence = 0.70
+        WHERE min_confidence = 0.78 AND EXISTS (SELECT 1 FROM once)`,
   ];
   for (const stmt of stmts) {
     try {

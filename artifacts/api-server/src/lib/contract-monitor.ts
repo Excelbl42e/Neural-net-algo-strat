@@ -37,6 +37,9 @@ function getContractId(annotations: string | null): number | null {
   }
 }
 
+/** Contracts whose force-close was already reported, so a repeatedly-refused buyback isn't logged every cycle. */
+const forceCloseFailureLogged = new Set<number>();
+
 function getContractType(annotations: string | null): string | null {
   if (!annotations) return null;
   try {
@@ -113,11 +116,14 @@ async function runCycle(): Promise<void> {
       }
     }
 
-    // ─── Safety net: force-close multiplier positions held too long ─────────
+    // ─── Safety net: force-close any position held past the hold window ─────
     // A multiplier position only closes on its own via its own stop-loss/
-    // take-profit — there is no other expiry, unlike a binary contract which
-    // always settles by its configured duration. If price never reaches
-    // either level, this is the only thing that ever closes it.
+    // take-profit — there is no other expiry, so without this it can run
+    // indefinitely. A binary does always settle by its configured duration,
+    // but that duration is Deriv's to dictate: when it refuses the preferred
+    // 1 day and we fall back to the verified 3 days, the contract would
+    // otherwise outlive the intended 4h–1day holding window by days. Both
+    // kinds are bought back here once they exceed maxPositionHoldHours.
     const [cfg] = await db
       .select({ maxPositionHoldHours: botConfigTable.maxPositionHoldHours })
       .from(botConfigTable)
@@ -127,7 +133,6 @@ async function runCycle(): Promise<void> {
     const settledIds = new Set(settled.map((s) => s.contractId));
     const staleTrades = tradesToCheck.filter((entry) => {
       if (settledIds.has(entry.contractId)) return false;
-      if (getContractType(entry.trade.annotations) !== "multiplier") return false;
       const ageHours = (now - entry.trade.openedAt.getTime()) / 3_600_000;
       return ageHours > maxHoldHours;
     });
@@ -138,12 +143,20 @@ async function runCycle(): Promise<void> {
         const token = await decryptSecret(conn.credential);
         const result = await sellDerivTrade(token, conn.environment === "real" ? "real" : "demo", entry.contractId);
         if (!result.ok) {
-          logger.warn(
-            { tradeId: entry.trade.id, contractId: entry.contractId, message: result.message, ambiguous: result.ambiguous },
-            "contract-monitor: safety-net force-close failed; will retry next cycle",
-          );
+          // Deriv does not always offer a buyback (notably close to a binary's
+          // expiry). Retrying every cycle is correct, but logging it every
+          // cycle is noise, so each contract is only reported once — a binary
+          // that can never be sold still settles on its own at expiry.
+          if (!forceCloseFailureLogged.has(entry.contractId)) {
+            forceCloseFailureLogged.add(entry.contractId);
+            logger.warn(
+              { tradeId: entry.trade.id, contractId: entry.contractId, message: result.message, ambiguous: result.ambiguous },
+              "contract-monitor: safety-net force-close failed; will retry each cycle (logged once per contract)",
+            );
+          }
           continue;
         }
+        forceCloseFailureLogged.delete(entry.contractId);
         const pnl = result.soldFor != null ? result.soldFor - parseFloat(entry.trade.lotSize ?? "10") : null;
         const [closedTrade] = await db
           .update(tradesTable)
@@ -151,8 +164,11 @@ async function runCycle(): Promise<void> {
           .where(and(eq(tradesTable.id, entry.trade.id), eq(tradesTable.status, "open")))
           .returning();
         if (closedTrade) logger.warn(
-          { tradeId: entry.trade.id, contractId: entry.contractId, maxHoldHours, soldFor: result.soldFor },
-          "contract-monitor: force-closed stale multiplier position (max hold time exceeded)",
+          {
+            tradeId: entry.trade.id, contractId: entry.contractId, maxHoldHours, soldFor: result.soldFor,
+            contractType: getContractType(entry.trade.annotations) ?? "unknown",
+          },
+          "contract-monitor: force-closed stale position (max hold time exceeded)",
         );
       } catch (err) {
         logger.error(

@@ -629,6 +629,9 @@ async function dispatchTrade(
   }
 }
 
+/** Past this, the synced equity is treated as unusable: balance-sync polls every 60s and retries a failing connection every 5 min. */
+const EQUITY_MAX_STALE_MS = 10 * 60_000;
+
 async function dispatchTradeUnlocked(
   signal: SignalRow,
   riskPerTradePct: number,
@@ -751,6 +754,20 @@ async function dispatchTradeUnlocked(
     return;
   }
   const equity = Number(linkedAccount.equity);
+  // Every stake is a percentage of this number, so a stale one sizes the trade
+  // against money that may no longer be in the account. balance-sync refreshes
+  // it every 60s, and backs off to a 5-minute retry while a connection is
+  // erroring — so anything older than EQUITY_MAX_STALE_MS means the sync is
+  // broken rather than merely slow, and guessing is worse than not trading.
+  const syncAgeMs = conn.lastSyncAt ? Date.now() - conn.lastSyncAt.getTime() : Number.POSITIVE_INFINITY;
+  if (syncAgeMs > EQUITY_MAX_STALE_MS) {
+    const age = Number.isFinite(syncAgeMs) ? `${Math.round(syncAgeMs / 60_000)} min ago` : "never";
+    const reason = `Account equity was last synced ${age}; refusing to size a trade against a stale balance`;
+    await recordGeneratedReason(signal.id, reason);
+    recordRejection({ symbol: signal.symbol, stage: "sizing", reason, metrics: { equity, syncAgeMin: Number.isFinite(syncAgeMs) ? Math.round(syncAgeMs / 60_000) : -1 } });
+    logger.warn({ symbol: signal.symbol, equity, syncAgeMs, broker: conn.label }, reason);
+    return;
+  }
   const [openRow] = await db
     .select({ count: sql<number>`count(*)::int` })
     .from(tradesTable)

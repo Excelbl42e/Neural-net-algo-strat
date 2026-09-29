@@ -1,5 +1,25 @@
 # Changes in this build (vs. your Replit export)
 
+## Update: keep the hold inside a day, size against live equity, drop the threshold to 0.70
+
+Four things, all from the same question: *if profit grows do stakes grow, and is anything holding for more than a day?*
+
+**Stakes do grow with equity — and now they refuse to grow against a stale number.** Every stake is a percentage of `accounts.equity`, read fresh from the database at the moment the order is sized, and `balance-sync` overwrites that row from Deriv every 60 seconds. So a win raises the next stake without any action from you, and a loss lowers it. The gap was the failure case: if the sync breaks, the figure freezes, and sizing keeps working off money that may no longer be there. The worker now refuses to size a trade when the broker connection has not synced in 10 minutes (the poller runs every 60s and retries a failing connection every 5 min, so 10 minutes means broken, not slow) and records it as a visible rejection instead of trading on a guess.
+
+**Binaries no longer run for three days.** Two separate problems, both fixed:
+
+- The binary duration was a hardcoded 3 days, because 3 days was the only value ever confirmed to work live (a 5-minute attempt came back `TradingDurationNotAllowed`). It now *asks* Deriv first: a quote-only `proposal` at 1 day, which never creates a contract, and only falls back to the verified 3 days if Deriv actually refuses. The answer is cached per symbol for 6 hours, so it costs one extra round-trip, not one per trade, and the chosen duration and the reason for it are recorded on the trade rather than left silent.
+- The `maxPositionHoldHours` force-close **explicitly skipped binaries** — the filter was `contractType !== "multiplier"`, so a binary was exempt from the one control meant to bound holding time. That was the real conflict with the 4h–1day target: a fallback 3-day binary would have run for three days regardless of the setting. Both contract types are now bought back at that age. Where Deriv declines a buyback the contract still settles at expiry, and that is logged once per contract instead of every cycle.
+
+Net effect at the 36-hour setting: a binary resolves within 24 hours where Deriv allows a 1-day contract, and within 36 hours where it does not.
+
+**Minimum confidence: 0.78 → 0.70.** The expert judge replaced the LLM judge and produces confidence on a different scale (0.35 base, plus up to 0.40 from confluence and 0.25 from structure). A saved 0.78 was calibrated against the old scale and is far stricter than intended on the new one — on a small account that mostly means no trades at all. A one-time boot migration rewrites it, guarded by a marker row so it runs exactly once and only touches a row still holding the old default. Verified against Postgres: it moves 0.780 → 0.700 on the first boot, and if you later set 0.78 deliberately it is left alone.
+
+**Seven unit tests were silently not running.** The `forex-readiness` suite died on import with `ERR_MODULE_NOT_FOUND` — the source uses bundler-style `.js` specifiers that do not exist on disk when Node runs the `.ts` directly — and the failure was easy to read as one flaky file. A small resolution hook maps `./x.js` to `./x.ts` only when the `.js` genuinely is not there, and one constructor parameter property that strip-only mode rejects was written out longhand. **32 tests pass**, up from 24 passing and 1 dead file. `pnpm test` in `artifacts/api-server` now runs them.
+
+Verified live: server booted against Postgres, the migration applied cleanly at boot with no warnings, `/api/config` reports `minConfidence: 0.7`, and the configuration page renders with no console errors and no horizontal overflow at 1440px.
+
+
 ## Update: warn about the $1.00 multiplier boundary before it is crossed
 Final pre-funding check, run by walking a $5 account through the real sizing functions rather than reasoning about them.
 
