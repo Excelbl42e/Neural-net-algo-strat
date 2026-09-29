@@ -30,7 +30,12 @@ export async function getSystemStatus() {
     connected.length ? `${connected.length} connected (${connected.map((c) => c.environment).join(", ")})`
       : conns.length ? `no connected broker; last errors: ${conns.map((c) => c.lastError).filter(Boolean).join(" | ") || "none"}` : "no broker connection added yet");
 
-  push("ai", isAIConfigured() ? "ok" : "degraded", isAIConfigured() ? "AI client configured" : "AI unavailable: integration env vars missing; scans are skipped");
+  // The signal worker's active judge is hardcoded to runExpertJudge() (deterministic,
+  // no LLM) regardless of this — see the "signal_judge" component below for what's
+  // actually driving signals. This just reports whether GPT credentials exist to swap
+  // back to later; their absence is not a problem today, so it's never "degraded".
+  push("ai", isAIConfigured() ? "ok" : "idle", isAIConfigured() ? "AI client configured (unused — see signal_judge)" : "Not configured — has no effect while the deterministic judge is active (see signal_judge)");
+  push("signal_judge", "ok", "Deterministic expert-system judge active (no LLM, no API cost): liquidity sweep -> structure break -> FVG. To use GPT instead, see runExpertJudge()'s call site in signal-worker.ts.");
 
   const news = getNewsCalendarStatus();
   push("news_calendar", news.trusted ? "ok" : "degraded",

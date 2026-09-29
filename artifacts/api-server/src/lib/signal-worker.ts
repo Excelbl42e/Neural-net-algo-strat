@@ -20,83 +20,6 @@ import {
   accountsTable,
 } from "@workspace/db";
 
-// ── Self-learning: performance feedback from closed trades ────────────────────
-
-async function buildPerformanceFeedback(): Promise<string | null> {
-  const recentClosed = await db
-    .select({
-      symbol: tradesTable.symbol,
-      pnl: tradesTable.pnl,
-      strategy: tradesTable.strategy,
-      direction: tradesTable.direction,
-    })
-    .from(tradesTable)
-    .where(eq(tradesTable.status, "closed"))
-    .orderBy(desc(tradesTable.closedAt))
-    .limit(20);
-
-  if (recentClosed.length === 0) return null;
-
-  const conceptStats = new Map<string, { wins: number; losses: number; totalPnl: number }>();
-  const symbolStats = new Map<string, { wins: number; losses: number }>();
-
-  for (const trade of recentClosed) {
-    const pnl = parseFloat(trade.pnl ?? "0");
-    const isWin = pnl > 0;
-
-    const sym = symbolStats.get(trade.symbol) ?? { wins: 0, losses: 0 };
-    if (isWin) sym.wins++; else sym.losses++;
-    symbolStats.set(trade.symbol, sym);
-
-    const concepts = trade.strategy.split(",").map((c) => c.trim()).filter(Boolean);
-    for (const concept of concepts) {
-      const stat = conceptStats.get(concept) ?? { wins: 0, losses: 0, totalPnl: 0 };
-      if (isWin) stat.wins++; else stat.losses++;
-      stat.totalPnl += pnl;
-      conceptStats.set(concept, stat);
-    }
-  }
-
-  const totalTrades = recentClosed.length;
-  const totalWins = recentClosed.filter((t) => parseFloat(t.pnl ?? "0") > 0).length;
-  const totalPnl = recentClosed.reduce((sum, t) => sum + parseFloat(t.pnl ?? "0"), 0);
-
-  const conceptLines = [...conceptStats.entries()]
-    .sort((a, b) => {
-      const wrA = a[1].wins / (a[1].wins + a[1].losses);
-      const wrB = b[1].wins / (b[1].wins + b[1].losses);
-      return wrB - wrA;
-    })
-    .map(([name, stat]) => {
-      const t = stat.wins + stat.losses;
-      const wr = ((stat.wins / t) * 100).toFixed(0);
-      const sign = stat.totalPnl >= 0 ? "+" : "";
-      return `  ${name}: ${wr}% win rate (${stat.wins}W/${stat.losses}L, P&L ${sign}${stat.totalPnl.toFixed(2)})`;
-    });
-
-  const symbolLines = [...symbolStats.entries()]
-    .sort((a, b) => {
-      const wrA = a[1].wins / (a[1].wins + a[1].losses);
-      const wrB = b[1].wins / (b[1].wins + b[1].losses);
-      return wrB - wrA;
-    })
-    .map(([sym, stat]) => {
-      const t = stat.wins + stat.losses;
-      const wr = ((stat.wins / t) * 100).toFixed(0);
-      return `  ${sym}: ${wr}% win rate (${stat.wins}W/${stat.losses}L)`;
-    });
-
-  const pnlSign = totalPnl >= 0 ? "+" : "";
-  return [
-    `Recent performance (last ${totalTrades} closed trades): ${totalWins}W/${totalTrades - totalWins}L, total P&L ${pnlSign}${totalPnl.toFixed(2)} USD`,
-    "",
-    "ICT concept win rates — PRIORITISE high-performing concepts, AVOID low-performing ones:",
-    ...conceptLines,
-    "",
-    "Symbol win rates — FAVOUR instruments that have been working:",
-    ...symbolLines,
-  ].join("\n");
-}
 import { getOpenAI } from "./ai-client.js";
 import { logger } from "./logger.js";
 import { placeDerivTrade, getIndicativeCostPct } from "./deriv.js";
@@ -110,10 +33,11 @@ import { decryptSecret } from "./crypto.js";
 import { getSecret } from "./secrets.js";
 import { recordRejection } from "./rejections.js";
 import {
-  atrPercentile, geometryGate, portfolioGate, preTradeGate, premiumDiscount, verifyClaims, DEFAULT_THRESHOLDS,
-  type OHLC, type QuantThresholds,
+  atrPercentile, conceptKey, geometryGate, portfolioGate, preTradeGate, premiumDiscount, runExpertJudge,
+  verifyClaims, DEFAULT_THRESHOLDS,
+  type AnalysisLevel, type AnalysisResult, type OHLC, type QuantThresholds,
 } from "./quant-filters.js";
-import { STRATEGY_LIBRARY, strategySummaryList, quantKnowledgeContext } from "./strategy-library.js";
+import { STRATEGY_LIBRARY } from "./strategy-library.js";
 
 // M30 entry timing and 4h–1 day holding do not justify a paid GPT scan
 // every five minutes; 30 minutes also lines up with each new M30 candle
@@ -145,29 +69,6 @@ function boundedEnvNumber(name: string, fallback: number, min: number, max: numb
     return fallback;
   }
   return value;
-}
-
-function conceptKey(value: string): string {
-  const normalized = value
-    .replace(/\([^)]*\)/g, " ")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim()
-    .replace(/\s+/g, " ");
-  const aliases: Record<string, string> = {
-    fvg: "fair value gap",
-    "fair value gaps": "fair value gap",
-    ob: "order block",
-    "order blocks": "order block",
-    "liquidity sweeps": "liquidity sweep",
-    "stop hunt": "liquidity sweep",
-    "stop hunts": "liquidity sweep",
-    mss: "market structure shift",
-    choch: "change of character",
-    ote: "optimal trade entry",
-    "premium discount": "premium and discount",
-  };
-  return aliases[normalized] ?? normalized;
 }
 
 function mentionsSuppressedConcept(returnedConcepts: string, suppressed: Set<string>): boolean {
@@ -207,28 +108,6 @@ export function getWorkerStatus() {
 }
 
 // ── Main analysis call ───────────────────────────────────────────────────────
-
-interface AnalysisLevel {
-  kind: "fvg" | "ob" | "sweep" | "level";
-  low: number;
-  high: number;
-  label?: string;
-}
-interface AnalysisResult {
-  direction: "buy" | "sell";
-  confidence: number;
-  entryZone: string;
-  targetZone: string;
-  stopZone: string;
-  entryLow: number | null;
-  entryHigh: number | null;
-  stopLevel: number | null;
-  target1Level: number | null;
-  target2Level: number | null;
-  levels: AnalysisLevel[];
-  conceptsDetected: string;
-  reasoning: string;
-}
 
 async function analyzeSymbol(
   symbol: string,
@@ -1213,11 +1092,10 @@ async function runWorkerTick(): Promise<void> {
     const newsEvents = await getNewsEvents();
     const scanTime = new Date();
 
-    // Hardcoded strategy library (see strategy-library.ts) replaces the old
-    // book-ingestion pipeline as the source of both the concept eligibility
-    // list and the supplementary knowledge context below.
-    const knowledgeContext = `${strategySummaryList()}\n\n${quantKnowledgeContext()}`;
-
+    // Hardcoded strategy library (see strategy-library.ts) is the source of
+    // the concept eligibility list below (strategySummaryList()/
+    // quantKnowledgeContext() built the GPT prompt's knowledge context; no
+    // longer built here since runExpertJudge() below needs no prompt text).
     const conceptScoreOptions = {
       threshold: boundedEnvNumber("ICT_CONCEPT_SCORE_THRESHOLD", DEFAULT_CONCEPT_SCORE_THRESHOLD, 0, 1),
       minSamples: Math.floor(boundedEnvNumber("ICT_CONCEPT_MIN_SAMPLES", DEFAULT_CONCEPT_MIN_SAMPLES, 1, 10_000)),
@@ -1254,11 +1132,6 @@ async function runWorkerTick(): Promise<void> {
       return;
     }
 
-    // Build performance feedback from closed trade history (self-learning)
-    const performanceFeedback = await buildPerformanceFeedback();
-    if (performanceFeedback) {
-      logger.info("Signal worker: performance feedback loaded from closed trades");
-    }
 
     logger.info(
       { instruments, concepts: eligibleConcepts.length, suppressedConcepts: suppressedConcepts.size, autotradeMode: config.autotradeMode, enabled: config.enabled },
@@ -1422,69 +1295,6 @@ async function runWorkerTick(): Promise<void> {
         continue;
       }
 
-      /**
-       * HFT-derived statistical annotation function.
-       * Applies quantitative displacement + accumulation detection from HFT microstructure theory:
-       *  - "displacement": candle body > 2× the 20-period average body → institutional momentum candle
-       *  - "accumulation": body < 0.4× average for 3+ consecutive candles → liquidity building up
-       *  - "algo_candle": displacement candle that also has a directional wick > body → swept liquidity + left FVG
-       */
-      function annotateCandles(
-        candles: { openTime: Date; open: string; high: string; low: string; close: string }[],
-      ): string {
-        if (candles.length === 0) return "";
-        const sorted = [...candles].reverse();
-        const bodies = sorted.map((c) => Math.abs(parseFloat(c.close) - parseFloat(c.open)));
-        const avgBody = bodies.reduce((s, b) => s + b, 0) / bodies.length || 1;
-
-        return sorted.map((c, i) => {
-          const o = parseFloat(c.open);
-          const h = parseFloat(c.high);
-          const l = parseFloat(c.low);
-          const cl = parseFloat(c.close);
-          const body = Math.abs(cl - o);
-          const upperWick = h - Math.max(o, cl);
-          const lowerWick = Math.min(o, cl) - l;
-          const isBull = cl > o;
-
-          const flags: string[] = [];
-
-          // Displacement: body > 2× avg → institutional momentum (HFT momentum signal)
-          if (body > avgBody * 2) {
-            flags.push("DISPLACEMENT");
-            // Algo Candle: displacement + wick on the swept side > 0.5× body
-            const sweptWick = isBull ? lowerWick : upperWick;
-            if (sweptWick > body * 0.5) flags.push("ALGO_CANDLE");
-          }
-
-          // Accumulation: body < 0.4× avg on this candle — flag runs if 2+ consecutive
-          if (body < avgBody * 0.4) {
-            const prevBody = i > 0 ? bodies[i - 1] : avgBody;
-            if (prevBody < avgBody * 0.4) flags.push("ACCUMULATION");
-          }
-
-          const dateStr = c.openTime instanceof Date
-            ? c.openTime.toISOString()
-            : new Date(c.openTime).toISOString();
-          const tag = flags.length > 0 ? ` [${flags.join(",")}]` : "";
-          return `${dateStr} UTC O:${c.open} H:${c.high} L:${c.low} C:${c.close}${tag}`;
-        }).join("\n");
-      }
-
-      const candleContext = (h4Candles.length > 0 || h1Candles.length > 0 || m30Candles.length > 0)
-        ? [
-            h4Candles.length > 0
-              ? `H4 candles (oldest→newest) — directional-bias structure:\n${annotateCandles(h4Candles)}`
-              : "",
-            h1Candles.length > 0
-              ? `\nH1 candles (oldest→newest) — higher-timeframe structure:\n${annotateCandles(h1Candles)}`
-              : "",
-            m30Candles.length > 0
-              ? `\nM30 candles (oldest→newest) — entry timing:\n${annotateCandles(m30Candles)}`
-              : "",
-          ].filter(Boolean).join("\n")
-        : null;
-
       // ── Quant pre-filter (deterministic, before any paid GPT call) ─────────
       const loadAsc = async (tf: string, n: number): Promise<OHLC[]> => {
         const rows = await db
@@ -1504,26 +1314,12 @@ async function runWorkerTick(): Promise<void> {
         continue;
       }
       const h1Atr = atrPercentile(h1Long)!;
-      const pdNow = premiumDiscount(h1Long, lastTick.price, 2, "buy");
-      const measuredFacts = [
-        "MEASURED FACTS (computed in code from the candles above; treat as ground truth):",
-        `H1 ATR(14)=${h1Atr.atr.toFixed(5)} (percentile ${h1Atr.percentile.toFixed(0)} of own last ${h1Atr.samples} bars)`,
-        `H1 Kaufman efficiency ratio(10)=${Number(pre.metrics.efficiencyRatio).toFixed(3)} (0=chop, 1=clean trend)`,
-        pdNow ? `H1 swing range ${pdNow.rangeLow}–${pdNow.rangeHigh}; price is in ${pdNow.zone} (position ${(pdNow.position * 100).toFixed(0)}%). Buys belong in discount, sells in premium.` : "H1 swing range: not enough confirmed swings",
-        `Signals need RR >= ${thresholds.minRiskReward} and a stop >= ${thresholds.minStopAtr} ATR. Every FVG or sweep you cite must exist in the candles or the signal is discarded.`,
-      ].join("\n");
-      const candleContextWithFacts = candleContext ? `${candleContext}\n\n${measuredFacts}` : measuredFacts;
+      const h4Asc: OHLC[] = [...h4Candles].reverse().map((r) => ({ open: +r.open, high: +r.high, low: +r.low, close: +r.close }));
 
-      const result = await analyzeSymbol(
-        symbol,
-        eligibleConcepts,
-        suppressedConcepts,
-        knowledgeContext,
-        minConfidence,
-        lastTick.price,
-        candleContextWithFacts,
-        performanceFeedback,
-      );
+      // No AI budget: analyzeSymbol() (GPT) is left in this file, unused.
+      // runExpertJudge() is the active, deterministic, zero-cost replacement —
+      // see its own comment above for what it does and how to swap GPT back.
+      const result = runExpertJudge(h1Long, m30Long, h4Asc, minConfidence, suppressedConcepts);
       if (!result) continue;
 
       // ── Hard structural filters: reject small-timeframe scalps ─────────────
@@ -1549,7 +1345,6 @@ async function runWorkerTick(): Promise<void> {
         continue;
       }
       const m30Atr = atrPercentile(m30Long)?.atr ?? h1Atr.atr / 2;
-      const h4Asc: OHLC[] = [...h4Candles].reverse().map((r) => ({ open: +r.open, high: +r.high, low: +r.low, close: +r.close }));
       const h4Atr = atrPercentile(h4Asc)?.atr ?? h1Atr.atr * 2;
       const claimFailures: string[] = [];
       for (const lvl of result.levels) {

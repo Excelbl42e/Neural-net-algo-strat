@@ -256,3 +256,162 @@ export function portfolioGate(
   }
   return { ok: true, metrics };
 }
+
+// ── Deterministic expert-system judge (no LLM, no API cost) ──────────────────
+// Implements the single highest-conviction ICT setup the GPT-based prompt
+// this replaced already treated as primary — liquidity sweep -> structure
+// break -> FVG entry, i.e. the "2022 Entry Model" / AMD cycle (see
+// strategy-library.ts ranks 4, 5, 8, 19) — using the detection primitives
+// above, which originally existed only to verify an LLM's claims.
+
+export function conceptKey(value: string): string {
+  const normalized = value
+    .replace(/\([^)]*\)/g, " ")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .replace(/\s+/g, " ");
+  const aliases: Record<string, string> = {
+    fvg: "fair value gap",
+    "fair value gaps": "fair value gap",
+    ob: "order block",
+    "order blocks": "order block",
+    "liquidity sweeps": "liquidity sweep",
+    "stop hunt": "liquidity sweep",
+    "stop hunts": "liquidity sweep",
+    mss: "market structure shift",
+    choch: "change of character",
+    ote: "optimal trade entry",
+    "premium discount": "premium and discount",
+  };
+  return aliases[normalized] ?? normalized;
+}
+
+export interface AnalysisLevel {
+  kind: "fvg" | "ob" | "sweep" | "level";
+  low: number;
+  high: number;
+  label?: string;
+}
+export interface AnalysisResult {
+  direction: "buy" | "sell";
+  confidence: number;
+  entryZone: string;
+  targetZone: string;
+  stopZone: string;
+  entryLow: number | null;
+  entryHigh: number | null;
+  stopLevel: number | null;
+  target1Level: number | null;
+  target2Level: number | null;
+  levels: AnalysisLevel[];
+  conceptsDetected: string;
+  reasoning: string;
+}
+
+export function runExpertJudge(
+  h1: OHLC[],
+  m30: OHLC[],
+  h4: OHLC[],
+  minConfidence: number,
+  suppressedConcepts: Set<string>,
+): AnalysisResult | null {
+  // 1) HTF bias from H1 swing structure: last two confirmed highs AND lows
+  // both rising = bullish, both falling = bearish, anything else = no bias.
+  const biasFromSwings = (candles: OHLC[]): "buy" | "sell" | null => {
+    const sw = swingPoints(candles, 2);
+    const highs = sw.filter((s) => s.kind === "high").slice(-2);
+    const lows = sw.filter((s) => s.kind === "low").slice(-2);
+    if (highs.length < 2 || lows.length < 2) return null;
+    const risingHighs = highs[1]!.price > highs[0]!.price;
+    const risingLows = lows[1]!.price > lows[0]!.price;
+    if (risingHighs && risingLows) return "buy";
+    if (!risingHighs && !risingLows) return "sell";
+    return null;
+  };
+  const bias = biasFromSwings(h1);
+  if (!bias) return null;
+  // Multi-timeframe alignment (strategy-library rank 30): an H4 bias that
+  // actively disagrees kills the setup; no clear H4 bias is fine (H1 leads).
+  const h4Bias = biasFromSwings(h4);
+  if (h4Bias && h4Bias !== bias) return null;
+
+  // 2) M30 entry: most recent liquidity sweep opposite the bias, a structure
+  // break back in the bias direction, then an FVG in that direction that
+  // hasn't fully filled since it formed.
+  const m30Swings = swingPoints(m30, 2);
+  const wantedSweepSide = bias === "buy" ? "sell_side" : "buy_side";
+  const recentSweeps = findSweeps(m30, 2).filter((s) => s.side === wantedSweepSide && s.index >= m30.length - 20);
+  if (recentSweeps.length === 0) return null;
+  const sweep = recentSweeps[recentSweeps.length - 1]!;
+
+  const priorSwing = m30Swings
+    .filter((s) => s.index < sweep.index && s.kind === (bias === "buy" ? "high" : "low"))
+    .pop();
+  if (!priorSwing) return null;
+  const brokeStructure = m30.slice(sweep.index + 1).some((k) =>
+    bias === "buy" ? k.close > priorSwing.price : k.close < priorSwing.price
+  );
+  if (!brokeStructure) return null;
+
+  const wantedFvgKind = bias === "buy" ? "bullish" : "bearish";
+  const candidateFvgs = findFvgs(m30).filter((f) => f.kind === wantedFvgKind && f.index >= sweep.index);
+  if (candidateFvgs.length === 0) return null;
+  const fvg = candidateFvgs[candidateFvgs.length - 1]!;
+  const lastClose = m30[m30.length - 1]!.close;
+  const fvgFilled = bias === "buy" ? lastClose < fvg.low : lastClose > fvg.high;
+  if (fvgFilled) return null;
+
+  // 3) Levels: entry at the FVG's consequent-encroachment midpoint, stop
+  // beyond the sweep extreme, target at the next real opposing M30 swing.
+  const entry = (fvg.low + fvg.high) / 2;
+  const atr = atrPercentile(m30)?.atr ?? (fvg.high - fvg.low);
+  const stopBuffer = 0.1 * atr;
+  const stop = bias === "buy" ? sweep.level - stopBuffer : sweep.level + stopBuffer;
+  const opposingSwings = m30Swings.filter((s) =>
+    bias === "buy" ? (s.kind === "high" && s.price > entry) : (s.kind === "low" && s.price < entry)
+  );
+  if (opposingSwings.length === 0) return null;
+  const target = bias === "buy"
+    ? Math.min(...opposingSwings.map((s) => s.price))
+    : Math.max(...opposingSwings.map((s) => s.price));
+
+  // 4) Confidence from confluence (no LLM judgment): base + measurable bonuses.
+  const hasDisplacement = findDisplacements(m30).some(
+    (d) => d.index >= sweep.index && d.direction === (bias === "buy" ? "up" : "down"),
+  );
+  const pd = premiumDiscount(m30, entry, 2, bias);
+  const inOte = pd != null && entry >= Math.min(pd.oteLow, pd.oteHigh) && entry <= Math.max(pd.oteLow, pd.oteHigh);
+  const er = efficiencyRatio(h1.map((k) => k.close), 10) ?? 0;
+  let confidence = 0.6;
+  if (hasDisplacement) confidence += 0.1;
+  if (inOte) confidence += 0.1;
+  if (er >= 0.3) confidence += 0.1;
+  if (h4Bias === bias) confidence += 0.05;
+  confidence = Math.min(0.95, confidence);
+  if (confidence < minConfidence) return null;
+
+  const concepts = ["Liquidity Sweep", "Market Structure Shift (MSS)", "Fair Value Gap (FVG)", "2022 Entry Model"];
+  if (concepts.some((c) => suppressedConcepts.has(conceptKey(c)))) return null;
+
+  const levels: AnalysisLevel[] = [
+    { kind: "sweep", low: sweep.level, high: sweep.level, label: "liquidity sweep" },
+    { kind: "fvg", low: fvg.low, high: fvg.high, label: "entry FVG" },
+  ];
+
+  return {
+    direction: bias,
+    confidence,
+    entryZone: entry.toFixed(5),
+    targetZone: target.toFixed(5),
+    stopZone: stop.toFixed(5),
+    entryLow: entry,
+    entryHigh: entry,
+    stopLevel: stop,
+    target1Level: target,
+    target2Level: null,
+    levels,
+    conceptsDetected: concepts.join(", "),
+    reasoning: `Deterministic expert-system signal (no AI): ${bias} M30 ${wantedSweepSide.replace("_", "-")} liquidity sweep at ${sweep.level.toFixed(5)}, structure break confirmed, entry at ${wantedFvgKind} FVG midpoint ${entry.toFixed(5)}, stop beyond the sweep, target at the next opposing M30 swing ${target.toFixed(5)}.`,
+  };
+}

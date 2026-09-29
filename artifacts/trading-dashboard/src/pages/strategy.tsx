@@ -20,9 +20,11 @@ export default function StrategyPage() {
         <div className="text-primary text-[10px] uppercase tracking-[.24em] font-mono-numbers mb-2">Strategy Library</div>
         <h1 className="text-2xl font-bold">Hardcoded ICT + quant/TA strategies</h1>
         <p className="text-sm text-muted-foreground mt-2 max-w-2xl">
-          Curated once in code, not scanned from uploaded books. Each concept below feeds the signal worker's GPT prompt and is
-          individually gated by real closed-trade performance — a concept with a poor historical win rate is automatically
-          suppressed from future signals until its sample-adjusted score recovers.
+          Curated once in code, not scanned from uploaded books. Every concept below is individually gated by real closed-trade
+          performance — a concept with a poor historical win rate is automatically suppressed from future signals until its
+          sample-adjusted score recovers. While no AI budget is configured, the signal worker runs a deterministic expert-system
+          judge instead of GPT, which only ever fires on 4 of these entries (Liquidity Sweep, MSS, FVG, 2022 Entry Model) — the
+          rest stay listed and scored, ready for when GPT is reconnected.
         </p>
       </header>
 
