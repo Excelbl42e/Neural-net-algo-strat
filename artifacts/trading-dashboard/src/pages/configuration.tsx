@@ -179,7 +179,7 @@ export default function ConfigurationPage() {
           </div>
           <div className="flex items-start gap-2 rounded-lg border border-border p-3 text-[11px] text-muted-foreground">
             <TrendingUp className="w-3.5 h-3.5 mt-0.5 shrink-0 text-primary" />
-            <span>Multiplier max loss equals the stake, so stake is the true risk. Not a quote; the daily-loss budget can lower it further at order time.</span>
+            <span>Multiplier max loss equals the stake, so stake is the true risk. Not a quote; the daily-loss budget can lower it further at order time. When the stake falls below Deriv's $1 multiplier minimum, the trade is placed as a binary option instead — with a fixed 3-day expiry, separate from the strategy's usual 4-hour to 1-day target hold, and not affected by the "Force-close after" setting below (that only applies to multipliers).</span>
           </div>
         </CardContent>
       </Card>
