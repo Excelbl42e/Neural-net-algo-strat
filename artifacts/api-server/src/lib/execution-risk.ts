@@ -120,6 +120,8 @@ export interface FundablePositionsResult {
   configured: number;
   /** Stake of each position that would actually fit, in order. */
   stakes: number[];
+  /** Per stake, whether it was raised to $1.00 to keep the order off the binary path. */
+  lifted: boolean[];
   /** Why the count stopped where it did, when it is short of `configured`. */
   limitedBy: "configured" | "daily_loss_budget" | "risk_sizing" | "equity";
 }
@@ -139,13 +141,17 @@ export interface FundablePositionsResult {
 export function maxFundablePositions(input: FundablePositionsInput): FundablePositionsResult {
   const configured = Math.max(0, Math.floor(input.maxConcurrentPositions));
   const stakes: number[] = [];
+  const lifted: boolean[] = [];
   let reserved = 0;
   let limitedBy: FundablePositionsResult["limitedBy"] = "configured";
+  // The band tapers both percentages before anything else sees them, exactly as
+  // the dispatcher does, so the preview cannot claim a stake the worker refuses.
+  const eff = effectiveRiskPcts(input.equity, input.riskPerTradePct, input.maxDailyLossPct);
 
   while (stakes.length < configured) {
     const sizing = calculateCappedStake({
       equity: input.equity,
-      riskPerTradePct: input.riskPerTradePct,
+      riskPerTradePct: eff.riskPct,
       maxConcurrentPositions: input.maxConcurrentPositions,
       openPositions: stakes.length,
       smallAccountMaxRiskPct: input.smallAccountMaxRiskPct,
@@ -157,16 +163,231 @@ export function maxFundablePositions(input: FundablePositionsInput): FundablePos
     }
     const daily = calculateDailyLossCappedStake({
       equity: input.equity,
-      maxDailyLossPct: input.maxDailyLossPct,
+      maxDailyLossPct: eff.dailyLossPct,
       realizedPnlToday: 0,
       openWorstCaseStake: reserved,
       currentStakeCap: sizing.stake,
       minStake: input.minStake,
     });
     if (!daily.ok) { limitedBy = "daily_loss_budget"; break; }
-    stakes.push(daily.stake);
-    reserved += daily.stake;
+    // The floor lift comes last, after both caps, because the daily-loss guard
+    // can shrink a stake back under $1.00 and undo it otherwise.
+    const floored = applyMultiplierFloor({ stake: daily.stake, equity: input.equity });
+    stakes.push(floored.stake);
+    lifted.push(floored.lifted);
+    reserved += floored.stake;
   }
 
-  return { fundable: stakes.length, configured, stakes, limitedBy };
+  return { fundable: stakes.length, configured, stakes, lifted, limitedBy };
+}
+
+export interface StakePlanRow {
+  equity: number;
+  band: RiskBand;
+  /** Risk-per-trade actually applied here, after the band ceiling. */
+  riskPct: number;
+  dailyLossPct: number;
+  riskCappedByBand: boolean;
+  stake: number | null;
+  contract: "multiplier" | "binary" | null;
+  /** True when the stake was raised to $1.00 to keep the order off the binary path. */
+  lifted: boolean;
+  typicalLoss: number | null;
+  worstCaseLoss: number | null;
+  /** Worst case as a share of the balance — the number that decides whether a losing run ends the account. */
+  worstCasePctOfEquity: number | null;
+  fundable: number;
+  limitedBy: FundablePositionsResult["limitedBy"];
+  /** Set when no trade is possible at this balance at all. */
+  blocked: string | null;
+}
+
+/**
+ * One row of the stake ladder: everything that follows from a balance.
+ *
+ * This exists so the number a person reads and the number the worker sends are
+ * produced by the same code. It calls the real sizing functions rather than
+ * restating their arithmetic, so the two cannot drift apart when one is edited.
+ */
+export function describeStakePlan(input: FundablePositionsInput): StakePlanRow {
+  const eff = effectiveRiskPcts(input.equity, input.riskPerTradePct, input.maxDailyLossPct);
+  const fit = maxFundablePositions(input);
+  const stake = fit.stakes[0] ?? null;
+  if (stake == null) {
+    return {
+      equity: input.equity, band: eff.band, riskPct: eff.riskPct, dailyLossPct: eff.dailyLossPct,
+      riskCappedByBand: eff.riskCappedByBand, stake: null, contract: null, lifted: false,
+      typicalLoss: null, worstCaseLoss: null, worstCasePctOfEquity: null,
+      fundable: 0, limitedBy: fit.limitedBy,
+      blocked: fit.limitedBy === "equity"
+        ? `balance is under Deriv's $${(input.minStake ?? DERIV_MIN_STAKE).toFixed(2)} minimum stake`
+        : "no stake survives the risk and daily-loss caps at this balance",
+    };
+  }
+  const contract: "multiplier" | "binary" = stake >= MULTIPLIER_MIN_STAKE ? "multiplier" : "binary";
+  const worst = worstCaseLoss(stake, contract);
+  return {
+    equity: input.equity, band: eff.band, riskPct: eff.riskPct, dailyLossPct: eff.dailyLossPct,
+    riskCappedByBand: eff.riskCappedByBand, stake, contract,
+    lifted: fit.lifted[0] ?? false,
+    typicalLoss: typicalLoss(stake, contract),
+    worstCaseLoss: worst,
+    worstCasePctOfEquity: Number(((worst / input.equity) * 100).toFixed(1)),
+    fundable: fit.fundable, limitedBy: fit.limitedBy, blocked: null,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Balance-adaptive risk
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Below this stake Deriv will not sell a multiplier, so the order becomes a binary. */
+export const MULTIPLIER_MIN_STAKE = 1;
+/** The attached stop-loss is capped here so the position exits before Deriv's 100% auto stop-out. */
+export const MULTIPLIER_STOP_CAP_PCT = 0.8;
+/** Deriv's floor on a `limit_order.stop_loss` amount. On a $1.00 stake this, not the strategy's 1-ATR stop, is what actually binds. */
+export const MULTIPLIER_MIN_STOP_USD = 0.5;
+
+export type RiskBand = "floor" | "build" | "grow" | "steady" | "mature";
+
+export interface RiskBandRule {
+  band: RiskBand;
+  /** Inclusive lower bound of the band, in USD. */
+  from: number;
+  /** Ceiling on risk-per-trade in this band. The configured setting still applies; the lower of the two wins. */
+  riskPct: number;
+  /** Ceiling on the daily-loss budget in this band, same rule. */
+  dailyLossPct: number;
+  why: string;
+}
+
+/**
+ * How much of the account a single trade may risk, as a function of balance.
+ *
+ * A flat percentage cannot serve both ends of this account's life. At $5 a
+ * 20% risk is not aggression, it is the *minimum* that reaches Deriv's $1.00
+ * multiplier stake — anything less drops to a binary, which has no stop-loss
+ * at all and is therefore strictly more dangerous. At $500 that same 20% is
+ * a $100 swing per trade and is how an account dies. So the percentage is a
+ * ceiling that steps down as the balance grows, and the bands are chosen so
+ * that no step ever pushes the stake back under $1.00:
+ *
+ *   $12 x 10% = $1.20 · $50 x 5% = $2.50 · $200 x 2% = $4.00 · $1000 x 1% = $10
+ *
+ * This is the taper a person is supposed to remember to apply by hand as the
+ * account grows, made automatic so forgetting is not possible.
+ */
+export const RISK_BANDS: readonly RiskBandRule[] = [
+  { band: "floor",  from: 0,    riskPct: 20, dailyLossPct: 20, why: "clearing Deriv's $1.00 multiplier minimum is the binding constraint, not risk appetite" },
+  { band: "build",  from: 12,   riskPct: 10, dailyLossPct: 15, why: "the $1.00 floor is comfortably cleared, so risk starts coming down" },
+  { band: "grow",   from: 50,   riskPct: 5,  dailyLossPct: 10, why: "large enough that a losing run, not a single trade, is the real threat" },
+  { band: "steady", from: 200,  riskPct: 2,  dailyLossPct: 6,  why: "conventional fixed-fractional territory" },
+  { band: "mature", from: 1000, riskPct: 1,  dailyLossPct: 4,  why: "capital preservation outranks growth rate" },
+] as const;
+
+/** The band a balance falls into. Always returns a rule; the first band starts at 0. */
+export function riskBandFor(equity: number): RiskBandRule {
+  const safe = Number.isFinite(equity) ? equity : 0;
+  let match = RISK_BANDS[0]!;
+  for (const rule of RISK_BANDS) if (safe >= rule.from) match = rule;
+  return match;
+}
+
+/**
+ * The risk and daily-loss percentages actually used at this balance: the
+ * configured setting, or the band's ceiling, whichever is lower. A deliberately
+ * conservative setting is never overridden upward — the ladder can only tighten.
+ */
+export function effectiveRiskPcts(
+  equity: number, configuredRiskPct: number, configuredDailyLossPct: number,
+): { band: RiskBand; riskPct: number; dailyLossPct: number; riskCappedByBand: boolean; dailyCappedByBand: boolean; why: string } {
+  const rule = riskBandFor(equity);
+  const riskPct = Math.min(configuredRiskPct, rule.riskPct);
+  const dailyLossPct = Math.min(configuredDailyLossPct, rule.dailyLossPct);
+  return {
+    band: rule.band, riskPct, dailyLossPct, why: rule.why,
+    riskCappedByBand: rule.riskPct < configuredRiskPct,
+    dailyCappedByBand: rule.dailyLossPct < configuredDailyLossPct,
+  };
+}
+
+/** The most one trade can lose, by contract type. A binary has no stop, so the answer is the whole stake. */
+export function worstCaseLoss(stake: number, contract: "multiplier" | "binary"): number {
+  return contract === "binary" ? stake : Number((stake * MULTIPLIER_STOP_CAP_PCT).toFixed(2));
+}
+
+/** Roughly one H1 ATR on the forex majors, as a fraction of price. Used only to model a typical stop for display. */
+export const TYPICAL_STOP_FRACTION_OF_PRICE = 0.001;
+
+/**
+ * What a losing trade normally costs.
+ *
+ * A binary loses the whole stake, always. A multiplier loses its attached
+ * stop, which the order builder clamps: never under Deriv's $0.50 minimum,
+ * never over 80% of stake. That $0.50 floor is the part worth knowing — on a
+ * $1.00 stake the strategy's own 1-ATR stop works out near $0.10, but Deriv
+ * will not accept it, so the real loss on a losing floor-sized trade is
+ * $0.50, half the stake. The floor stops binding once the stake passes $5.
+ */
+export function typicalLoss(
+  stake: number,
+  contract: "multiplier" | "binary",
+  multiplier = 100,
+  stopFractionOfPrice = TYPICAL_STOP_FRACTION_OF_PRICE,
+): number {
+  if (contract === "binary") return stake;
+  const modelled = stake * multiplier * stopFractionOfPrice;
+  const clamped = Math.min(stake * MULTIPLIER_STOP_CAP_PCT, Math.max(MULTIPLIER_MIN_STOP_USD, modelled));
+  return Number(clamped.toFixed(2));
+}
+
+export interface MultiplierFloorResult {
+  stake: number;
+  /** True when the stake was raised to $1.00 to keep the order on a multiplier. */
+  lifted: boolean;
+  reason: string;
+}
+
+/**
+ * Raise a sub-$1.00 stake to exactly $1.00 when doing so keeps the order on a
+ * multiplier, because on this broker the smaller stake is the more dangerous one.
+ *
+ * Under $1.00 Deriv will not open a multiplier, so the order falls through to a
+ * binary — and a binary carries no stop-loss, no take-profit and no early exit
+ * worth the name: a loser costs the entire stake. A $1.00 multiplier's loss is
+ * bounded by its attached stop, capped at 80% of stake. So $1.00 as a multiplier
+ * risks at most $0.80, while $0.99 as a binary risks a certain $0.99. Shrinking
+ * the stake here *increases* money at risk, which is the opposite of what a risk
+ * cap is for.
+ *
+ * The lift is therefore allowed only while the lifted worst case stays within
+ * `maxWorstCasePctOfEquity` of the balance — at the default 20% that means
+ * roughly $4.00 and up. Below that the account genuinely cannot afford a
+ * multiplier and the binary path stands, with the tighter strategy gate that
+ * goes with it.
+ */
+export function applyMultiplierFloor(input: {
+  stake: number;
+  equity: number;
+  maxWorstCasePctOfEquity?: number;
+}): MultiplierFloorResult {
+  const { stake, equity } = input;
+  const maxPct = input.maxWorstCasePctOfEquity ?? 20;
+  if (!Number.isFinite(stake) || !Number.isFinite(equity) || equity <= 0) {
+    return { stake, lifted: false, reason: "equity or stake unavailable" };
+  }
+  if (stake >= MULTIPLIER_MIN_STAKE) return { stake, lifted: false, reason: "already a multiplier stake" };
+
+  const liftedWorstCase = worstCaseLoss(MULTIPLIER_MIN_STAKE, "multiplier");
+  const sharePct = (liftedWorstCase / equity) * 100;
+  if (MULTIPLIER_MIN_STAKE > equity || sharePct > maxPct) {
+    return {
+      stake, lifted: false,
+      reason: `balance too small to hold the multiplier floor ($1.00 risks $${liftedWorstCase.toFixed(2)} = ${sharePct.toFixed(1)}% of equity, over the ${maxPct}% limit); trading as a binary`,
+    };
+  }
+  return {
+    stake: MULTIPLIER_MIN_STAKE, lifted: true,
+    reason: `raised $${stake.toFixed(2)} to $1.00 to stay on a multiplier: $1.00 risks at most $${liftedWorstCase.toFixed(2)}, the binary it would otherwise become risks the full $${stake.toFixed(2)}`,
+  };
 }

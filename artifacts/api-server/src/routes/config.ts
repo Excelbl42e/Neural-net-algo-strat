@@ -5,7 +5,7 @@ import { UpdateBotConfigBody } from "@workspace/api-zod";
 import { brokerConnectionsTable } from "@workspace/db";
 import { and } from "drizzle-orm";
 import { getSecret } from "../lib/secrets.js";
-import { calculateCappedStake, maxFundablePositions } from "../lib/execution-risk.js";
+import { describeStakePlan, RISK_BANDS } from "../lib/execution-risk.js";
 
 const router: IRouter = Router();
 
@@ -70,38 +70,60 @@ router.get("/config", async (_req, res): Promise<void> => {
   res.json({ ...DEFAULTS, updatedAt: new Date(0).toISOString() });
 });
 
+// The risk ladder itself, served rather than restated in the UI, so the bands
+// a person reads are the bands the sizer applies.
+router.get("/config/risk-bands", async (_req, res): Promise<void> => {
+  const [row] = await db.select().from(botConfigTable).where(eq(botConfigTable.id, 1));
+  const cfg = row ? serialize(row) : { ...DEFAULTS, updatedAt: "" };
+  res.json({
+    configuredRiskPct: cfg.riskPerTradePct,
+    configuredDailyLossPct: cfg.maxDailyLossPct,
+    bands: RISK_BANDS.map((b, i) => ({
+      band: b.band,
+      from: b.from,
+      to: RISK_BANDS[i + 1]?.from ?? null,
+      riskPct: b.riskPct,
+      dailyLossPct: b.dailyLossPct,
+      why: b.why,
+      appliedRiskPct: Math.min(cfg.riskPerTradePct, b.riskPct),
+      appliedDailyLossPct: Math.min(cfg.maxDailyLossPct, b.dailyLossPct),
+    })),
+  });
+});
+
 // Stake preview from the SAME sizing function the worker uses (no hardcoded balances).
 router.get("/config/stake-preview", async (req, res): Promise<void> => {
   const [row] = await db.select().from(botConfigTable).where(eq(botConfigTable.id, 1));
   const cfg = row ? serialize(row) : { ...DEFAULTS, updatedAt: "" };
   const equities = String(req.query.equity ?? "").split(",").map(Number).filter((n) => Number.isFinite(n) && n > 0).slice(0, 8);
+  // describeStakePlan walks the real sizing path — balance band, both caps and
+  // the multiplier floor — so this table cannot drift from what the worker does.
   const rows = equities.map((equity) => {
-    const r = calculateCappedStake({
-      equity, riskPerTradePct: cfg.riskPerTradePct, maxConcurrentPositions: cfg.maxConcurrentPositions,
-      openPositions: 0, smallAccountMaxRiskPct: (cfg as { smallAccountMaxRiskPct: number }).smallAccountMaxRiskPct,
-    });
-    // The configured concurrent-position cap is aspirational on a small
-    // account: the daily-loss budget reserves each open stake, so the first
-    // trade can consume the whole day's allowance. Report what is actually
-    // fundable alongside the stake, rather than a number the dispatcher
-    // cannot honour.
-    const slots = maxFundablePositions({
+    const plan = describeStakePlan({
       equity,
       riskPerTradePct: cfg.riskPerTradePct,
       maxConcurrentPositions: cfg.maxConcurrentPositions,
       maxDailyLossPct: cfg.maxDailyLossPct,
       smallAccountMaxRiskPct: (cfg as { smallAccountMaxRiskPct: number }).smallAccountMaxRiskPct,
     });
-    return r.ok
-      ? {
-          equity, ok: true, stake: r.stake,
-          riskPct: Number(((r.stake / equity) * 100).toFixed(2)),
-          contract: r.stake < 1 ? "binary (multiplier needs >= $1)" : "multiplier or binary",
-          fundablePositions: slots.fundable,
-          configuredPositions: slots.configured,
-          positionsLimitedBy: slots.limitedBy,
-        }
-      : { equity, ok: false, reason: r.reason, fundablePositions: 0, configuredPositions: slots.configured, positionsLimitedBy: slots.limitedBy };
+    return {
+      equity,
+      ok: plan.stake != null,
+      reason: plan.blocked ?? undefined,
+      stake: plan.stake,
+      band: plan.band,
+      riskPct: plan.riskPct,
+      dailyLossPct: plan.dailyLossPct,
+      riskCappedByBand: plan.riskCappedByBand,
+      lifted: plan.lifted,
+      contract: plan.contract,
+      typicalLoss: plan.typicalLoss,
+      worstCaseLoss: plan.worstCaseLoss,
+      worstCasePctOfEquity: plan.worstCasePctOfEquity,
+      fundablePositions: plan.fundable,
+      configuredPositions: cfg.maxConcurrentPositions,
+      positionsLimitedBy: plan.limitedBy,
+    };
   });
   res.json(rows);
 });

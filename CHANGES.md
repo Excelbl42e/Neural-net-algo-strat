@@ -1,5 +1,48 @@
 # Changes in this build (vs. your Replit export)
 
+## Update: the stake ladder — risk that adapts to the balance
+
+Sizing was one flat percentage applied at every balance, which cannot be right at both ends of this account's life. At $5, 20% is not aggression: it is the *smallest* number that reaches Deriv's $1.00 multiplier stake. At $500 that same 20% is a $100 swing per trade. Your saved settings are now a ceiling, and the balance applies a second one; the lower of the two trades.
+
+| balance | band | risk | stake | contract | typical loss | worst case |
+|---|---|---|---|---|---|---|
+| $3.00 | Floor | 20% | $0.60 | binary | $0.60 | $0.60 (20%) |
+| $4.99 | Floor | 20% | **$1.00** ↑ | multiplier | $0.50 | $0.80 (16%) |
+| $5.00 | Floor | 20% | $1.00 | multiplier | $0.50 | $0.80 (16%) |
+| $20.00 | Build | 10% ↓ | $2.00 | multiplier | $0.50 | $1.60 (8%) |
+| $50.00 | Grow | 5% ↓ | $2.50 | multiplier | $0.50 | $2.00 (4%) |
+| $200.00 | Steady | 2% ↓ | $4.00 | multiplier | $0.50 | $3.20 (1.6%) |
+| $1000.00 | Mature | 1% ↓ | $10.00 | multiplier | $1.00 | $8.00 (0.8%) |
+
+Worst case as a share of the balance falls the whole way down that column — 20% to 0.8%. That property, not any single setting, is what stops a losing run from ending the account, and there is a test asserting it stays true.
+
+### The $4.99 row is the important one
+
+Previously a $0.99 stake was sent as a binary, because Deriv will not open a multiplier under $1.00. That is backwards. A binary has no stop-loss: a loser costs the entire stake. A $1.00 multiplier's loss is bounded by its attached stop, capped at 80% of stake. **So $1.00 as a multiplier risks at most $0.80, while $0.99 as a binary risks a certain $0.99** — shrinking the stake *increased* money at risk, which is the opposite of what a risk cap is for.
+
+A sub-$1.00 stake is now raised to exactly $1.00 whenever the balance can carry it, which holds down to about $4.00 (below that, $0.80 is more than 20% of the account and the lift correctly stops). This is the one and only place a cap is allowed to round up, and it does so because it lowers risk.
+
+**A correction to what I told you earlier:** I said a typical loss on a $1.00 multiplier was $0.10–$0.15. That is wrong. Deriv will not accept a stop under **$0.50**, so the order builder clamps it there — the strategy's own 1-ATR stop models to about $0.10 but cannot be sent. A losing trade at the $1.00 floor costs **$0.50**, half the stake. The floor stops binding once the stake passes about $5. The table now shows this per row rather than leaving it to be discovered.
+
+### The bands
+
+`Floor` under $12 (20% / 20% daily) · `Build` $12–$50 (10% / 15%) · `Grow` $50–$200 (5% / 10%) · `Steady` $200–$1000 (2% / 6%) · `Mature` $1000+ (1% / 4%).
+
+The cuts are not arbitrary: at each boundary the stake stays above $1.00 ($12 x 10% = $1.20, $50 x 5% = $2.50, $200 x 2% = $4.00, $1000 x 1% = $10), so stepping risk down never drops the account back onto the binary path. A test enforces that. The ladder can only tighten a configured setting, never loosen it — set 1% and you get 1% everywhere.
+
+One consequence worth knowing: in the Floor band the daily-loss budget is held at 20% whatever you set. A $5 account allowed to lose 60% in a day is exactly the outcome this ladder exists to prevent. At your current 20/20 settings nothing changes today.
+
+### The strategy now knows which contract it is getting
+
+A binary costs the whole stake for being wrong where a multiplier costs its stop, so the binary path asks for more evidence: **minimum confidence + 0.08** before it will take one. Below ~$4.00 you will see fewer trades, deliberately.
+
+### Seeing it
+
+The Configuration page shows band, effective risk, stake, contract, typical loss, worst case and worst case as a share of equity, per balance — and a new **Risk ladder** panel serving the actual bands from the sizing code rather than restating them, with your current band marked. Both come from `describeStakePlan()`, which calls the real sizing functions rather than re-deriving them, so the preview cannot drift from what the worker sends.
+
+46 tests pass. Verified live at $5.00: the table, the ladder and both advisories render correctly, all 11 pages have zero console errors and no overflow at 1440px or 375px.
+
+
 ## Update: keep the hold inside a day, size against live equity, drop the threshold to 0.70
 
 Four things, all from the same question: *if profit grows do stakes grow, and is anything holding for more than a day?*

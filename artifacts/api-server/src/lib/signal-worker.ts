@@ -24,7 +24,7 @@ import { getOpenAI } from "./ai-client.js";
 import { logger } from "./logger.js";
 import { placeDerivTrade, getIndicativeCostPct } from "./deriv.js";
 import { ALL_FOREX_INSTRUMENTS, getSyntheticSymbol, isForexCode } from "./synthetic-catalog.js";
-import { calculateCappedStake, calculateDailyLossCappedStake } from "./execution-risk.js";
+import { calculateCappedStake, calculateDailyLossCappedStake, applyMultiplierFloor, effectiveRiskPcts, worstCaseLoss, MULTIPLIER_MIN_STAKE } from "./execution-risk.js";
 import { forexPreScanGate, forexDispatchGate } from "./forex-readiness.js";
 import { getNewsEvents } from "./news-calendar.js";
 import { scoreConcepts } from "./trade-review.js";
@@ -89,7 +89,10 @@ let signalsGeneratedTotal = 0;
 let cachedEnabled: boolean | null = null;
 let cachedAutotradeMode: string | null = null;
 let activeMode: "auto_demo" | "auto_live" | null = null;
-let activeConfig: { smallAccountMaxRiskPct: number } = { smallAccountMaxRiskPct: 10 };
+/** Extra confidence a setup must carry before it is worth taking on the stop-less binary path. */
+const BINARY_CONFIDENCE_PREMIUM = 0.08;
+
+let activeConfig: { smallAccountMaxRiskPct: number; minConfidence: number } = { smallAccountMaxRiskPct: 10, minConfidence: 0.7 };
 let lastLock: { locked: boolean; reason: string | null } = { locked: false, reason: null };
 const LOCK_MSG = "Autonomous dispatch waiting: the reconciler is resolving an unresolved Deriv order";
 
@@ -772,9 +775,21 @@ async function dispatchTradeUnlocked(
     .select({ count: sql<number>`count(*)::int` })
     .from(tradesTable)
     .where(and(eq(tradesTable.accountId, conn.accountId), eq(tradesTable.status, "open")));
+  // Balance-adaptive ceiling. The configured percentages are what the operator
+  // is willing to risk; the band is what the balance can survive. The lower of
+  // the two applies, so a setting that made sense at $5 tapers on its own as
+  // the account grows instead of waiting to be remembered.
+  const eff = effectiveRiskPcts(equity, riskPerTradePct, maxDailyLossPct);
+  if (eff.riskCappedByBand || eff.dailyCappedByBand) {
+    logger.info(
+      { symbol: signal.symbol, equity, band: eff.band, configuredRiskPct: riskPerTradePct, appliedRiskPct: eff.riskPct,
+        configuredDailyLossPct: maxDailyLossPct, appliedDailyLossPct: eff.dailyLossPct, why: eff.why },
+      "Balance band tightened the configured risk settings",
+    );
+  }
   const sizing = calculateCappedStake({
     equity,
-    riskPerTradePct,
+    riskPerTradePct: eff.riskPct,
     maxConcurrentPositions,
     openPositions: openRow?.count ?? Number.NaN,
     smallAccountMaxRiskPct: activeConfig.smallAccountMaxRiskPct,
@@ -843,7 +858,7 @@ async function dispatchTradeUnlocked(
   }, 0);
   const dailyLossSizing = calculateDailyLossCappedStake({
     equity,
-    maxDailyLossPct,
+    maxDailyLossPct: eff.dailyLossPct,
     realizedPnlToday,
     openWorstCaseStake,
     currentStakeCap: sizing.stake,
@@ -857,20 +872,47 @@ async function dispatchTradeUnlocked(
     return;
   }
 
-  const stakeAmount = dailyLossSizing.stake;
-  const forceBinary = stakeAmount < 1;
+  // Last step, after both caps, because the daily-loss guard can shrink a stake
+  // back under $1.00 and undo the lift otherwise. Under $1.00 Deriv opens a
+  // binary, which has no stop-loss — so the smaller stake is the riskier order,
+  // and lifting to $1.00 lowers money at risk rather than raising it.
+  const floored = applyMultiplierFloor({ stake: dailyLossSizing.stake, equity });
+  const stakeAmount = floored.stake;
+  const forceBinary = stakeAmount < MULTIPLIER_MIN_STAKE;
+  if (floored.lifted) {
+    logger.info({ symbol: signal.symbol, equity, from: dailyLossSizing.stake, to: stakeAmount, reason: floored.reason }, "Stake lifted to the multiplier floor");
+  }
   logger.info(
     {
       symbol: signal.symbol,
       equity,
       stakeAmount,
+      band: eff.band,
+      contract: forceBinary ? "binary" : "multiplier",
+      worstCaseLoss: worstCaseLoss(stakeAmount, forceBinary ? "binary" : "multiplier"),
       riskCap: sizing.cap,
       dailyLossRemaining: dailyLossSizing.remainingBudget,
       slots: sizing.slots,
       confidence: signal.confidence,
     },
-    "Strict trade and daily-loss caps computed; LLM confidence does not increase stake",
+    "Strict trade and daily-loss caps computed; confidence does not increase stake",
   );
+
+  // A binary has no stop-loss, no take-profit and no partial exit: a loser
+  // costs the whole stake, where a multiplier of the same size costs its stop.
+  // Paying that much more for being wrong is only worth it on a stronger setup,
+  // so the binary path asks for more evidence than the multiplier path does.
+  if (forceBinary) {
+    const confidence = parseFloat(signal.confidence);
+    const required = Math.min(0.98, activeConfig.minConfidence + BINARY_CONFIDENCE_PREMIUM);
+    if (!Number.isFinite(confidence) || confidence < required) {
+      const reason = `Binary fallback needs confidence >= ${required.toFixed(2)} (this setup: ${Number.isFinite(confidence) ? confidence.toFixed(2) : "unreadable"}); a binary risks the full $${stakeAmount.toFixed(2)} with no stop-loss`;
+      await recordGeneratedReason(signal.id, reason);
+      recordRejection({ symbol: signal.symbol, stage: "sizing", reason, metrics: { equity, stake: stakeAmount, confidence } });
+      logger.info({ symbol: signal.symbol, equity, stakeAmount, confidence, required }, "Binary fallback refused: confidence below the binary bar");
+      return;
+    }
+  }
 
   // ── FIX 4: Validate numeric levels — NaN propagates to Deriv as invalid
   const entryLowNum  = signal.entryLow  != null ? parseFloat(signal.entryLow)  : null;
@@ -1070,7 +1112,15 @@ async function runWorkerTick(): Promise<void> {
       return;
     }
     activeMode = config.autotradeMode === "auto_demo" || config.autotradeMode === "auto_live" ? config.autotradeMode : null;
-    activeConfig = { smallAccountMaxRiskPct: parseFloat(config.smallAccountMaxRiskPct) };
+    {
+      // An unreadable threshold must not silently disable the binary bar: NaN
+      // compares false against everything, which would wave every setup through.
+      const parsedMinConfidence = parseFloat(config.minConfidence);
+      activeConfig = {
+        smallAccountMaxRiskPct: parseFloat(config.smallAccountMaxRiskPct),
+        minConfidence: Number.isFinite(parsedMinConfidence) ? parsedMinConfidence : 0.7,
+      };
+    }
     const forexParams: ForexDispatchParams = {
       killzones: config.killzones,
       newsBlackoutBeforeMin: config.newsBlackoutBeforeMin,
