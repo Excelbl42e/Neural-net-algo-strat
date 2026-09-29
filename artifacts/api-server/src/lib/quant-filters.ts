@@ -164,15 +164,15 @@ export function premiumDiscount(c: OHLC[], price: number, k = 2, bias: "buy" | "
 // ── Gates ───────────────────────────────────────────────────────────────────
 export interface GateResult { ok: boolean; reason?: string; metrics: Record<string, number | string | null> }
 
-/** Pre-GPT gate: skip dead or spiking volatility and pure chop. */
-export function preTradeGate(h4: OHLC[], t: QuantThresholds): GateResult {
-  const vol = atrPercentile(h4);
-  const er = efficiencyRatio(h4.map((k) => k.close), 10);
+/** Pre-GPT gate: skip dead or spiking volatility and pure chop. Called with H1 candles (the bias/entry-math timeframe). */
+export function preTradeGate(candles: OHLC[], t: QuantThresholds): GateResult {
+  const vol = atrPercentile(candles);
+  const er = efficiencyRatio(candles.map((k) => k.close), 10);
   const metrics = { atrPercentile: vol?.percentile ?? null, atr: vol?.atr ?? null, efficiencyRatio: er, atrSamples: vol?.samples ?? 0 };
-  if (!vol) return { ok: false, reason: "Insufficient H4 history for volatility percentile", metrics };
+  if (!vol) return { ok: false, reason: "Insufficient H1 history for volatility percentile", metrics };
   if (vol.percentile < t.atrPercentileMin) return { ok: false, reason: `Dead volatility: ATR percentile ${vol.percentile.toFixed(0)} < ${t.atrPercentileMin}`, metrics };
   if (vol.percentile > t.atrPercentileMax) return { ok: false, reason: `Volatility spike: ATR percentile ${vol.percentile.toFixed(0)} > ${t.atrPercentileMax}`, metrics };
-  if (er == null) return { ok: false, reason: "Insufficient H4 history for efficiency ratio", metrics };
+  if (er == null) return { ok: false, reason: "Insufficient H1 history for efficiency ratio", metrics };
   return { ok: true, metrics };
 }
 

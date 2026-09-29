@@ -295,8 +295,8 @@ export default function ConfigurationPage() {
               {([
                 ["smallAccountMaxRiskPct", "Small account: max % of equity for a minimum-stake trade", "0.1"],
                 ["minRiskReward", "Minimum reward:risk", "0.1"],
-                ["atrPercentileMin", "Skip if H4 ATR percentile below", "1"],
-                ["atrPercentileMax", "Skip if H4 ATR percentile above", "1"],
+                ["atrPercentileMin", "Skip if H1 ATR percentile below", "1"],
+                ["atrPercentileMax", "Skip if H1 ATR percentile above", "1"],
                 ["efficiencyRatioMin", "Efficiency ratio floor (0 chop, 1 trend)", "0.01"],
                 ["minStopAtr", "Minimum stop distance (ATRs)", "0.1"],
                 ["maxPerAssetClass", "Max open positions per asset class", "1"],
