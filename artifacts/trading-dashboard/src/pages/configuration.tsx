@@ -46,7 +46,11 @@ const formSchema = z.object({
 });
 type FormValues = z.infer<typeof formSchema>;
 
-interface StakeRow { equity: number; ok: boolean; stake?: number; riskPct?: number; contract?: string; reason?: string }
+interface StakeRow {
+  equity: number; ok: boolean; stake?: number; riskPct?: number; contract?: string; reason?: string;
+  fundablePositions?: number; configuredPositions?: number;
+  positionsLimitedBy?: "configured" | "daily_loss_budget" | "risk_sizing" | "equity";
+}
 export default function ConfigurationPage() {
   const { data: config, isLoading } = useGetBotConfig();
   const { data: summary } = useGetAccountsSummary();
@@ -72,7 +76,7 @@ export default function ConfigurationPage() {
       maxSpreadCostPct: 0.5,
       maxPositionHoldHours: 36,
       maxDailyLossPct: 5,
-      minConfidence: 0.78,
+      minConfidence: 0.7,
       allowedInstruments: "",
       killzones: "",
       notes: "",
@@ -136,6 +140,9 @@ export default function ConfigurationPage() {
   const mode = form.watch("autotradeMode");
   const riskPerTradePctValue = form.watch("riskPerTradePct");
   const maxDailyLossPctValue = form.watch("maxDailyLossPct");
+  // First preview row is the synced balance when there is one (see the query's
+  // equity list below), so it reflects this account rather than a sample rung.
+  const yourRow = equity > 0 ? stakeQuery.data?.[0] : undefined;
 
   return (
     <div className="space-y-6 max-w-4xl">
@@ -166,13 +173,18 @@ export default function ConfigurationPage() {
           </p>
           <div className="overflow-x-auto">
             <table className="w-full text-xs font-mono-numbers">
-              <thead><tr className="text-left text-muted-foreground uppercase tracking-wider"><th className="py-1 pr-4">Equity</th><th className="pr-4">Stake</th><th className="pr-4">% of equity</th><th>Result</th></tr></thead>
+              <thead><tr className="text-left text-muted-foreground uppercase tracking-wider"><th className="py-1 pr-4">Equity</th><th className="pr-4">Stake</th><th className="pr-4">% of equity</th><th className="pr-4">Trades at once</th><th>Result</th></tr></thead>
               <tbody>
                 {(stakeQuery.data ?? []).map((r, i) => (
                   <tr key={`${r.equity}-${i}`} className="border-t border-border">
                     <td className="py-1 pr-4">${r.equity.toFixed(2)}{i === 0 && equity > 0 ? " (yours)" : ""}</td>
                     <td className="pr-4">{r.ok ? `$${r.stake!.toFixed(2)}` : "skip"}</td>
                     <td className="pr-4">{r.ok ? `${r.riskPct}%` : "-"}</td>
+                    <td className={`pr-4 ${r.fundablePositions != null && r.configuredPositions != null && r.fundablePositions < r.configuredPositions ? "text-amber-400" : ""}`}>
+                      {r.fundablePositions != null && r.configuredPositions != null
+                        ? `${r.fundablePositions} of ${r.configuredPositions}`
+                        : "-"}
+                    </td>
                     <td className={r.ok ? "" : "text-amber-400"}>{r.ok ? r.contract : r.reason}</td>
                   </tr>
                 ))}
@@ -237,8 +249,28 @@ export default function ConfigurationPage() {
                   <FormLabel>Max positions (hard ceiling)</FormLabel>
                   <FormControl><Input type="number" step="1" min="1" max="10" {...field} data-testid="input-max-positions" /></FormControl>
                   <FormDescription className="text-[11px]">
-                    Bot auto-scales up to this number based on your balance. See preview above.
+                    An upper bound, not a target. What actually fits is shown per balance in the "Trades at once"
+                    column above.
                   </FormDescription>
+                  {yourRow?.fundablePositions != null && yourRow.configuredPositions != null
+                    && yourRow.fundablePositions < yourRow.configuredPositions && (
+                    <div className="flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 p-2 text-[11px] text-amber-400">
+                      <AlertCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                      <span>
+                        At your current ${equity.toFixed(2)} balance only <strong>{yourRow.fundablePositions}</strong> of
+                        these {yourRow.configuredPositions} can actually open
+                        {yourRow.positionsLimitedBy === "daily_loss_budget"
+                          ? " — the daily-loss budget reserves each open stake, so the first trade uses up the day's allowance."
+                          : yourRow.positionsLimitedBy === "risk_sizing"
+                            ? " — risk sizing refuses the next one at this balance."
+                            : "."}
+                        {" "}Raising this number will not change that — and it can make things worse: each trade is
+                        also capped at balance ÷ this number, so a higher ceiling shrinks every stake and can push it
+                        under Deriv's $1.00 multiplier minimum, turning your trades into 3-day binaries. A larger
+                        balance or a wider daily-loss budget is what actually unlocks more positions.
+                      </span>
+                    </div>
+                  )}
                   <FormMessage />
                 </FormItem>
               )} />
@@ -263,10 +295,11 @@ export default function ConfigurationPage() {
                   <FormLabel>Minimum signal confidence (0–1)</FormLabel>
                   <FormControl><Input type="number" step="0.01" min="0" max="1" {...field} data-testid="input-min-confidence" /></FormControl>
                   <FormDescription className="text-[11px]">
-                    Signals below this are dropped before reaching execution. The expert-system judge scores
-                    0.50 (bare setup, no supporting confluence) to 0.95 (every voter agrees plus all five structural
-                    confirmations) — it never emits below 0.50, so anything under that accepts every valid setup.
-                    0.70 is the default and already selective; 0.80+ needs near-unanimous confluence and will fire rarely.
+                    Signals below this are dropped before reaching execution. This is evidence strength, not a win
+                    probability. A setup starts at 0.35 for clearing the structural trigger on its own, earns up to
+                    +0.40 from how much of the strategy library agrees with it, and up to +0.25 from the five
+                    structural confirmations — so 0.35 is a bare setup nothing else supports, ~0.70 means the
+                    evidence clearly leans this way, and 0.98 is the ceiling. 0.70 is the default.
                   </FormDescription>
                   <FormMessage />
                 </FormItem>

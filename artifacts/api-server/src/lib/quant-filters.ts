@@ -776,11 +776,36 @@ export function runExpertJudge(
     return decline(`Confluence disagrees: ${disagreeingVotes.length} against vs ${agreeingVotes.length} for (${disagreeingVotes.map((v) => v.concept).join(", ")})`);
   }
 
+  // Confidence is an EVIDENCE-STRENGTH score on a real 0-1 scale, not a win
+  // probability. An earlier version ran 0.50 + ratio*0.25 + bonuses*0.04,
+  // which could only ever land between 0.50 and 0.95 — so a configured
+  // "minimum confidence" of, say, 0.78 silently meant "near-unanimous
+  // confluence required" rather than the plain 0-1 reading the config field
+  // advertises. The band is spread out here instead of asking whoever sets
+  // the threshold to mentally rescale it:
+  //   BASE          the structural trigger itself already cleared sweep ->
+  //                 structure break -> unfilled FVG, plus the geometry and
+  //                 R:R gates downstream. That is real evidence, so it earns
+  //                 a floor rather than starting from zero.
+  //   + CONFLUENCE  how much of the strategy library that has an opinion
+  //                 actually agrees with this direction.
+  //   + STRUCTURE   how many of the five structural confirmations are present
+  //                 (displacement, OTE zone, order block, Judas timing, H4).
+  const BASE = 0.35, CONFLUENCE_WEIGHT = 0.40, STRUCTURE_WEIGHT = 0.25;
   const structuralBonuses = [hasDisplacement, inOte, hasOrderBlock, judasTiming, h4Bias === bias].filter(Boolean).length;
-  const agreementRatio = relevantVotes.length > 0 ? agreeingVotes.length / relevantVotes.length : 0.5;
-  let confidence = 0.5 + agreementRatio * 0.25 + structuralBonuses * 0.04;
-  confidence = Math.min(0.97, confidence);
-  if (confidence < minConfidence) return decline(`Confidence ${confidence.toFixed(2)} < minimum ${minConfidence} (${agreeingVotes.length}/${relevantVotes.length} voters agreed, ${structuralBonuses}/5 structural confirmations)`);
+  // With no voter holding an opinion there is no confluence evidence either
+  // way, so it contributes nothing rather than a free half-share.
+  const agreementRatio = relevantVotes.length > 0 ? agreeingVotes.length / relevantVotes.length : 0;
+  const confidence = Math.min(
+    0.98, // never claim certainty
+    BASE + CONFLUENCE_WEIGHT * agreementRatio + STRUCTURE_WEIGHT * (structuralBonuses / 5),
+  );
+  if (confidence < minConfidence) {
+    return decline(
+      `Confidence ${confidence.toFixed(2)} < minimum ${minConfidence} ` +
+      `(${agreeingVotes.length}/${relevantVotes.length} voters agreed, ${structuralBonuses}/5 structural confirmations)`,
+    );
+  }
 
   // Accumulation-Manipulation-Distribution and Break of Structure are always
   // true by construction whenever this setup fires (the sweep IS the

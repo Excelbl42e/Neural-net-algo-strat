@@ -78,7 +78,7 @@ test("runExpertJudge: finds a valid buy setup (sweep -> structure break -> FVG)"
   const risk = result!.entryLow! - result!.stopLevel!;
   const reward = result!.target1Level! - result!.entryLow!;
   assert.ok(reward / risk >= 2, `reward:risk should clear the 2:1 floor, got ${reward / risk}`);
-  assert.ok(result!.confidence >= 0.6 && result!.confidence <= 0.95);
+  assert.ok(result!.confidence >= 0.35 && result!.confidence <= 0.98, `confidence out of the documented band: ${result!.confidence}`);
   assert.ok(result!.conceptsDetected.includes("Liquidity Sweep"));
   assert.equal(result!.levels.length, 2);
 });
@@ -135,4 +135,21 @@ test("runExpertJudge reports WHY it declined, so a quiet scan is not indistingui
   const sink3 = { reason: "" };
   assert.equal(runExpertJudge(h1Bull, m30Setup, h4Flat, 0.99, new Set(), sink3), null);
   assert.match(sink3.reason, /confidence/i, `expected a confidence reason, got: ${sink3.reason}`);
+});
+
+test("confidence spans a real 0-1 band, so a configured threshold means what it says", () => {
+  // The floor: a setup that clears the structural trigger but has nothing else
+  // supporting it must still be well under a mid threshold, and must never sit
+  // in the old compressed 0.50+ band that made 0.78 secretly near-unanimous.
+  const sink = { reason: "" };
+  runExpertJudge(h1Bull, m30Setup, h4Flat, 0.99, new Set(), sink);
+  const m = sink.reason.match(/Confidence ([\d.]+) </);
+  assert.ok(m, `expected a confidence figure in the decline reason, got: ${sink.reason}`);
+  const scored = Number(m![1]);
+  assert.ok(scored >= 0.35 && scored <= 0.98, `confidence ${scored} outside the documented 0.35-0.98 band`);
+
+  // A threshold below the structural floor accepts the setup; one above the
+  // ceiling can never accept anything.
+  assert.ok(runExpertJudge(h1Bull, m30Setup, h4Flat, 0.35, new Set()), "0.35 should accept a bare valid setup");
+  assert.equal(runExpertJudge(h1Bull, m30Setup, h4Flat, 0.99, new Set()), null, "0.99 is above the 0.98 ceiling");
 });

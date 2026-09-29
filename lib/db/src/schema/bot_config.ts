@@ -9,7 +9,7 @@ export const botConfigTable = pgTable("bot_config", {
   riskPerTradePct: numeric("risk_per_trade_pct", { precision: 5, scale: 2 }).notNull().default("1.00"),
   maxConcurrentPositions: integer("max_concurrent_positions").notNull().default(3),
   maxDailyLossPct: numeric("max_daily_loss_pct", { precision: 5, scale: 2 }).notNull().default("5.00"),
-  minConfidence: numeric("min_confidence", { precision: 4, scale: 3 }).notNull().default("0.780"),
+  minConfidence: numeric("min_confidence", { precision: 4, scale: 3 }).notNull().default("0.700"),
   allowedInstruments: text("allowed_instruments").notNull().default(""),
   killzones: text("killzones").notNull().default(""),
   smallAccountMaxRiskPct: numeric("small_account_max_risk_pct", { precision: 5, scale: 2 }).notNull().default("10.00"),
