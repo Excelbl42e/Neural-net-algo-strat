@@ -1,5 +1,15 @@
 # Changes in this build (vs. your Replit export)
 
+## Scan only the 14 pairs Deriv offers as multipliers
+
+The catalogue listed 28 forex pairs. Deriv's Multipliers → Forex list for this account has 14: EUR/USD, GBP/USD, USD/JPY, AUD/USD, USD/CAD, USD/CHF, EUR/GBP, EUR/JPY, EUR/AUD, EUR/CAD, EUR/CHF, GBP/JPY, GBP/AUD, AUD/JPY.
+
+- Five pairs Deriv does not recognise at all ("Invalid symbol"): NZD/CAD, NZD/CHF, CAD/JPY, CAD/CHF, CHF/JPY.
+- Nine stream prices but are not offered as multipliers: NZD/USD, EUR/NZD, GBP/CAD, GBP/CHF, GBP/NZD, AUD/CAD, AUD/CHF, AUD/NZD, NZD/JPY. The bot could find a setup on one of these and never be able to trade it.
+
+The catalogue drives the scan, the price feed and the allow-list, so all three now use the same 14 pairs.
+
+
 ## Pre-funding audit: the trade that executed was not the trade that was approved
 
 ### Critical: the bracket was measured from the wrong price
