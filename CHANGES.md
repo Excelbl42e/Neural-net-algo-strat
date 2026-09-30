@@ -1,5 +1,67 @@
 # Changes in this build (vs. your Replit export)
 
+## Audit pass: numeric edge cases, and an error handler that talked too much
+
+Rather than read the quant layer and hope, this pass drove every exported function with degenerate inputs — empty series, a single bar, sixty flat bars, all zeros, negatives, values near the floating-point floor — and reported anything that threw or produced a non-finite number. 37 functions x 8 inputs, then the judge itself across 125 combinations of those series.
+
+### One indicator threw where every other one returns null
+
+`srFlipSignal` read the last bar behind a non-null assertion:
+
+```ts
+const price = c[c.length - 1]!.close;
+```
+
+On an empty series that is `undefined.close` — a `TypeError`. Every sibling indicator returns `null` when it has insufficient data; this one crashed. And it runs inside the worker tick, whose only error handler is the catch around the **whole cycle**, so one symbol with no stored candles would abort the scan for every remaining symbol.
+
+Fixed at the source, and hardened around it: each of the fourteen confluence voters now runs behind its own guard, so an exception in any one costs that one vote rather than the scan. A missing opinion was already a first-class outcome there (`direction: null`), so a failed indicator degrades into exactly that.
+
+After the fix: no throws, no non-finite levels, and every decline carries a reason, across all 125 series combinations. Three tests pin it.
+
+### The error handler returned internal details to anyone
+
+```ts
+res.status(500).json({ error: "Internal server error", detail: message });
+```
+
+A failed query answered with the SQL itself — `Failed query: select "id" from "app_owner" limit $1` — and `/auth/status` is a public path, so anyone who could reach the app could read it. Internal error text also carries file paths and driver internals; the existing `otp=` redaction shows the risk was understood, but one pattern cannot cover whatever an arbitrary error decides to say.
+
+Worse, the detail was not even reaching the log. `logger.error({ msg: message }, "Unhandled route error")` keys the detail as `msg`, which is pino's own message field, so the second argument overwrote it — the error text survived **only** in the response body, the one place it should not have been.
+
+Now a short correlation id goes to both sides: the client gets `{"error":"Internal server error","errorId":"174c9d058e54"}` and the log gets that id plus the full cause under `detail`. Verified by taking the database down and calling the public endpoint.
+
+56 tests pass. All 11 pages render with zero console errors, no overflow at 1440px or 375px.
+
+
+## Audit pass: time, dates and session boundaries
+
+A trading bot lives on UTC correctness, so this pass looked at nothing else. One real finding.
+
+### News event times depended on the host's timezone
+
+Every date in the server is computed in UTC — except the one that parses the news calendar:
+
+```ts
+const date = new Date(item.date);
+```
+
+An ISO string with no offset (`"2026-09-30T08:30:00"`) is interpreted in **local** time by the JavaScript spec. This container resolves to UTC, so it read correctly *by luck*. On a host with `TZ` set to anything else, every high-impact blackout window would silently shift by that offset — and the bot would trade straight through NFP believing it was clear. Exactly the kind of failure that never announces itself.
+
+A timestamp that names its zone is now honoured; one that does not is read as UTC explicitly, so the answer is the same on every machine. When the feed sends zone-less dates it says so once in the log, instead of quietly guessing.
+
+### Verified correct, with tests to keep them that way
+
+Nothing else in the server uses a local-time method — no `getHours()`, `getDate()` or `toLocaleString()` anywhere in date math. The remaining boundaries are now pinned by tests:
+
+- **The forex week** — open until Friday 21:00 UTC, closed all Saturday, reopens Sunday 21:00 UTC, checked either side of each edge
+- **Session windows** — london 07:00–16:00, newyork 12:00–21:00, and that together they cover 07:00–21:00 with no gap at the handover
+- **Blank killzones really means every open hour**, not a hidden default, for blank, null and whitespace alike; an unrecognised name is ignored rather than silently blocking everything
+- **The daily-loss budget** rolls on the UTC day, and position age is an epoch difference, so neither moves with the host clock
+- **D1 candles** are chart-only and never reach the judge, so their 00:00 UTC bucket boundary cannot affect a trading decision
+
+53 tests pass.
+
+
 ## Add: "Run scan now"
 
 The scan loop runs every thirty minutes, and `POST /api/brain/generate-signals` existed to run one on demand — but nothing in the app ever called it. Waiting out the interval was the only way to see the effect of a settings change, which makes every adjustment a thirty-minute experiment.

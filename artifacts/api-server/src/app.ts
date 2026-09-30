@@ -1,4 +1,5 @@
 import path from "node:path";
+import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import express, { type Express, type NextFunction, type Request, type Response } from "express";
 import cors from "cors";
@@ -54,12 +55,30 @@ if (existsSync(dashboardDist)) {
   logger.warn({ dashboardDist }, "Dashboard build not found; run the dashboard build before starting in production");
 }
 
-// JSON error handler (Express 5 forwards async route rejections here).
+/**
+ * JSON error handler (Express 5 forwards async route rejections here).
+ *
+ * The detail stays in the log and never goes to the client. It used to be
+ * returned verbatim, which on a failed query answered with the SQL itself —
+ * `Failed query: select "id" from "app_owner" limit $1` — and `/auth/status`
+ * is a public path, so anyone who could reach the app could read it. Internal
+ * error text also carries file paths, driver internals and connection details;
+ * the existing `otp=` redaction shows that was already understood, but a single
+ * pattern cannot cover what an arbitrary error decides to say.
+ *
+ * A short correlation id goes to both sides instead, so an error on screen can
+ * still be matched to the log line that explains it.
+ */
 app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
   const message = err instanceof Error ? err.message.replace(/otp=[^&\s]+/g, "otp=[redacted]") : "Internal error";
-  logger.error({ msg: message }, "Unhandled route error");
+  const errorId = randomBytes(6).toString("hex");
+  // Keyed `detail`, not `msg`: pino treats `msg` as its own message field, so
+  // the second argument overwrote it and the error text never reached the log
+  // at all. It survived only in the response body — the one place it should
+  // not have been.
+  logger.error({ errorId, detail: message }, "Unhandled route error");
   if (res.headersSent) return;
-  res.status(500).json({ error: "Internal server error", detail: message });
+  res.status(500).json({ error: "Internal server error", errorId });
 });
 
 const started: string[] = [];
