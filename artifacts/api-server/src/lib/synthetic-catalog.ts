@@ -152,13 +152,20 @@ export function getSyntheticSymbol(code: string): SyntheticSymbol | null {
 }
 
 /**
- * Symbols the candle feeder subscribes to on boot. Only forex is traded and
- * analyzed, so this is the forex major list; anything else lazy-subscribes
- * the first time a chart requests it.
+ * Symbols the candle feeder subscribes to on boot.
+ *
+ * This used to be six majors, with everything else lazy-subscribing the first
+ * time it was needed. But the signal worker scans every forex pair, and it
+ * checks for a price tick in the same instant it subscribes — so on the first
+ * scan after any restart, the other twenty-two pairs had no tick by
+ * definition and were all dropped with "no price tick received yet". The next
+ * scan is thirty minutes later, so a restart cost a full cycle across most of
+ * the catalogue. Subscribing everything the worker can scan, at boot, means
+ * ticks are already flowing when the first scan runs.
  */
-export const DEFAULT_FEED_SYMBOLS = [
-  "frxEURUSD", "frxGBPUSD", "frxUSDJPY", "frxAUDUSD", "frxUSDCAD", "frxGBPJPY",
-];
+export const DEFAULT_FEED_SYMBOLS = SYNTHETIC_CATALOG
+  .filter((s) => s.group === "Forex")
+  .map((s) => s.code);
 
 /**
  * Asset-class exports are kept separate so enabling a market class in a

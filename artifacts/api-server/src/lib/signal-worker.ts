@@ -1345,7 +1345,14 @@ async function runWorkerTick(): Promise<void> {
       // ── FIX 3: Ensure the symbol is subscribed so we have real price data.
       // Without this, symbols beyond the boot set have no tick and the LLM
       // would fabricate levels — producing unsafe SL/TP values.
-      const { getLastTick, ensureSymbolSubscribed } = await import("./candle-feeder.js");
+      const { getLastTick, ensureSymbolSubscribed, symbolRejectionReason, getCandleFeederStatus } = await import("./candle-feeder.js");
+      // A pair Deriv itself refuses will never produce a tick, so say that
+      // instead of blaming the feed and re-checking it every thirty minutes.
+      const refused = symbolRejectionReason(symbol);
+      if (refused) {
+        recordRejection({ symbol, stage: "no_tick", reason: `Deriv does not offer this symbol on this account (${refused}); it is not scanned` });
+        continue;
+      }
       ensureSymbolSubscribed(symbol);
       const lastTick = getLastTick(symbol);
 
@@ -1353,10 +1360,15 @@ async function runWorkerTick(): Promise<void> {
       // current price there is nothing to anchor entry/stop/target against.
       const tickAgeMs = lastTick ? Date.now() - lastTick.at : Infinity;
       if (!lastTick || tickAgeMs > 5 * 60 * 1000) {
+        // Blaming the feed when the feed is plainly connected sent every
+        // investigation down the wrong path. Report what is actually true.
+        const feedConnected = getCandleFeederStatus().connected;
         const reason = lastTick
-          ? `No fresh price tick: last one is ${Math.round(tickAgeMs / 1000)}s old (candle feed may be disconnected)`
-          : "No price tick received yet for this symbol (candle feed may be disconnected)";
-        logger.info({ symbol, tickAgeMs }, "Signal worker: no fresh tick yet — skipping this symbol this cycle");
+          ? `No fresh price tick: last one is ${Math.round(tickAgeMs / 1000)}s old${feedConnected ? " while the feed is connected — the market for this pair is quiet or closed" : " and the candle feed is disconnected"}`
+          : feedConnected
+            ? "Subscribed to this pair but no tick has arrived yet — it is thinly traded, or the market is closed. It will be analysed as soon as one does."
+            : "No price tick received yet and the candle feed is disconnected";
+        logger.info({ symbol, tickAgeMs, feedConnected }, "Signal worker: no fresh tick yet — skipping this symbol this cycle");
         recordRejection({ symbol, stage: "no_tick", reason });
         continue;
       }

@@ -56,6 +56,8 @@ const CANDLE_RETENTION_DAYS: Record<string, number> = {
   M5: 7, M15: 14, M30: 30, H1: 90, H4: 180, D1: 730,
 };
 const CANDLE_PRUNE_EVERY_MS = 60 * 60 * 1000;
+/** Gap between history requests. ~6 per second stays well inside Deriv's limits. */
+const HISTORY_REQUEST_SPACING_MS = 150;
 
 // Public endpoint verified with a 101 upgrade and real ticks/candles.
 // Do not reuse it for account authorization or trading.
@@ -98,6 +100,10 @@ class CandleFeeder {
    * Subscribe to a symbol on demand. Used by the /candles REST endpoint when
    * the user opens a chart for a symbol the feeder isn't streaming yet.
    */
+  rejectionReason(symbol: string): string | null {
+    return this.rejectedSymbols.get(normalizeSymbol(symbol)) ?? null;
+  }
+
   ensureSubscribed(symbol: string): void {
     const code = normalizeSymbol(symbol);
     if (!isSyntheticCode(code)) return;
@@ -138,6 +144,29 @@ class CandleFeeder {
     };
   }
 
+  /**
+   * Requests candle history for every subscribed symbol, paced so the burst
+   * cannot trip Deriv's rate limiter. Aborts quietly if the socket closes
+   * partway through: the next connect starts it again.
+   */
+  private async backfillHistory(): Promise<void> {
+    const socket = this.ws;
+    for (const symbol of Array.from(this.subscribedSymbols)) {
+      for (const granularity of Object.values(TIMEFRAMES)) {
+        if (this.ws !== socket || socket?.readyState !== WebSocket.OPEN) return;
+        socket.send(JSON.stringify({
+          ticks_history: symbol,
+          granularity,
+          count: 500,
+          end: "latest",
+          style: "candles",
+          req_id: granularity,
+        }));
+        await new Promise((r) => setTimeout(r, HISTORY_REQUEST_SPACING_MS));
+      }
+    }
+  }
+
   private connect(): void {
     if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) return;
     try {
@@ -153,24 +182,19 @@ class CandleFeeder {
         this.lastError = null;
         this.lastErrorAt = null;
         this.feedState = "connected";
+        // Live tick subscriptions go out immediately — they are what the signal
+        // worker waits on, and there is one per symbol.
         for (const s of this.subscribedSymbols) {
-          // Subscribe to live ticks
           this.ws?.send(JSON.stringify({ ticks: s, subscribe: 1 }));
-          // Fetch 500 historical candles for each timeframe immediately
-          for (const granularity of Object.values(TIMEFRAMES)) {
-            this.ws?.send(JSON.stringify({
-              ticks_history: s,
-              granularity,
-              count: 500,
-              end: "latest",
-              style: "candles",
-              req_id: granularity,
-            }));
-          }
         }
+        // History is a much larger burst: one request per symbol per timeframe.
+        // Across the full forex catalogue that is well over a hundred frames,
+        // and firing them in a tight loop invites a rate limit that would cost
+        // us the whole backfill. Ticks are unaffected either way, so pace it.
+        void this.backfillHistory();
         logger.info(
-          { symbols: Array.from(this.subscribedSymbols) },
-          "Candle feeder: connected, fetching history"
+          { symbols: this.subscribedSymbols.size },
+          "Candle feeder: connected, subscribed to ticks, backfilling history"
         );
       });
 
@@ -458,6 +482,15 @@ export function ensureSymbolSubscribed(symbol: string): void {
 
 export function getCandleFeederStatus() {
   return feeder.status();
+}
+
+/**
+ * Deriv's reason for refusing a symbol, or null if it is fine. The worker uses
+ * this so a refused pair is reported as refused rather than as a feed outage,
+ * and is not re-analysed every scan for data that will never arrive.
+ */
+export function symbolRejectionReason(symbol: string): string | null {
+  return feeder.rejectionReason(symbol);
 }
 
 export function getLastTick(symbol: string) {

@@ -1,5 +1,22 @@
 # Changes in this build (vs. your Replit export)
 
+## Fix: why every scan said "No price tick received yet"
+
+The refusal panel did its job — it showed the real reason immediately, and the reason was a bug.
+
+Three faults compounding:
+
+**The feeder only subscribed six pairs at boot.** `DEFAULT_FEED_SYMBOLS` was the six majors; everything else lazy-subscribed the first time it was needed. But the signal worker scans **every** forex pair, and it checks for a tick in the same instant it subscribes — so on the first scan after any restart, the other twenty-two pairs had no tick *by definition* and were all dropped. The next scan is thirty minutes later, so every restart cost a full cycle across most of the catalogue. The feeder now subscribes every pair the worker can scan, at boot, so ticks are already flowing when the first scan runs.
+
+**Pairs Deriv refuses were re-analysed forever.** Five pairs — `frxCHFJPY`, `frxCADJPY`, `frxCADCHF`, `frxNZDCAD`, `frxNZDCHF` — are not offered on this account. They can never produce a tick, yet every scan re-checked them and logged a feed complaint. They are now skipped with the truthful reason ("Deriv does not offer this symbol on this account"), which also clears five permanent false alarms out of the panel.
+
+**The message blamed the wrong thing.** "candle feed may be disconnected" was printed while the feed was plainly connected and streaming, which sends every investigation down the wrong path. It now distinguishes the cases: a connected feed with no tick yet says the pair is thinly traded or its market is closed and will be analysed as soon as one arrives; a genuinely disconnected feed says so.
+
+**Paced the history backfill.** Subscribing the full catalogue turns the boot backfill into one request per symbol per timeframe — well over a hundred frames. Fired in a tight loop that invites a rate limit which would cost the whole backfill, so history requests are now spaced ~150ms apart. Tick subscriptions still go out immediately, since those are what the worker waits on.
+
+Verified: the feeder now subscribes **28** pairs at boot instead of 6.
+
+
 ## Fix: "Signal worker — Not running" on a perfectly healthy worker
 
 The Overview tile read **Not running**, and the Analysis page read **WORKER IDLE**, while the System Health panel right below said the worker was `OK` with a tick two minutes earlier. The health panel was right.
