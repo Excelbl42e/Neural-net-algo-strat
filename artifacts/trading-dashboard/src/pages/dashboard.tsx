@@ -116,8 +116,8 @@ export default function Dashboard() {
             <div className="flex items-center gap-2 text-violet-300 font-mono-numbers text-[11px] tracking-widest uppercase"><Workflow className="w-4 h-4" /> What happens next</div>
             <div className="mt-5 space-y-0">
               {[
-                ["01", "Strategy library", "The hardcoded ICT + quant/TA strategy list feeds the signal prompt directly — no upload or processing step.", "/strategy"],
-                ["02", "Analyze", "The worker generates signal records from available market data and the strategy library.", "/analysis"],
+                ["01", "Strategy library", "The hardcoded ICT + quant/TA list is what the expert judge votes across — no upload, no processing step, no language model.", "/strategy"],
+                ["02", "Analyze", "The worker generates signal records from market data and the strategy library, and records the gate that refused every symbol it dropped.", "/analysis"],
                 ["03", "Review", "A generated signal is not proof that an order was sent or filled. Verify trades and broker state independently.", "/signals"],
               ].map(([n, title, body, href]) => <Link key={n} href={href} className="group flex gap-5 border-t border-border/70 py-4" data-testid={`link-stage-${n}`}>
                 <span className="font-mono-numbers text-primary text-xs">{n}</span>
