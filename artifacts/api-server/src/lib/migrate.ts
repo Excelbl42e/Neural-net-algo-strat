@@ -18,6 +18,11 @@ export async function ensureSchema(): Promise<void> {
     sql`CREATE TABLE IF NOT EXISTS app_secrets (key text PRIMARY KEY, value text NOT NULL, updated_at timestamptz NOT NULL DEFAULT now())`,
     sql`CREATE TABLE IF NOT EXISTS deriv_frames (id serial PRIMARY KEY, received_at timestamptz NOT NULL DEFAULT now(), direction text NOT NULL, kind text NOT NULL, signal_id integer, contract_id text, payload text NOT NULL, ok boolean)`,
     sql`CREATE INDEX IF NOT EXISTS deriv_frames_received_idx ON deriv_frames (received_at DESC)`,
+    // The retention prune filters on (timeframe, open_time). The only other
+    // index leads with `symbol`, so the prune fell back to a sequential scan of
+    // the whole candles table — 200ms at half a million rows, and growing every
+    // hour it runs. This is the index it actually needs.
+    sql`CREATE INDEX IF NOT EXISTS candles_tf_time_idx ON candles (timeframe, open_time)`,
     sql`ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS small_account_max_risk_pct numeric(5,2) NOT NULL DEFAULT 10.00`,
     sql`ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS min_risk_reward numeric(5,2) NOT NULL DEFAULT 2.00`,
     sql`ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS atr_percentile_min numeric(5,2) NOT NULL DEFAULT 15.00`,

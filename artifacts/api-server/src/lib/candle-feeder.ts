@@ -11,7 +11,7 @@
  * Account-scoped operations require a separate authenticated connection.
  */
 import WebSocket from "ws";
-import { sql, and, eq, desc, lt, notInArray } from "drizzle-orm";
+import { sql, and, eq, desc, lt, notInArray, inArray, type SQL } from "drizzle-orm";
 import { db, candlesTable, type Candle } from "@workspace/db";
 import { logger } from "./logger.js";
 import { isSyntheticCode, getSyntheticSymbol, DEFAULT_FEED_SYMBOLS as CATALOG_DEFAULT_SYMBOLS } from "./synthetic-catalog.js";
@@ -58,6 +58,12 @@ const CANDLE_RETENTION_DAYS: Record<string, number> = {
 const CANDLE_PRUNE_EVERY_MS = 60 * 60 * 1000;
 /** Gap between history requests. ~6 per second stays well inside Deriv's limits. */
 const HISTORY_REQUEST_SPACING_MS = 150;
+/** Rows removed per DELETE, so a prune never holds long locks against the live feed. */
+const PRUNE_BATCH_SIZE = 5_000;
+/** Ceiling on batches per pass; anything left is taken by the next hourly run. */
+const PRUNE_MAX_BATCHES = 200;
+/** Long enough after boot that housekeeping never competes with the feed coming up. */
+const PRUNE_STARTUP_DELAY_MS = 90_000;
 
 // Public endpoint verified with a 101 upgrade and real ticks/candles.
 // Do not reuse it for account authorization or trading.
@@ -87,9 +93,10 @@ class CandleFeeder {
       const code = normalizeSymbol(s);
       if (isSyntheticCode(code)) this.subscribedSymbols.add(code);
     }
-    // Trim on boot as well as hourly, so an already-bloated table is brought
-    // back inside its window without waiting an hour first.
-    void this.pruneOldCandles();
+    // Trim shortly after boot as well as hourly, so an already-bloated table is
+    // brought back inside its window without waiting an hour — but not *during*
+    // startup, where a large delete would compete with the feed coming up.
+    setTimeout(() => { void this.pruneOldCandles(); }, PRUNE_STARTUP_DELAY_MS).unref?.();
     this.pruneTimer ??= setInterval(() => { void this.pruneOldCandles(); }, CANDLE_PRUNE_EVERY_MS);
     this.pruneTimer.unref?.();
     // Always connect — the user can lazy-subscribe symbols later via ensureSubscribed().
@@ -398,10 +405,29 @@ class CandleFeeder {
    * best-effort: a failure here must never interrupt the feed.
    */
   private async pruneOldCandles(): Promise<void> {
+    /**
+     * Delete in bounded batches. A single unbounded DELETE on a table this
+     * feed fills continuously holds row locks for its whole duration and
+     * builds one enormous transaction; batching keeps each lock short so
+     * inserts are never blocked behind housekeeping.
+     */
+    const deleteBatched = async (label: string, matching: SQL | undefined): Promise<number> => {
+      let removed = 0;
+      for (let pass = 0; pass < PRUNE_MAX_BATCHES; pass++) {
+        const doomed = await db.select({ id: candlesTable.id }).from(candlesTable).where(matching).limit(PRUNE_BATCH_SIZE);
+        if (doomed.length === 0) break;
+        await db.delete(candlesTable).where(inArray(candlesTable.id, doomed.map((r) => r.id)));
+        removed += doomed.length;
+        if (doomed.length < PRUNE_BATCH_SIZE) break;
+      }
+      if (removed > 0) logger.info({ scope: label, removed }, "Candle prune removed rows past retention");
+      return removed;
+    };
+
     for (const [tf, days] of Object.entries(CANDLE_RETENTION_DAYS)) {
       const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
       try {
-        await db.delete(candlesTable).where(and(eq(candlesTable.timeframe, tf), lt(candlesTable.openTime, cutoff)));
+        await deleteBatched(tf, and(eq(candlesTable.timeframe, tf), lt(candlesTable.openTime, cutoff)));
       } catch (err) {
         logger.warn({ err: String(err), timeframe: tf }, "Candle prune failed; will retry next cycle");
       }
@@ -409,7 +435,7 @@ class CandleFeeder {
     // Anything the feeder no longer builds (M1 from earlier versions) is dead
     // weight that no retention window above would ever reach.
     try {
-      await db.delete(candlesTable).where(notInArray(candlesTable.timeframe, Object.keys(TIMEFRAMES)));
+      await deleteBatched("retired-timeframes", notInArray(candlesTable.timeframe, Object.keys(TIMEFRAMES)));
     } catch (err) {
       logger.warn({ err: String(err) }, "Retired-timeframe candle prune failed");
     }
