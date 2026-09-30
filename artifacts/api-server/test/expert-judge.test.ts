@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   runExpertJudge, computeConfluence, conceptKey, atrPercentile, premiumDiscount,
-  geometryGate, verifyClaims, portfolioGate, DEFAULT_THRESHOLDS as T, type OHLC,
+  geometryGate, verifyClaims, portfolioGate, swingPoints, DEFAULT_THRESHOLDS as T, type OHLC,
 } from "../src/lib/quant-filters.ts";
 
 const k = (o: number, h: number, l: number, c: number): OHLC => ({ open: o, high: h, low: l, close: c });
@@ -65,7 +65,15 @@ const m30Setup: OHLC[] = [
   k(1.1030, 1.1100, 1.1020, 1.1080), // idx18
   k(1.1080, 1.1180, 1.1060, 1.1150), // idx19: later swing high (the real target)
   k(1.1150, 1.1140, 1.1100, 1.1120), // idx20
-  k(1.1120, 1.1130, 1.1080, 1.1100), // idx21: last close stays well above the FVG
+  k(1.1120, 1.1130, 1.1080, 1.1100), // idx21
+  // idx22-24: a swing is not a swing until candles form on the far side of it.
+  // Target selection uses a k=5 fractal, so idx19 only becomes a usable
+  // liquidity pool once five candles exist after it — true in production
+  // (150 M30 candles) and now true here. Each stays below idx19's high and
+  // well above the FVG, so neither a new sweep nor a fill is introduced.
+  k(1.1100, 1.1110, 1.1070, 1.1090), // idx22
+  k(1.1090, 1.1100, 1.1060, 1.1080), // idx23
+  k(1.1080, 1.1095, 1.1055, 1.1075), // idx24: last close stays well above the FVG
 ];
 
 // No sweep anywhere in this series, so no signal should ever be produced.
@@ -210,4 +218,73 @@ test("a judge-produced signal passes geometry, claim verification and portfolio 
   // 3) Portfolio caps on a clean book.
   const pf = portfolioGate([], { symbol: "frxEURUSD", direction: result!.direction }, T);
   assert.equal(pf.ok, true, `portfolio gate rejected a first position: ${pf.reason}`);
+});
+
+// ── Target selection ─────────────────────────────────────────────────────────
+
+test("target selection excludes pools inside the noise band", () => {
+  // The rule that actually does the work is the ATR distance, not the fractal
+  // width. Worth stating plainly, because the obvious intuition is wrong: a
+  // small bump surrounded by a flat shelf IS a valid fractal at any k, since a
+  // fractal measures local isolation, not magnitude. Only distance separates a
+  // liquidity pool from noise.
+  const series: OHLC[] = [];
+  const push = (h: number, l: number) => series.push(k((h + l) / 2, h, l, (h + l) / 2));
+  for (let i = 0; i < 6; i++) push(1.1000, 1.0990);
+  push(1.1004, 1.0994);            // 4 pips above the shelf
+  for (let i = 0; i < 6; i++) push(1.1000, 1.0990);
+  push(1.1300, 1.1290);            // 300 pips above
+  for (let i = 0; i < 6; i++) push(1.1000, 1.0990);
+
+  const wide = swingPoints(series, 5).filter((x) => x.kind === "high").map((x) => x.price);
+  assert.ok(wide.includes(1.1004), "a wide fractal still sees the bump — isolation, not size");
+  assert.ok(wide.includes(1.1300), "and the real swing");
+
+  // Distance is what separates them. Entry at the shelf, one ATR of headroom.
+  const entry = 1.1000, atr = 0.0040;
+  const qualifying = wide.filter((price) => price > entry + atr);
+  assert.deepEqual(qualifying, [1.1300], "only the real pool clears one ATR beyond entry");
+
+  // Which is the whole point: measured against the near bump, reward:risk was
+  // an order of magnitude below the 2.0 floor and could never pass.
+  const stop = 1.0900;
+  assert.ok((1.1004 - entry) / (entry - stop) < 0.1);
+  assert.ok((1.1300 - entry) / (entry - stop) >= T.minRiskReward);
+});
+
+test("every signal the judge emits targets a pool at least 1 ATR beyond entry", () => {
+  const checkTargetDistance = (r: NonNullable<ReturnType<typeof runExpertJudge>>, m30: OHLC[], where: string) => {
+    // The target must always lie beyond entry in the trade's direction.
+    const beyond = r.direction === "buy" ? r.target1Level > r.entryLow : r.target1Level < r.entryLow;
+    assert.ok(beyond, `target ${r.target1Level} is not beyond entry ${r.entryLow} for a ${r.direction} (${where})`);
+
+    // The one-ATR rule is only checkable where an ATR percentile exists. A
+    // 25-candle fixture is too short for it, and the judge itself falls back to
+    // the FVG height there — so assert the real rule on the generated markets,
+    // which carry the 150 M30 candles production actually fetches.
+    const atr = atrPercentile(m30)?.atr;
+    if (atr == null || atr <= 0) return;
+    const distance = Math.abs(r.target1Level - r.entryLow);
+    assert.ok(
+      distance >= atr * 0.999,
+      `target ${r.target1Level} is only ${(distance / atr).toFixed(2)} ATR from entry ${r.entryLow} (${where})`,
+    );
+  };
+
+  // The hand-built setup guarantees this assertion actually runs rather than
+  // passing vacuously because nothing qualified.
+  const fixture = runExpertJudge(h1Bull, m30Setup, h4Flat, 0.5, new Set());
+  assert.ok(fixture, "fixture must still produce a signal");
+  checkTargetDistance(fixture, m30Setup, "fixture");
+
+  // Then the same property over generated markets. Sweeps into an unfilled FVG
+  // are genuinely rare in synthetic noise, so this is a property check on
+  // whatever does emit, not a yield measurement.
+  for (let seed = 1; seed <= 400; seed++) {
+    const h1 = noisyTrend(250, 1.1, 0.0004, 0.0016, seed);
+    const m30 = noisyTrend(150, 1.1, 0.0003, 0.0011, seed * 7);
+    const h4 = noisyTrend(30, 1.1, 0.0009, 0.0026, seed * 13);
+    const r = runExpertJudge(h1, m30, h4, 0.7, new Set(), { reason: "" });
+    if (r) checkTargetDistance(r, m30, `seed ${seed}`);
+  }
 });

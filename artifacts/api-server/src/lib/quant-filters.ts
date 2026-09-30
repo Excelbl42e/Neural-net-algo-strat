@@ -644,6 +644,15 @@ export function computeConfluence(h1: OHLC[], m30: OHLC[]): ConfluenceVote[] {
   ];
 }
 
+/**
+ * Fractal width used to pick a take-profit target. Structure detection stays at
+ * k=2 — a small pivot is enough to confirm a break — but a *target* has to be a
+ * swing other participants can see, or reward is measured against noise.
+ */
+const TARGET_SWING_FRACTAL = 5;
+/** A target closer than this to entry is inside the noise band, not a liquidity pool. */
+const TARGET_MIN_ATR = 1;
+
 // ── Deterministic expert-system judge (no LLM, no API cost) ──────────────────
 // Implements the single highest-conviction ICT setup the GPT-based prompt
 // this replaced already treated as primary — liquidity sweep -> structure
@@ -765,10 +774,38 @@ export function runExpertJudge(
   const atr = atrPercentile(m30)?.atr ?? (fvg.high - fvg.low);
   const stopBuffer = 0.1 * atr;
   const stop = bias === "buy" ? sweep.level - stopBuffer : sweep.level + stopBuffer;
-  const opposingSwings = m30Swings.filter((s) =>
-    bias === "buy" ? (s.kind === "high" && s.price > entry) : (s.kind === "low" && s.price < entry)
+  // The target is the next real pool of liquidity, which is not the same as
+  // the next bar that happens to poke above its neighbours.
+  //
+  // This used to draw from the same k=2 fractals used for structure, and take
+  // the nearest one. Risk was therefore measured to the sweep extreme — the
+  // whole displacement leg — while reward was measured to the first two-bar
+  // bump above entry, which on M30 is noise. The result was reward:risk
+  // ratios of 0.06, 0.35, 0.51 in live scans: not marginally short of the 2.0
+  // floor but an order of magnitude short, so the geometry gate could almost
+  // never pass and the bot could almost never trade. The comment here already
+  // said "the next *real* opposing swing"; the code just did not implement it.
+  //
+  // Two conditions now define "real", both independent of the reward:risk
+  // gate itself — deriving the target from the ratio it will be judged by
+  // would guarantee a pass and make the gate meaningless:
+  //   - a wider fractal, so the swing is one other participants can see
+  //   - at least one ATR clear of entry, the same yardstick the minimum stop
+  //     distance already uses
+  // If nothing qualifies, the setup is declined rather than handed a target
+  // that is not a liquidity pool.
+  const targetSwings = swingPoints(m30, TARGET_SWING_FRACTAL);
+  const minTargetDistance = TARGET_MIN_ATR * atr;
+  const opposingSwings = targetSwings.filter((s) =>
+    bias === "buy"
+      ? (s.kind === "high" && s.price > entry + minTargetDistance)
+      : (s.kind === "low" && s.price < entry - minTargetDistance),
   );
-  if (opposingSwings.length === 0) return decline("No opposing M30 swing beyond entry to use as a liquidity target");
+  if (opposingSwings.length === 0) {
+    return decline(
+      `No significant opposing M30 swing at least ${TARGET_MIN_ATR} ATR beyond entry to use as a liquidity target`,
+    );
+  }
   const target = bias === "buy"
     ? Math.min(...opposingSwings.map((s) => s.price))
     : Math.max(...opposingSwings.map((s) => s.price));

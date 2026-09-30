@@ -147,7 +147,9 @@ export async function runDemoSelfTest(conn: Conn): Promise<SelfTestResult> {
       return await finish(
         true,
         `Passed: a real multiplier was bought and sold back on the demo account` +
-        `${roundTripPnl != null ? ` (round trip ${roundTripPnl >= 0 ? "+" : ""}$${Math.abs(roundTripPnl).toFixed(2)})` : ""}` +
+        // Sign kept explicit: the spread makes this a small loss, and printing
+        // it as "$0.02" read as neither a loss nor a gain.
+        `${roundTripPnl != null ? ` (round trip ${roundTripPnl >= 0 ? "+" : "-"}$${Math.abs(roundTripPnl).toFixed(2)})` : ""}` +
         `, and the binary path was accepted at ${useDuration.value}${useDuration.unit} by quote ` +
         `(a forex binary runs for days, too long to buy and wait out here).`,
         mBuy.contractId,

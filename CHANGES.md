@@ -1,5 +1,49 @@
 # Changes in this build (vs. your Replit export)
 
+## Fix: take-profit targets were noise, so reward:risk could almost never pass
+
+The first live scan showed the judge **finding real setups** and every one of them dying at the geometry gate — not narrowly, but by an order of magnitude: `RR 0.06`, `RR 0.35`, `RR 0.51` against a floor of 2.0.
+
+### Why
+
+```ts
+const stop      = sweep.level - stopBuffer;     // the sweep extreme
+const target    = Math.min(...opposingSwings);  // the NEAREST swing
+const m30Swings = swingPoints(m30, 2);          // any 2-bar fractal
+```
+
+Risk was measured to the sweep extreme — the whole displacement leg. Reward was measured to the first two-bar bump above entry, which on M30 is noise. The comment above it already said *"the next **real** opposing swing"*; the code did not implement "real".
+
+### Measured, not assumed
+
+Across 20,227 sweep-into-FVG geometries from seeded markets:
+
+| target rule | setups still with a target | pass RR ≥ 2 | median RR |
+|---|---|---|---|
+| **k=2, no distance floor (old)** | 19,713 | **4%** | **0.11** |
+| k=5, at least 1 ATR beyond entry (new) | 16,983 | 16% | 0.70 |
+| k=5, at least 1.5 ATR | 14,158 | 29% | 1.17 |
+
+A median of 0.11 against a 2.0 floor means the gate almost never passed. That is the bug, quantified.
+
+### A correction to my own first reasoning
+
+I initially expected the wider fractal to do the work. It doesn't: a fractal measures *isolation*, not *size* — a small bump sitting on a flat shelf is a valid fractal at any width. What actually separates a liquidity pool from noise is **distance**. The fractal width still helps (confirmed swings only), but the one-ATR floor is the rule that matters, and a test now documents that so nobody makes the same assumption later.
+
+### What changed
+
+- Targets come from a **k=5 fractal** (a confirmed swing) that sits **at least one ATR beyond entry** — the same yardstick the minimum stop distance already uses.
+- Structure detection stays at k=2; a small pivot is enough to confirm a break.
+- If no swing qualifies, the setup is declined with a specific reason rather than handed a target that is not a liquidity pool.
+- **`minRiskReward` stays at 2.0.** I deliberately did not use the 1.5-ATR setting that would have let more trades through, and did not derive the target from the ratio it is judged against — both would be tuning until it trades rather than fixing what was wrong.
+
+### Also
+
+The self-test summary printed its round trip as `$0.02` while the step correctly read `-0.02`. The sign is now kept.
+
+58 tests pass. All 11 pages render with zero console errors.
+
+
 ## Make candle pruning safe on a real-sized table
 
 The retention prune filtered on `(timeframe, open_time)`, but the only index on `candles` leads with `symbol` — so every prune fell back to a **sequential scan of the whole table**. Measured on 480,000 rows: ~200ms per timeframe, seven times an hour, growing with the table forever.
