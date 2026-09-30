@@ -242,14 +242,11 @@ test("a setup whose target was reached before entry is over", () => {
   assert.equal(setupInvalidation("buy", BUY.stop, BUY.target, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY), null);
 });
 
-test("Deriv's commission is read at the more expensive of its two documented units", () => {
-  // $1 x 100: 0.02 as a percentage of the $100 position is $0.02 — the same
-  // either way, which is why the self-test round trip could not tell them apart.
+test("Deriv's commission is read as dollars, the unit the self-test measured", () => {
+  // Self-test, 2026-09-30: the field was 0.02 at $1 and 0.2 at $10 — it scales
+  // with the stake, so it is a dollar amount, not a percentage of the position.
   assert.equal(commissionUsdFromQuote(0.02, 100), 0.02);
-  // $2 x 100: as a percentage that is $0.04; as dollars $0.02. Take $0.04.
-  assert.ok(Math.abs(commissionUsdFromQuote(0.02, 200)! - 0.04) < 1e-12);
-  // Small positions: the dollar reading is the larger one and wins.
-  assert.equal(commissionUsdFromQuote(0.02, 50), 0.02);
+  assert.equal(commissionUsdFromQuote(0.2, 1000), 0.2);
   assert.equal(commissionUsdFromQuote(null, 100), null);
   assert.equal(commissionUsdFromQuote(-1, 100), null);
 });
