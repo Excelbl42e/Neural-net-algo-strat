@@ -11,7 +11,7 @@
  * Account-scoped operations require a separate authenticated connection.
  */
 import WebSocket from "ws";
-import { sql, and, eq, desc } from "drizzle-orm";
+import { sql, and, eq, desc, lt, notInArray } from "drizzle-orm";
 import { db, candlesTable, type Candle } from "@workspace/db";
 import { logger } from "./logger.js";
 import { isSyntheticCode, getSyntheticSymbol, DEFAULT_FEED_SYMBOLS as CATALOG_DEFAULT_SYMBOLS } from "./synthetic-catalog.js";
@@ -25,8 +25,15 @@ const normalizeSymbol = (s: string): string => {
   return known?.code ?? s;
 };
 
+/**
+ * Timeframes this feeder builds and stores.
+ *
+ * M1 was built and persisted here but read by nothing: the chart offers M5 and
+ * up, and the judge uses H4/H1/M30. At 1,440 bars a day per symbol it was
+ * roughly three quarters of all candle writes and re-fetched 500 rows per
+ * symbol on every reconnect, for data no code path has ever queried. Removed.
+ */
 const TIMEFRAMES: Record<string, number> = {
-  M1: 60,
   M5: 5 * 60,
   M15: 15 * 60,
   M30: 30 * 60,
@@ -34,6 +41,21 @@ const TIMEFRAMES: Record<string, number> = {
   H4: 4 * 60 * 60,
   D1: 24 * 60 * 60,
 };
+
+/**
+ * How long each timeframe is kept.
+ *
+ * Nothing pruned this table, so it grew forever — about 13,000 rows a day
+ * across the catalogue even without M1 — until the database filled and every
+ * write started failing, which would read as the bot mysteriously dying weeks
+ * later. Each window is comfortably more than anything that reads it needs:
+ * the judge's deepest look-back is 250 H1 bars (~10 days) and 150 M30 bars
+ * (~3 days); the rest is chart history.
+ */
+const CANDLE_RETENTION_DAYS: Record<string, number> = {
+  M5: 7, M15: 14, M30: 30, H1: 90, H4: 180, D1: 730,
+};
+const CANDLE_PRUNE_EVERY_MS = 60 * 60 * 1000;
 
 // Public endpoint verified with a 101 upgrade and real ticks/candles.
 // Do not reuse it for account authorization or trading.
@@ -47,6 +69,7 @@ class CandleFeeder {
   private reconnectTimer: NodeJS.Timeout | null = null;
   private reconnectAttempts = 0;
   private subscribedSymbols = new Set<string>();
+  private pruneTimer: NodeJS.Timeout | null = null;
   /** Symbols Deriv refused, with its reason. Reported separately: one bad symbol is not a broken feed. */
   private rejectedSymbols = new Map<string, string>();
   private buckets = new Map<string, OHLC>();
@@ -62,6 +85,11 @@ class CandleFeeder {
       const code = normalizeSymbol(s);
       if (isSyntheticCode(code)) this.subscribedSymbols.add(code);
     }
+    // Trim on boot as well as hourly, so an already-bloated table is brought
+    // back inside its window without waiting an hour first.
+    void this.pruneOldCandles();
+    this.pruneTimer ??= setInterval(() => { void this.pruneOldCandles(); }, CANDLE_PRUNE_EVERY_MS);
+    this.pruneTimer.unref?.();
     // Always connect — the user can lazy-subscribe symbols later via ensureSubscribed().
     this.connect();
   }
@@ -129,7 +157,7 @@ class CandleFeeder {
           // Subscribe to live ticks
           this.ws?.send(JSON.stringify({ ticks: s, subscribe: 1 }));
           // Fetch 500 historical candles for each timeframe immediately
-          for (const granularity of [60, 300, 900, 1800, 3600, 14400, 86400]) {
+          for (const granularity of Object.values(TIMEFRAMES)) {
             this.ws?.send(JSON.stringify({
               ticks_history: s,
               granularity,
@@ -235,9 +263,9 @@ class CandleFeeder {
     if (msg.msg_type === "candles" && Array.isArray(msg.candles) && msg.echo_req?.ticks_history) {
       const symbol = normalizeSymbol(msg.echo_req.ticks_history);
       const granularity = msg.echo_req.granularity ?? 300;
-      const tf = ({
-        60: "M1", 300: "M5", 900: "M15", 1800: "M30", 3600: "H1", 14400: "H4", 86400: "D1",
-      } as Record<number, string>)[granularity] ?? "M5";
+      // Derived from TIMEFRAMES so a tier can never be added or removed in one
+      // place and silently mislabelled here.
+      const tf = Object.entries(TIMEFRAMES).find(([, secs]) => secs === granularity)?.[0] ?? "M5";
       // Deriv's history includes the real, possibly in-progress current candle.
       // Rehydrate only that exact bucket after reconnect/restart; never fill a
       // gap or synthesize OHLC from the last tick.
@@ -337,6 +365,29 @@ class CandleFeeder {
         .catch((err) =>
           logger.warn({ err: String(err), symbol, tf, openTime: start }, "Candle persist failed; will retry")
         );
+    }
+  }
+
+  /**
+   * Drops candles older than their timeframe's retention window, one timeframe
+   * at a time so a single large delete cannot lock the table for long. Purely
+   * best-effort: a failure here must never interrupt the feed.
+   */
+  private async pruneOldCandles(): Promise<void> {
+    for (const [tf, days] of Object.entries(CANDLE_RETENTION_DAYS)) {
+      const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+      try {
+        await db.delete(candlesTable).where(and(eq(candlesTable.timeframe, tf), lt(candlesTable.openTime, cutoff)));
+      } catch (err) {
+        logger.warn({ err: String(err), timeframe: tf }, "Candle prune failed; will retry next cycle");
+      }
+    }
+    // Anything the feeder no longer builds (M1 from earlier versions) is dead
+    // weight that no retention window above would ever reach.
+    try {
+      await db.delete(candlesTable).where(notInArray(candlesTable.timeframe, Object.keys(TIMEFRAMES)));
+    } catch (err) {
+      logger.warn({ err: String(err) }, "Retired-timeframe candle prune failed");
     }
   }
 

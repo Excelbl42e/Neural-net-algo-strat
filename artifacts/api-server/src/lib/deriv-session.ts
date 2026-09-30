@@ -4,6 +4,7 @@
  * anything is persisted or logged.
  */
 import WebSocket from "ws";
+import { lt } from "drizzle-orm";
 import { db, derivFramesTable } from "@workspace/db";
 import { accountWebSocketUrl, inspectDerivAccount, type OptionsAccount } from "./deriv-account.js";
 import { logger } from "./logger.js";
@@ -20,6 +21,33 @@ export function redact(value: unknown): unknown {
     return out;
   }
   return value;
+}
+
+/**
+ * Retention for the raw-frame journal.
+ *
+ * Every Deriv frame in and out is written here, up to 20 KB each, and nothing
+ * ever deleted them. The contract monitor alone opens a session every 30s
+ * while a position is open, so on a 24/7 bot this table grows without bound
+ * until the database fills — at which point every write fails and the bot
+ * stops trading, long after anyone would connect the two. The journal is a
+ * debugging aid for recent orders, so keep a bounded recent window.
+ */
+const FRAME_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+const FRAME_PRUNE_EVERY_MS = 60 * 60 * 1000;
+let lastFramePruneAt = 0;
+
+/** Deletes frames past the retention window. Cheap, best-effort, and never blocks a caller. */
+async function pruneFramesIfDue(): Promise<void> {
+  const now = Date.now();
+  if (now - lastFramePruneAt < FRAME_PRUNE_EVERY_MS) return;
+  lastFramePruneAt = now;
+  try {
+    await db.delete(derivFramesTable).where(lt(derivFramesTable.receivedAt, new Date(now - FRAME_RETENTION_MS)));
+  } catch (err) {
+    // Never surface this: failing to prune must not stop a trade being recorded.
+    logger.warn({ err: err instanceof Error ? err.message : String(err) }, "deriv_frames prune failed");
+  }
 }
 
 export async function recordFrame(
@@ -42,6 +70,7 @@ export async function recordFrame(
   } catch {
     /* frame capture is best effort and must never break trading logic */
   }
+  void pruneFramesIfDue();
 }
 
 export class DerivRequestTimeout extends Error {

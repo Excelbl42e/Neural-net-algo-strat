@@ -25,7 +25,7 @@ import { logger } from "./logger.js";
 import { placeDerivTrade, getIndicativeCostPct } from "./deriv.js";
 import { ALL_FOREX_INSTRUMENTS, getSyntheticSymbol, isForexCode } from "./synthetic-catalog.js";
 import { calculateCappedStake, calculateDailyLossCappedStake, applyMultiplierFloor, effectiveRiskPcts, worstCaseLoss, MULTIPLIER_MIN_STAKE } from "./execution-risk.js";
-import { forexPreScanGate, forexDispatchGate } from "./forex-readiness.js";
+import { forexPreScanGate, tradingCostGate } from "./forex-readiness.js";
 import { getNewsEvents } from "./news-calendar.js";
 import { scoreConcepts } from "./trade-review.js";
 import { claimReason, getExecutionLock } from "./reconciler.js";
@@ -713,22 +713,24 @@ async function dispatchTradeUnlocked(
   }
 
   {
+    // Market-hours, killzone and news checks first. These are free and local,
+    // and they reject most of what gets here — running them before any network
+    // call keeps a closed market from costing a round-trip per signal. The
+    // trading-cost check that used to live here has moved below, to where the
+    // stake and contract type are actually known.
     const newsEvents = await getNewsEvents();
-    const costPct = await getIndicativeCostPct(token, wantEnv, signal.symbol);
-    const dispatchReadiness = forexDispatchGate({
+    const preDispatch = forexPreScanGate({
       symbol: signal.symbol,
       now: new Date(),
       killzones: forex.killzones,
       newsEvents,
       newsBlackoutBeforeMin: forex.newsBlackoutBeforeMin,
       newsBlackoutAfterMin: forex.newsBlackoutAfterMin,
-      costPct,
-      maxCostPct: forex.maxSpreadCostPct,
     });
-    if (!dispatchReadiness.ok) {
-      await recordGeneratedReason(signal.id, dispatchReadiness.reason ?? "Forex readiness gate failed");
-      recordRejection({ symbol: signal.symbol, stage: "forex_readiness", reason: dispatchReadiness.reason ?? "Forex readiness gate failed" });
-      logger.warn({ symbol: signal.symbol, reason: dispatchReadiness.reason }, "Forex readiness gate refused dispatch");
+    if (!preDispatch.ok) {
+      await recordGeneratedReason(signal.id, preDispatch.reason ?? "Forex readiness gate failed");
+      recordRejection({ symbol: signal.symbol, stage: "forex_readiness", reason: preDispatch.reason ?? "Forex readiness gate failed" });
+      logger.warn({ symbol: signal.symbol, reason: preDispatch.reason }, "Forex readiness gate refused dispatch");
       return;
     }
   }
@@ -923,6 +925,22 @@ async function dispatchTradeUnlocked(
       await recordGeneratedReason(signal.id, reason);
       recordRejection({ symbol: signal.symbol, stage: "sizing", reason, metrics: { equity, stake: stakeAmount, confidence } });
       logger.info({ symbol: signal.symbol, equity, stakeAmount, confidence, required }, "Binary fallback refused: confidence below the binary bar");
+      return;
+    }
+  }
+
+  // Trading-cost gate, now that the stake and contract type are settled. It
+  // quotes exactly what is about to be sent: asking for a $1 multiplier quote
+  // on an account whose order is a sub-$1 binary measured an instrument that
+  // would never be traded, and a refusal of that quote refused the trade.
+  {
+    const costPct = await getIndicativeCostPct(token, wantEnv, signal.symbol, { stakeAmount, binary: forceBinary });
+    const costGate = tradingCostGate(costPct, forex.maxSpreadCostPct);
+    if (!costGate.ok) {
+      const reason = costGate.reason ?? "Trading-cost gate refused dispatch";
+      await recordGeneratedReason(signal.id, reason);
+      recordRejection({ symbol: signal.symbol, stage: "forex_readiness", reason, metrics: { costPct, stakeAmount, binary: forceBinary } });
+      logger.warn({ symbol: signal.symbol, costPct, stakeAmount, forceBinary }, reason);
       return;
     }
   }
