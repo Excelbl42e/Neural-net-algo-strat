@@ -62,6 +62,24 @@ interface RiskBandRow {
 }
 interface RiskBandsResponse { configuredRiskPct: number; configuredDailyLossPct: number; bands: RiskBandRow[] }
 
+/**
+ * Autotrade labels, kept in one place so the trigger and the menu cannot drift.
+ *
+ * The trigger text has to be derived from the form value rather than left to
+ * Radix. Radix learns an option's label from the `SelectItem` that renders it,
+ * and it does not mount the menu until the select is opened — so it only knows
+ * the label of whatever was selected at mount. This form mounts with hardcoded
+ * defaults ("off") and is only filled from the server afterwards by
+ * `form.reset()`, so any saved value other than "off" arrived at a moment when
+ * Radix had no label for it and the trigger rendered empty. Passing the label
+ * as `SelectValue`'s children makes it a pure function of the form value.
+ */
+const AUTOTRADE_LABEL: Record<FormValues["autotradeMode"], string> = {
+  off: "Off: signals only, no orders",
+  auto_demo: "Auto on Deriv DEMO account",
+  auto_live: "Auto on REAL account (needs passed demo self-test)",
+};
+
 /** Plain-language name for each rung of the ladder. */
 const BAND_LABEL: Record<string, string> = {
   floor: "Floor", build: "Build", grow: "Grow", steady: "Steady", mature: "Mature",
@@ -348,12 +366,29 @@ export default function ConfigurationPage() {
               <FormField control={form.control} name="autotradeMode" render={({ field }) => (
                 <FormItem>
                   <FormLabel>Autotrade mode</FormLabel>
-                  <Select onValueChange={field.onChange} value={field.value}>
-                    <FormControl><SelectTrigger data-testid="select-autotrade-mode"><SelectValue /></SelectTrigger></FormControl>
+                  {/*
+                    The empty-value guard is load-bearing, not defensive noise.
+                    Radix keeps a hidden native <select> whose <option>s come
+                    from the items, and the items only exist once the menu has
+                    been opened. This form mounts with hardcoded defaults and is
+                    filled from the server afterwards by form.reset(), so a
+                    saved "auto_demo" arrived when Radix had no option for it —
+                    Radix then reported the mismatch back as onValueChange("")
+                    and wiped the field a moment after reset set it. That is why
+                    the mode looked blank after every reload while the server
+                    had it saved correctly the whole time. No item has an empty
+                    value, so "" can only ever be that spurious clear.
+                  */}
+                  <Select onValueChange={(v) => { if (v) field.onChange(v); }} value={field.value}>
+                    <FormControl>
+                      <SelectTrigger data-testid="select-autotrade-mode">
+                        <SelectValue placeholder="Select a mode">{AUTOTRADE_LABEL[field.value]}</SelectValue>
+                      </SelectTrigger>
+                    </FormControl>
                     <SelectContent>
-                      <SelectItem value="off">Off: signals only, no orders</SelectItem>
-                      <SelectItem value="auto_demo">Auto on Deriv DEMO account</SelectItem>
-                      <SelectItem value="auto_live">Auto on REAL account (needs passed demo self-test)</SelectItem>
+                      {(Object.keys(AUTOTRADE_LABEL) as Array<FormValues["autotradeMode"]>).map((m) => (
+                        <SelectItem key={m} value={m}>{AUTOTRADE_LABEL[m]}</SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
                   {mode === "auto_live" && (

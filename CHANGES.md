@@ -1,5 +1,32 @@
 # Changes in this build (vs. your Replit export)
 
+## Fix: Autotrade mode went blank on every reload
+
+Reported twice; it was a real bug, and the cause was not where it looked.
+
+The server was never wrong. The mode saved correctly, the banner across the top read `MODE: AUTO_DEMO`, and `/api/config` returned `"autotradeMode":"auto_demo"` to the page. Only the dropdown on the Configuration page rendered empty.
+
+Traced by instrumenting the form. `form.reset()` set the field to `auto_demo` correctly — and roughly a second later something set it back to an empty string:
+
+```
+DBG effect: config.autotradeMode = "auto_demo"
+DBG after reset: getValues = "auto_demo"
+DBG 1s later:    getValues = ""
+```
+
+That something is the Select component itself. Radix keeps a hidden native `<select>` for form integration, whose `<option>`s come from the menu items — and it does not mount the menu until the select is first opened. This form mounts with hardcoded defaults (`off`) and is only filled from the server afterwards, so a saved `auto_demo` arrived at a moment when Radix had no option matching it. Radix reported that mismatch back as `onValueChange("")`, which wiped the form field just after `reset()` had set it.
+
+Which is why the symptom was so specific: `off` always displayed fine (it is the value present at mount), and only `auto_demo` and `auto_live` disappeared.
+
+Two changes:
+- Empty values coming back from the Select are ignored. No item has an empty value, so `""` can only ever be that spurious clear, never a real choice.
+- The trigger's text is now derived from the form value through a single `AUTOTRADE_LABEL` map used for both the trigger and the menu, instead of relying on Radix to know the label of an item it has not mounted. The trigger and the options can no longer drift apart either.
+
+Verified in a browser against a database holding `auto_demo`: correct after reload, correct after a second reload, correct after picking a different mode and saving. Zero page errors.
+
+Worth noting for later: only this page populates a dropdown from server data, so no other Select had the bug. Any new one filled the same way would need the same care.
+
+
 ## Update: the stake ladder — risk that adapts to the balance
 
 Sizing was one flat percentage applied at every balance, which cannot be right at both ends of this account's life. At $5, 20% is not aggression: it is the *smallest* number that reaches Deriv's $1.00 multiplier stake. At $500 that same 20% is a $100 swing per trade. Your saved settings are now a ceiling, and the balance applies a second one; the lower of the two trades.
