@@ -1,4 +1,13 @@
 import { getSecret, setSecret } from "./secrets.js";
+import { getSyntheticSymbol } from "./synthetic-catalog.js";
+
+/**
+ * Entries for pairs the bot no longer scans are dropped. The log is stored,
+ * so after the catalogue shrank to Deriv's 14 multiplier pairs the old rows
+ * for removed pairs would otherwise sit in the panel for hours, reading as
+ * though the bot were still analysing pairs it cannot trade.
+ */
+const stillScanned = (e: RejectionEntry) => getSyntheticSymbol(e.symbol) !== null;
 
 const KEY = "quant_rejections";
 const MAX = 200;
@@ -47,7 +56,7 @@ export function recordRejection(e: Omit<RejectionEntry, "at">): void {
   queue = queue.then(async () => {
     try {
       const raw = await getSecret(KEY);
-      const list: RejectionEntry[] = raw ? JSON.parse(raw) : [];
+      const list: RejectionEntry[] = (raw ? JSON.parse(raw) as RejectionEntry[] : []).filter(stillScanned);
       list.unshift({ ...e, at: new Date().toISOString() });
       await setSecret(KEY, JSON.stringify(list.slice(0, MAX)));
     } catch { /* journal logging must never break the worker */ }
@@ -55,5 +64,8 @@ export function recordRejection(e: Omit<RejectionEntry, "at">): void {
 }
 
 export async function listRejections(): Promise<RejectionEntry[]> {
-  try { const raw = await getSecret(KEY); return raw ? JSON.parse(raw) : []; } catch { return []; }
+  try {
+    const raw = await getSecret(KEY);
+    return raw ? (JSON.parse(raw) as RejectionEntry[]).filter(stillScanned) : [];
+  } catch { return []; }
 }
