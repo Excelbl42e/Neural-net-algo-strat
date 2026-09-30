@@ -1,5 +1,39 @@
 # Changes in this build (vs. your Replit export)
 
+## Fix: the demo self-test never placed an order
+
+You noticed the Deriv balance never moved when you ran it. It never moved because **nothing was ever bought**, and I had told you otherwise. That was wrong, and it mattered — it was the one thing the test was supposed to prove.
+
+Both paths were quote-only:
+
+- The multiplier check was a `proposal`, explicitly "never a `buy`".
+- The binary check *could* buy, but only when Deriv's own reported minimum duration fits inside the 20-minute synchronous wait. A forex binary runs for **days**, so that branch is unreachable for forex and it fell through to another proposal.
+
+A proposal never creates a contract, so the balance was correct to stay still.
+
+### Why it was built that way, and why that reason expired
+
+The comment says the multiplier stayed quote-only because the codebase "has no way to close a multiplier position early". That has not been true for a while — `sellDerivTrade` exists and both the contract monitor and the manual-close route call it.
+
+Meanwhile the sell path had **never run against Deriv at all**. Its own note read: *"treat a first real use of this as a genuine test, not a proven capability."* So the first real use of selling would have been the contract monitor closing a **funded** position. That is the worst imaginable place to discover a bug, and this whole file exists to stop exactly that — the buy path once had a wrong field name that no amount of review caught and only a live order exposed.
+
+### What it does now
+
+A genuine multiplier round trip on the demo account:
+
+1. Quote the multiplier shape (unchanged)
+2. **Buy** at Deriv's $1.00 minimum, with a stop-loss and take-profit attached so `limit_order` is exercised too
+3. Confirm the contract opened
+4. **Sell it straight back**
+5. Report the buy price, the sell price and the round-trip cost
+
+The demo balance moves by the spread — that movement is the proof an order really went out. If the buy confirms but the sell fails, it says so loudly, names the contract, and tells you not to fund until the sell path works.
+
+The binary path stays a quote-only check, honestly labelled: a forex binary runs for days and cannot be bought and waited out inside a self-test.
+
+This also makes the `auto_live` gate mean something. "A passed demo self-test" now implies an order went out and came back, rather than that two quotes were accepted.
+
+
 ## Audit pass: numeric edge cases, and an error handler that talked too much
 
 Rather than read the quant layer and hope, this pass drove every exported function with degenerate inputs — empty series, a single bar, sixty flat bars, all zeros, negatives, values near the floating-point floor — and reported anything that threw or produced a non-finite number. 37 functions x 8 inputs, then the judge itself across 125 combinations of those series.
