@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useRunAnalysis, useGetWorkerStatus, getGetWorkerStatusQueryKey } from "@workspace/api-client-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -9,6 +10,31 @@ import { Loader2, ScanSearch, AlertCircle, CheckCircle2, Crosshair, Plug } from 
 import { cn } from "@/lib/utils";
 
 const TIMEFRAMES = ["M5", "M15", "M30", "H1", "H4", "D1"];
+
+interface Rejection {
+  at: string;
+  symbol: string;
+  stage: "pre_gpt" | "no_tick" | "expert_judge" | "post_gpt" | "portfolio" | "sizing" | "execution" | "forex_readiness";
+  reason: string;
+  metrics?: Record<string, unknown>;
+}
+
+/**
+ * Plain-language name for each pipeline stage. The wire names `pre_gpt` and
+ * `post_gpt` are kept in the data so entries recorded before the language
+ * model was removed still render, but there is no GPT in the path — they are
+ * the quant pre-filter and the post-judge geometry checks.
+ */
+const STAGE_LABEL: Record<Rejection["stage"], string> = {
+  no_tick: "No price tick",
+  pre_gpt: "Quant pre-filter",
+  expert_judge: "Expert judge",
+  post_gpt: "Geometry / claim check",
+  portfolio: "Portfolio caps",
+  sizing: "Risk sizing",
+  forex_readiness: "Market readiness",
+  execution: "Execution",
+};
 
 const STATUS_META: Record<string, { color: string; icon: React.ReactNode; title: string }> = {
   no_data: {
@@ -33,6 +59,18 @@ export default function AnalysisPage() {
   const [timeframe, setTimeframe] = useState("H1");
   const run = useRunAnalysis();
   const { data: workerStatus } = useGetWorkerStatus({ query: { refetchInterval: 10000, queryKey: getGetWorkerStatusQueryKey() } });
+  // Every refusal is already recorded server-side; until now the only way to
+  // read it was to request the endpoint by hand, which left "why has it not
+  // traded?" — the question that actually matters — unanswerable from the app.
+  const rejections = useQuery<Rejection[]>({
+    queryKey: ["system-rejections"],
+    queryFn: async () => {
+      const r = await fetch("/api/system/rejections", { cache: "no-store" });
+      if (!r.ok) throw new Error(String(r.status));
+      return r.json();
+    },
+    refetchInterval: 15000,
+  });
 
   const onSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -76,6 +114,42 @@ export default function AnalysisPage() {
           )}
         </div>
       )}
+
+      {/* Why nothing traded: the recorded refusal reasons, newest first. */}
+      <Card className="border-border" data-testid="card-rejections">
+        <CardHeader className="pb-3">
+          <CardTitle className="uppercase tracking-wider text-sm flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 text-primary" /> Why no trade was placed
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-[11px] text-muted-foreground mb-3">
+            Each scan records the exact gate that dropped a symbol. An empty list with an active worker means nothing was
+            refused — no setup qualified. The last 200 are kept.
+          </p>
+          {rejections.isLoading ? (
+            <div className="text-xs text-muted-foreground">Loading…</div>
+          ) : rejections.isError ? (
+            <div className="text-xs text-amber-300">Could not read the refusal log — treat "no trades" as unexplained.</div>
+          ) : (rejections.data ?? []).length === 0 ? (
+            <div className="text-xs text-muted-foreground" data-testid="text-no-rejections">
+              Nothing recorded yet. If the worker has run and no signal was produced, no symbol reached a gate that
+              refuses — check the Overview health panel first.
+            </div>
+          ) : (
+            <div className="space-y-1.5 max-h-80 overflow-y-auto">
+              {(rejections.data ?? []).slice(0, 40).map((r, i) => (
+                <div key={`${r.at}-${i}`} className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 border-t border-border/60 pt-1.5 text-[11px]" data-testid={`rejection-${i}`}>
+                  <span className="font-mono-numbers text-muted-foreground shrink-0">{new Date(r.at).toLocaleTimeString()}</span>
+                  <span className="font-mono-numbers text-foreground shrink-0">{r.symbol}</span>
+                  <span className="text-primary shrink-0">{STAGE_LABEL[r.stage] ?? r.stage}</span>
+                  <span className="text-muted-foreground break-words min-w-0 flex-1">{r.reason}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       <Card className="border-border">
         <CardHeader className="pb-3">

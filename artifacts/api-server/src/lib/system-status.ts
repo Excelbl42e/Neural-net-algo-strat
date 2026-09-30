@@ -41,8 +41,13 @@ export async function getSystemStatus() {
   push("signal_judge", "ok", "Deterministic expert-system judge active — no LLM, no API cost");
 
   const news = getNewsCalendarStatus();
-  push("news_calendar", news.trusted ? "ok" : "degraded",
-    news.trusted ? `${news.cachedEvents} events cached, fetched ${news.fetchedAt}` : `Calendar unreachable or stale (${news.lastError ?? "never fetched yet"}); forex trading fails closed until it recovers`);
+  // Reported as "down", not "degraded": while this feed is untrusted every
+  // forex order is refused, so the system is not running in a reduced state,
+  // it is not trading at all. The top-level badge should be red for that.
+  push("news_calendar", news.trusted ? "ok" : "down",
+    news.trusted
+      ? `${news.cachedEvents} events cached, fetched ${news.fetchedAt}`
+      : `NO TRADES CAN BE PLACED. The high-impact news calendar is ${news.lastError ? `unreachable (${news.lastError})` : "not yet fetched"}, and forex trading fails closed until it recovers. Set NEWS_CALENDAR_URL to a reachable mirror if this host stays blocked.`);
 
   const w = getWorkerStatus();
   let cfg: typeof botConfigTable.$inferSelect | undefined;

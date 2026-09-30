@@ -77,13 +77,15 @@ export function clearBinaryDurationCache(): void { binaryDurationCache.clear(); 
  * we send the live-verified fallback instead and the trade still goes out.
  */
 async function resolveBinaryDuration(
-  session: DerivSession, symbol: string, currency: string,
+  session: DerivSession, symbol: string, currency: string, stakeAmount: number,
 ): Promise<{ d: BinaryDuration; note: string }> {
   const preferred: BinaryDuration = { value: defaultBinaryDurationDays(), unit: "d" };
   const fallback: BinaryDuration = { value: VERIFIED_BINARY_FALLBACK_DAYS, unit: "d" };
   // Nothing to gain from probing a duration that is not shorter than the fallback.
   if (preferred.value >= fallback.value) return { d: preferred, note: `${preferred.value}d (not shorter than the verified fallback; sent as-is)` };
 
+  // Keyed by symbol only: Deriv's allowed durations are a property of the
+  // instrument, not of the stake, so one probe answers for every stake size.
   const key = `${symbol}:${preferred.value}${preferred.unit}`;
   const hit = binaryDurationCache.get(key);
   if (hit && Date.now() - hit.at < BINARY_DURATION_CACHE_MS) return { d: hit.d, note: `${hit.d.value}${hit.d.unit} (cached probe result)` };
@@ -91,7 +93,11 @@ async function resolveBinaryDuration(
   try {
     const res = await session.request<{ proposal?: { id?: string }; error?: { message?: string } }>(
       {
-        proposal: 1, amount: 0.5, basis: "stake", contract_type: "CALL",
+        // Probe with the stake we are actually about to send. A hardcoded
+        // amount risks Deriv refusing the proposal over the *stake* and this
+        // reading it as a refusal of the duration, silently costing us the
+        // shorter contract for no reason.
+        proposal: 1, amount: stakeAmount, basis: "stake", contract_type: "CALL",
         currency, underlying_symbol: symbol, duration: preferred.value, duration_unit: preferred.unit,
       },
       { timeoutMs: 8_000 },
@@ -166,7 +172,7 @@ export async function placeDerivTrade(params: DerivTradeParams): Promise<DerivTr
     // An explicit override (the self-test) is obeyed verbatim; otherwise probe.
     let d: BinaryDuration;
     if (params.binaryDuration) { d = params.binaryDuration; }
-    else { const r = await resolveBinaryDuration(session, symbol, currency); d = r.d; durationNote = r.note; }
+    else { const r = await resolveBinaryDuration(session, symbol, currency, params.stakeAmount); d = r.d; durationNote = r.note; }
     duration = `${d.value}${d.unit}`;
     parameters = {
       contract_type: params.direction === "buy" ? "CALL" : "PUT",

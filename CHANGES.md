@@ -1,5 +1,32 @@
 # Changes in this build (vs. your Replit export)
 
+## Audit before funding: four findings, all fixed
+
+### "Why no trade was placed" is now a panel, not an API call
+
+Every refusal the pipeline makes was already being recorded — which gate, which symbol, the exact reason, last 200 kept — and served at `/api/system/rejections`. **No page displayed it.** The one question that actually matters when nothing happens was answerable only by typing a URL into the address bar.
+
+It is now a panel at the top of the Analysis page, newest first, refreshed every 15s, with the pipeline stages named in plain language instead of their wire names (`pre_gpt` → "Quant pre-filter", `post_gpt` → "Geometry / claim check", and so on — those names stay in the stored data so entries recorded before the language model was removed still render).
+
+On this machine it immediately explained the silence: 18 entries, all `Market readiness — News calendar unavailable; forex trading fails closed until it can be fetched`.
+
+### An unreachable news calendar was reported as "degraded". It is not degraded, it is stopped.
+
+While that feed is untrusted **every forex order is refused** — `newsBlackoutActive()` returns blocked when the event list is null, by design. Reporting that as amber understated it to the point of being misleading: the system was not running in a reduced state, it was not trading at all, and the top-level badge stayed green-ish.
+
+It now reports **down**, turning the overall badge red, and says so directly: *"NO TRADES CAN BE PLACED… Set NEWS_CALENDAR_URL to a reachable mirror if this host stays blocked."* The fail-closed behaviour itself is correct and unchanged — trading blind through a high-impact release is how accounts die — but you should never have to guess that it is what is happening.
+
+### The binary duration probe asked with the wrong stake
+
+The probe that asks Deriv whether a 1-day binary is allowed sent a hardcoded `amount: 0.5`. If Deriv refused that proposal because of the *stake* rather than the *duration*, the result was read as "1 day not allowed" and the contract silently fell back to 3 days for no reason. It now probes with the stake actually about to be sent. The cache stays keyed by symbol alone, since Deriv's allowed durations are a property of the instrument, not the stake.
+
+### Stale copy on two pages
+
+The Overview flow still said the strategy list "feeds the signal prompt directly" — there is no prompt. The Strategy page called the expert system a budget stopgap: *"while no AI budget is configured… ready for GPT"*. Both now describe what the code does.
+
+Verified: 46 tests pass, all 11 pages render with zero console errors, no overflow at 1440px or 375px, and the rejection panel renders 18 real entries.
+
+
 ## Fix: "Invalid symbol" that named no symbol and never cleared
 
 The Chart page showed `Feeder error: Invalid symbol.` next to a feed badge reading `FEED CONNECTED · 28 symbols`. Both were true at once, and neither was useful.
