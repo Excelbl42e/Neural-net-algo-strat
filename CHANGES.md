@@ -1,5 +1,10 @@
 # Changes in this build (vs. your Replit export)
 
+## Commission read as dollars, as measured
+
+The demo self-test compared Deriv's `commission` field at two stakes: 0.02 at $1, 0.2 at $10. It scales with the stake, so it is a dollar amount, which settles the conflict in Deriv's docs. The dispatcher had been taking the larger of the two possible readings. That is identical at the $1 stake, but at $10 it would have counted $2.00 instead of $0.20 and turned away trades that clear reward:risk. It now uses the dollar value. The same self-test run confirmed x100 is offered on all 14 pairs and that Deriv's shortest forex Rise/Fall is 1 day, which is what the bot sends.
+
+
 ## Second pass against Deriv's docs: rate limits, connection limits, keep-alive
 
 - **Self-test would have tripped Deriv's rate limit.** With `contracts_for` now working, the self-test would have learned Deriv's short minimum binary duration (likely ~15 minutes). It would then have bought one and polled for settlement with a fresh login every few seconds: about 40 REST calls a minute against Deriv's documented 60-per-minute limit, for up to 17 minutes. That branch had never run live. The binary step is now quote-only at the duration the bot actually sends; Deriv's minimum is reported for information.
