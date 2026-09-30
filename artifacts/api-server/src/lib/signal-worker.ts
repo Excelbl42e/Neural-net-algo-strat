@@ -1092,12 +1092,18 @@ async function dispatchTradeUnlocked(
 
   // Phase 2: quote exactly this contract. Deriv's quote carries the real cost
   // and, for multipliers, its own stop-loss / take-profit limits.
-  const quote = await getContractQuote(token, wantEnv, signal.symbol, {
+  const quoted = await getContractQuote(token, wantEnv, signal.symbol, {
     stakeAmount, binary: forceBinary, direction, currency: linkedAccount.currency ?? undefined,
   });
+  const quote = "error" in quoted ? null : quoted;
   const costGate = tradingCostGate(quote?.costPct ?? null, forex.maxSpreadCostPct);
   if (!costGate.ok) {
-    const reason = costGate.reason ?? "Trading-cost gate refused dispatch";
+    // Deriv's own reason when it refused the quote (a multiplier it does not
+    // offer on this pair, say) rather than a generic "could not read a price".
+    const reason = "error" in quoted
+      ? `${quoted.error}; no order is sent without a live quote`
+      : costGate.reason ?? "Trading-cost gate refused dispatch";
+    quoteBackoff.set(signal.id, Date.now() + QUOTE_BACKOFF_MS);
     await recordGeneratedReason(signal.id, reason);
     recordRejection({ symbol: signal.symbol, stage: "forex_readiness", reason, metrics: { costPct: quote?.costPct ?? null, costSource: quote?.costSource ?? null, stakeAmount, binary: forceBinary } });
     logger.warn({ symbol: signal.symbol, quote, stakeAmount, forceBinary }, reason);

@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  planEntry, entryZoneState, parseDerivLimitRejection, setupInvalidation, DEFAULT_MIN_LIMIT_ORDER_USD, KNOWN_ACCEPTED_LIMIT_ORDER_USD,
+  planEntry, entryZoneState, parseDerivLimitRejection, setupInvalidation, commissionUsdFromQuote,
+  DEFAULT_MIN_LIMIT_ORDER_USD, KNOWN_ACCEPTED_LIMIT_ORDER_USD,
   type EntryPlanInput,
 } from "../src/lib/execution-risk.ts";
 
@@ -239,4 +240,16 @@ test("a setup whose target was reached before entry is over", () => {
   assert.equal(setupInvalidation("sell", SELL.stop, SELL.target, 1.0900, 1.1100), null);
   // No history yet: nothing to judge.
   assert.equal(setupInvalidation("buy", BUY.stop, BUY.target, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY), null);
+});
+
+test("Deriv's commission is read at the more expensive of its two documented units", () => {
+  // $1 x 100: 0.02 as a percentage of the $100 position is $0.02 — the same
+  // either way, which is why the self-test round trip could not tell them apart.
+  assert.equal(commissionUsdFromQuote(0.02, 100), 0.02);
+  // $2 x 100: as a percentage that is $0.04; as dollars $0.02. Take $0.04.
+  assert.ok(Math.abs(commissionUsdFromQuote(0.02, 200)! - 0.04) < 1e-12);
+  // Small positions: the dollar reading is the larger one and wins.
+  assert.equal(commissionUsdFromQuote(0.02, 50), 0.02);
+  assert.equal(commissionUsdFromQuote(null, 100), null);
+  assert.equal(commissionUsdFromQuote(-1, 100), null);
 });

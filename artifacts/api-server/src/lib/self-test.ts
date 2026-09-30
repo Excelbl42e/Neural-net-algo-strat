@@ -22,7 +22,7 @@
 import { brokerConnectionsTable } from "@workspace/db";
 import { decryptSecret } from "./crypto.js";
 import {
-  fetchContractStatuses, placeDerivTrade, checkMultiplierProposal, sellDerivTrade, getContractQuote,
+  fetchContractStatuses, placeDerivTrade, checkMultiplierProposal, sellDerivTrade, getContractQuote, getMultiplierRanges,
   queryBinaryMinDuration, checkBinaryProposal, binaryDurationMs, defaultBinaryDurationDays,
 } from "./deriv.js";
 import { inspectDerivAccount } from "./deriv-account.js";
@@ -88,18 +88,54 @@ export async function runDemoSelfTest(conn: Conn): Promise<SelfTestResult> {
     // dispatcher relies on come from the broker rather than from a guess. When
     // Deriv reports no minimum the dispatcher assumes $0.10 and learns a higher
     // one from Deriv's refusal of an order.
-    const quote = await getContractQuote(token, "demo", "frxEURUSD", { stakeAmount: MULTIPLIER_TEST_STAKE, binary: false, direction: "buy" });
-    if (quote) {
-      const l = quote.limits;
+    const quoted = await getContractQuote(token, "demo", "frxEURUSD", { stakeAmount: MULTIPLIER_TEST_STAKE, binary: false, direction: "buy" });
+    if (!("error" in quoted)) {
+      const l = quoted.limits;
       const show = (v: number | null) => (v == null ? "not reported" : `$${v.toFixed(2)}`);
       mark(
         "deriv_limits",
         `stop-loss min ${show(l.stopLossMin)} / max ${show(l.stopLossMax)}; take-profit min ${show(l.takeProfitMin)} / max ${show(l.takeProfitMax)}; ` +
-        `commission ${quote.commissionUsd == null ? "not reported" : `$${quote.commissionUsd.toFixed(4)}`} ` +
-        `(${quote.costPct.toFixed(4)}% of position, from ${quote.costSource})`,
+        `commission field ${quoted.commissionRaw ?? "not reported"} (read as $${quoted.commissionUsd?.toFixed(4) ?? "?"}, ` +
+        `${quoted.costPct.toFixed(4)}% of position)`,
       );
+      // Deriv's docs disagree on whether `commission` is a percentage or a
+      // dollar amount, and at $1 x100 both readings give the same number. A
+      // second quote at ten times the stake tells them apart: a percentage
+      // stays put, a dollar amount scales with the stake. Quote only, no order.
+      const bigger = await getContractQuote(token, "demo", "frxEURUSD", { stakeAmount: 10, binary: false, direction: "buy" });
+      if (!("error" in bigger) && quoted.commissionRaw != null && bigger.commissionRaw != null && quoted.commissionRaw > 0) {
+        const ratio = bigger.commissionRaw / quoted.commissionRaw;
+        const unit = Math.abs(ratio - 1) < 0.2 ? "a percentage of position size"
+          : Math.abs(ratio - 10) < 2 ? "a dollar amount"
+          : `unclear (ratio ${ratio.toFixed(2)})`;
+        mark("commission_unit", `commission field is ${quoted.commissionRaw} at $1 and ${bigger.commissionRaw} at $10: Deriv reports it as ${unit}`);
+      } else {
+        mark("commission_unit", "could not compare commission at two stakes; the dispatcher keeps reading it conservatively");
+      }
     } else {
-      mark("deriv_limits", "quote for limits failed; the dispatcher will assume a $0.10 minimum and learn Deriv's from any refusal");
+      mark("deriv_limits", `${quoted.error}; the dispatcher will assume a $0.10 minimum and learn Deriv's from any refusal`);
+    }
+
+    // Every pair the bot scans must offer the multiplier it sends. A pair that
+    // does not would find setups it can never trade.
+    {
+      const { ALL_FOREX_INSTRUMENTS, getSyntheticSymbol } = await import("./synthetic-catalog.js");
+      const ranges = await getMultiplierRanges(token, "demo", ALL_FOREX_INSTRUMENTS);
+      const missing: string[] = [];
+      const unknown: string[] = [];
+      for (const sym of ALL_FOREX_INSTRUMENTS) {
+        const want = getSyntheticSymbol(sym)?.multiplier ?? 100;
+        const range = ranges.get(sym);
+        if (range == null || range.length === 0) unknown.push(sym);
+        else if (!range.includes(want)) missing.push(`${sym} (offers ${range.join("/")})`);
+      }
+      const ok = ALL_FOREX_INSTRUMENTS.length - missing.length - unknown.length;
+      mark(
+        "multiplier_ranges",
+        `x100 offered on ${ok}/${ALL_FOREX_INSTRUMENTS.length} pairs` +
+        (missing.length ? `; NOT offered on ${missing.join(", ")}` : "") +
+        (unknown.length ? `; no answer for ${unknown.join(", ")}` : ""),
+      );
     }
 
     // A reference price lets the order carry a real stop-loss/take-profit, so

@@ -159,7 +159,7 @@ export function tradingCostGate(costPct: number | null, maxCostPct: number): For
     return { ok: false, reason: "Maximum trading-cost setting is missing or invalid; refusing execution" };
   }
   if (costPct > maxCostPct) {
-    return { ok: false, reason: `Indicative trading cost ${costPct.toFixed(3)}% of stake exceeds configured max ${maxCostPct}%` };
+    return { ok: false, reason: `Trading cost ${costPct.toFixed(3)}% of position size exceeds the configured max ${maxCostPct}%` };
   }
   return { ok: true };
 }

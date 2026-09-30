@@ -728,3 +728,23 @@ export function entryZoneState(
   if (buy ? price > hi : price < lo) return "wait";
   return "in_zone";
 }
+
+/**
+ * Deriv's multiplier commission in dollars, from the `commission` field of a
+ * proposal.
+ *
+ * Deriv's own documentation disagrees with itself about the unit: the proposal
+ * schema calls it "Commission changed in percentage (%)", while
+ * proposal_open_contract calls it "Commission in payout currency amount". On
+ * the $1.00 x100 contract the self-test buys, the two readings are the same
+ * number (0.02% of a $100 position is $0.02), so the round trip cannot tell
+ * them apart. Until a quote at another stake settles it, take whichever reading
+ * is larger: counting too much commission only widens the stop and lowers the
+ * reward:risk the trade must still clear, never the reverse.
+ */
+export function commissionUsdFromQuote(raw: number | null, positionSize: number): number | null {
+  if (raw == null || !Number.isFinite(raw) || raw < 0) return null;
+  if (!Number.isFinite(positionSize) || positionSize <= 0) return raw;
+  return Math.max(raw, (raw / 100) * positionSize);
+}
+

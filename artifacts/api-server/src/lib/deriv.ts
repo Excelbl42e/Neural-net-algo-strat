@@ -1,5 +1,6 @@
 import { getSyntheticSymbol } from "./synthetic-catalog.js";
 import { inspectDerivAccount, syncDerivPatAccount, toFiniteNumber } from "./deriv-account.js";
+import { commissionUsdFromQuote } from "./execution-risk.js";
 import { DerivRequestTimeout, openDerivSession, type DerivSession } from "./deriv-session.js";
 
 export type BinaryDuration = { value: number; unit: "t" | "s" | "m" | "h" | "d" };
@@ -265,7 +266,10 @@ export interface ContractQuote {
    * beyond "the quote succeeded".
    */
   costSource: "commission" | "ask_price";
+  /** Commission in dollars, read conservatively; see commissionUsdFromQuote. */
   commissionUsd: number | null;
+  /** Deriv's `commission` field exactly as sent, before any reading of its unit. */
+  commissionRaw: number | null;
   /** Deriv's current spot for the underlying, when it reports one. */
   spot: number | null;
   /** Deriv's own limits on the multiplier stop-loss / take-profit amount, when reported. */
@@ -293,7 +297,7 @@ export async function getContractQuote(
   environment: "demo" | "real",
   symbol: string,
   opts: { stakeAmount: number; binary: boolean; direction: "buy" | "sell"; currency?: string },
-): Promise<ContractQuote | null> {
+): Promise<ContractQuote | { error: string }> {
   const meta = getSyntheticSymbol(symbol);
   const multiplier = meta?.multiplier ?? 100;
   const amount = Number.isFinite(opts.stakeAmount) && opts.stakeAmount > 0 ? opts.stakeAmount : 1;
@@ -321,14 +325,16 @@ export async function getContractQuote(
         spot?: number | string;
         validation_params?: { stop_loss?: Range; take_profit?: Range };
       };
-      error?: { message?: string };
+      error?: { message?: string; code?: string };
     }>(req, { timeoutMs: 8_000 });
-    if (res.error || !res.proposal) return null;
+    if (res.error) return { error: `Deriv refused the price quote: ${res.error.message ?? res.error.code ?? "no reason given"}` };
+    if (!res.proposal) return { error: "Deriv's price quote came back empty" };
     const askPrice = toFiniteNumber(res.proposal.ask_price);
-    if (askPrice === null) return null;
+    if (askPrice === null) return { error: "Deriv's price quote had no usable ask price" };
 
-    const commissionUsd = toFiniteNumber(res.proposal.commission);
     const positionSize = opts.binary ? amount : amount * multiplier;
+    const commissionRaw = toFiniteNumber(res.proposal.commission);
+    const commissionUsd = commissionUsdFromQuote(commissionRaw, opts.binary ? 0 : positionSize);
     const costSource: ContractQuote["costSource"] = commissionUsd != null ? "commission" : "ask_price";
     const costUsd = commissionUsd != null ? commissionUsd : Math.abs(askPrice - amount);
     const vp = res.proposal.validation_params;
@@ -336,6 +342,7 @@ export async function getContractQuote(
       costPct: (costUsd / positionSize) * 100,
       costSource,
       commissionUsd,
+      commissionRaw,
       spot: toFiniteNumber(res.proposal.spot),
       limits: {
         stopLossMin: toFiniteNumber(vp?.stop_loss?.min),
@@ -344,8 +351,8 @@ export async function getContractQuote(
         takeProfitMax: toFiniteNumber(vp?.take_profit?.max),
       },
     };
-  } catch {
-    return null;
+  } catch (err) {
+    return { error: `Could not get a price quote from Deriv: ${err instanceof Error ? err.message.replace(/otp=[^&\s]+/g, "otp=[redacted]") : "unknown error"}` };
   } finally {
     session?.close();
   }
@@ -385,6 +392,42 @@ export async function checkMultiplierProposal(token: string, environment: "demo"
 }
 
 /**
+ * The multipliers Deriv offers on each pair for this account, from
+ * contracts_for (MULTUP entries' multiplier_range). The dispatcher sends one
+ * fixed multiplier per pair; a pair that does not offer it can never trade.
+ * null for a pair means Deriv gave no answer for it.
+ */
+export async function getMultiplierRanges(
+  token: string, environment: "demo" | "real", symbols: string[],
+): Promise<Map<string, number[] | null>> {
+  const out = new Map<string, number[] | null>();
+  let session: DerivSession | null = null;
+  try {
+    session = await openDerivSession(token, environment);
+    for (const symbol of symbols) {
+      try {
+        const res = await session.request<{
+          contracts_for?: { available?: Array<Record<string, unknown>> };
+          error?: unknown;
+        }>({ contracts_for: symbol }, { timeoutMs: 10_000 });
+        const entry = (res.contracts_for?.available ?? []).find((c) => c.contract_type === "MULTUP");
+        const range = Array.isArray(entry?.multiplier_range)
+          ? (entry!.multiplier_range as unknown[]).map((v) => toFiniteNumber(v)).filter((v): v is number => v != null)
+          : null;
+        out.set(symbol, res.error ? null : range);
+      } catch {
+        out.set(symbol, null);
+      }
+    }
+  } catch {
+    for (const symbol of symbols) if (!out.has(symbol)) out.set(symbol, null);
+  } finally {
+    session?.close();
+  }
+  return out;
+}
+
+/**
  * Ask Deriv itself for the shortest CALL/PUT duration it actually offers on
  * this symbol, instead of guessing. Discovered the hard way: a hardcoded
  * "5 minutes" self-test guess was rejected live with
@@ -408,7 +451,11 @@ export async function queryBinaryMinDuration(
     const res = await session.request<{
       contracts_for?: { available?: Array<Record<string, unknown>> };
       error?: unknown;
-    }>({ contracts_for: symbol, currency: "USD" }, { timeoutMs: 10_000 });
+    }>(
+      // Deriv's contracts_for schema allows only contracts_for, passthrough and
+      // req_id; the currency this used to send made every request fail.
+      { contracts_for: symbol }, { timeoutMs: 10_000 },
+    );
     if (res.error) return null;
     const available = res.contracts_for?.available ?? [];
     const callEntry = available.find((c) => c.contract_type === "CALL" || c.contract_type === "CALLE");
@@ -523,7 +570,10 @@ export async function fetchRecentContracts(token: string, environment: "demo" | 
     if ((pf as { error?: unknown }).error) throw new Error("Deriv portfolio request rejected");
     for (const c of pf.portfolio?.contracts ?? []) {
       out.push({
-        contractId: Number(c.contract_id), symbol: c.symbol ?? null,
+        // The current API names the pair underlying_symbol; there is no
+        // `symbol`. Reading the old name left every open contract without a
+        // pair, so the reconciler could never match an unconfirmed buy to it.
+        contractId: Number(c.contract_id), symbol: c.underlying_symbol ?? c.symbol ?? null,
         buyPrice: c.buy_price != null ? Number(c.buy_price) : null,
         purchaseTime: c.purchase_time != null ? Number(c.purchase_time) : null,
         isSold: false, profit: null, sellPrice: null, sellSpot: null, sellTime: null,
@@ -535,7 +585,8 @@ export async function fetchRecentContracts(token: string, environment: "demo" | 
     });
     if ((pt as { error?: unknown }).error) throw new Error("Deriv profit_table request rejected");
     for (const t of pt.profit_table?.transactions ?? []) {
-      const sym = typeof t.shortcode === "string" ? (t.shortcode.split("_")[1] ?? null) : null;
+      const sym = typeof t.underlying_symbol === "string" ? t.underlying_symbol
+        : typeof t.shortcode === "string" ? (t.shortcode.split("_")[1] ?? null) : null;
       const buy = t.buy_price != null ? Number(t.buy_price) : null;
       const sell = t.sell_price != null ? Number(t.sell_price) : null;
       out.push({
@@ -567,15 +618,19 @@ export async function fetchContractStatuses(
         );
         const poc = r.proposal_open_contract;
         if ((r as { error?: unknown }).error || !poc || Number(poc.contract_id) !== id) continue;
-        const sold = poc.is_sold === 1 || poc.is_sold === true || poc.status === "sold";
+        // Closed for good: sold back (by us, or by Deriv at a stop-loss /
+        // take-profit / stop-out), or settled at expiry as won or lost.
+        const sold = poc.is_sold === 1 || poc.is_sold === true
+          || poc.status === "sold" || poc.status === "won" || poc.status === "lost" || poc.status === "cancelled";
         result.set(id, {
-          contractId: id, symbol: poc.underlying ?? null,
+          contractId: id, symbol: poc.underlying_symbol ?? poc.underlying ?? null,
           buyPrice: poc.buy_price != null ? Number(poc.buy_price) : null,
           purchaseTime: poc.purchase_time != null ? Number(poc.purchase_time) : null,
           isSold: sold,
           profit: poc.profit != null ? Number(poc.profit) : null,
           sellPrice: poc.sell_price != null ? Number(poc.sell_price) : null,
-          sellSpot: poc.sell_spot != null ? Number(poc.sell_spot) : null,
+          // The schema has exit_spot, not sell_spot: the price the contract closed at.
+          sellSpot: toFiniteNumber(poc.exit_spot ?? poc.sell_spot),
           sellTime: poc.sell_time != null ? Number(poc.sell_time) : null,
           contractType: classifyContractType(poc.contract_type),
         });

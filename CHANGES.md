@@ -1,5 +1,27 @@
 # Changes in this build (vs. your Replit export)
 
+## Checked against Deriv's own API documentation and schemas
+
+Every request the bot sends was validated against Deriv's published JSON schemas (developers.deriv.com/schemas), and every response field it reads was checked to exist. Deriv's schemas reject any field they do not list.
+
+**Requests:** 13 of 14 were valid. `contracts_for` sent a `currency` field its schema does not allow, which is why the self-test reported "Could not read Deriv's minimum duration via contracts_for". Fixed.
+
+**Responses read under names Deriv no longer sends:**
+- **Reconciler could lose track of a real position.** `portfolio` contracts carry `underlying_symbol`, not `symbol`. When a buy's outcome was ambiguous (connection dropped after sending), the contract Deriv had in fact opened never matched, and after the grace window the signal was marked "not placed". That left a live position the bot did not know about: not in the loss budget, not in the position count, not force-closed at the hold limit. It now reads `underlying_symbol`.
+- **Closing price was always empty.** `proposal_open_contract` has `exit_spot`, not `sell_spot`, and `underlying_symbol`, not `underlying`. Closed trades now record where they closed.
+- **Expired binaries.** A contract settling at expiry reports `status: won/lost`; that now counts as closed alongside `is_sold`.
+
+**Recovered trades filed under the wrong account.** The reconciler linked an executed-but-unrecorded contract to the first connected account. With a demo and a real connection, a real trade could be filed under demo. It now searches every account for the contract and links it to the one that holds it.
+
+**Commission unit.** Deriv's proposal schema calls `commission` "Commission changed in percentage (%)", while `proposal_open_contract` calls it "Commission in payout currency amount". At $1 x100 both readings give $0.02, which is why the self-test could not tell them apart. The dispatcher now takes the larger of the two readings, which only ever widens the stop, and the self-test quotes $1 and $10 (no order) to report which unit Deriv actually uses.
+
+**Multipliers per pair.** The self-test now asks `contracts_for` which multipliers each of the 14 pairs offers and reports any pair where x100 is not available.
+
+**Keep-alive.** Deriv's best practice is a `ping` every 30 seconds; the price feed never sent one. It does now.
+
+**Quote refusals are explained.** When Deriv refuses a price quote, its own reason is shown in the rejections panel instead of a generic "could not read a price".
+
+
 ## Scan right after each M30 close, and never read the candle still forming
 
 **Scan timing.** The scan ran every 30 minutes counted from process start. In production that put it at 17:28:54, 17:58:55 and so on, a minute *before* each M30 close. Setups are read from M30 candles, so a setup completed at 17:30 was not seen until 17:58, and a quick retrace into its FVG could be over by then. Scans now run 20 seconds after every M30 close (:00:20 and :30:20 UTC), which cuts the delay from up to ~30 minutes to ~20 seconds. The dashboard's "next scan in" shows the real time.
