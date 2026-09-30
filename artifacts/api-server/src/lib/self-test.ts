@@ -12,6 +12,10 @@
  *    a closed trade would stay "open" and block further trading. This is the
  *    only place the sell path and that status query run before real money
  *    depends on them.
+ *    It also records what Deriv says about this account: its stop-loss and
+ *    take-profit limits, the commission and which unit Deriv reports it in
+ *    (compared at two stakes, by quote), and which of the scanned pairs offer
+ *    the multiplier the bot sends.
  *  - Binary (the small-account fallback): a forex binary runs for days, far too
  *    long to buy and wait out here, so this stays a quote-only proposal at the
  *    exact duration production code uses.
@@ -23,13 +27,12 @@ import { brokerConnectionsTable } from "@workspace/db";
 import { decryptSecret } from "./crypto.js";
 import {
   fetchContractStatuses, placeDerivTrade, checkMultiplierProposal, sellDerivTrade, getContractQuote, getMultiplierRanges,
-  queryBinaryMinDuration, checkBinaryProposal, binaryDurationMs, defaultBinaryDurationDays,
+  queryBinaryMinDuration, checkBinaryProposal, defaultBinaryDurationDays,
 } from "./deriv.js";
 import { inspectDerivAccount } from "./deriv-account.js";
 import { setSecret } from "./secrets.js";
 
 /** Past this, don't try to synchronously wait for a real binary contract to settle inside the self-test. */
-const MAX_SYNCHRONOUS_WAIT_MS = 20 * 60_000;
 /** Deriv's multiplier minimum. The round trip costs the spread on it, on a demo account. */
 const MULTIPLIER_TEST_STAKE = 1;
 
@@ -197,71 +200,38 @@ export async function runDemoSelfTest(conn: Conn): Promise<SelfTestResult> {
     }
     mark("settlement_detected", `status query reports contract ${mBuy.contractId} closed: profit ${settled.profit}, sell price ${settled.sellPrice}`);
 
-    // Test the actual instrument class the bot trades (forex, via binary
-    // CALL/PUT — the small-account fallback real signals use when their
-    // computed stake is below the multiplier minimum) rather than a
-    // leftover synthetic-index symbol from before this app became
-    // forex-only.
+    // The binary path (CALL/PUT) is what a balance too small for the $1.00
+    // multiplier floor trades. It is checked by quote only, at the duration
+    // the dispatcher actually sends (defaultBinaryDurationDays, the same value
+    // resolveBinaryDuration probes before every binary order).
     //
-    // A hardcoded "5 minutes" guess was live-rejected: Deriv's
-    // TradingDurationNotAllowed — forex binaries need a longer minimum
-    // than synthetic/volatility indices, and no reachable doc states the
-    // exact number. Ask Deriv itself via contracts_for instead of guessing
-    // again. If that can't be read, or the discovered minimum is too long
-    // to wait out synchronously here, fall back to a quote-only proposal
-    // check at the same duration real production code already uses
-    // (defaultBinaryDurationDays) — still proves the field shape is
-    // accepted, without a multi-day wait or a fourth blind guess.
+    // This used to buy a binary at Deriv's reported minimum and wait for it to
+    // settle when that minimum was under 20 minutes. contracts_for never
+    // answered before (it sent a field Deriv's schema rejects), so that branch
+    // never ran; now it would — and waiting out a ~15-minute binary here, with
+    // a fresh session every few seconds, would hold the request open for a
+    // quarter of an hour and approach Deriv's documented 60-requests-a-minute
+    // REST limit, starving balance sync and the contract monitor meanwhile.
+    // Deriv's minimum is still reported, for information.
     const minDuration = await queryBinaryMinDuration(token, "demo", "frxEURUSD");
-    const useDuration = minDuration ?? { value: defaultBinaryDurationDays(), unit: "d" as const };
-    const canWaitForSettlement = minDuration != null && binaryDurationMs(minDuration) <= MAX_SYNCHRONOUS_WAIT_MS;
-
-    if (!canWaitForSettlement) {
-      mark("duration_discovery", minDuration
-        ? `Deriv's minimum (${useDuration.value}${useDuration.unit}) is too long to wait out here; checking via proposal instead`
-        : "Could not read Deriv's minimum duration via contracts_for; checking via proposal at the production default instead");
-      const proposalCheck = await checkBinaryProposal(token, "demo", "frxEURUSD", useDuration);
-      mark(proposalCheck.ok ? "binary_path_ok" : "binary_path_failed", proposalCheck.message);
-      if (!proposalCheck.ok) {
-        return await finish(false, `Binary order path rejected by Deriv (this is what small-account signals will use): ${proposalCheck.message}`);
-      }
-      return await finish(
-        true,
-        `Passed: a real multiplier was bought and sold back on the demo account` +
-        // Sign kept explicit: the spread makes this a small loss, and printing
-        // it as "$0.02" read as neither a loss nor a gain.
-        `${roundTripPnl != null ? ` (round trip ${roundTripPnl >= 0 ? "+" : "-"}$${Math.abs(roundTripPnl).toFixed(2)})` : ""}` +
-        `, and the binary path was accepted at ${useDuration.value}${useDuration.unit} by quote ` +
-        `(a forex binary runs for days, too long to buy and wait out here).`,
-        mBuy.contractId,
-      );
+    const useDuration = { value: defaultBinaryDurationDays(), unit: "d" as const };
+    mark("duration_discovery", minDuration
+      ? `Deriv's shortest forex Rise/Fall on this account is ${minDuration.value}${minDuration.unit}; the bot sends ${useDuration.value}${useDuration.unit}`
+      : "Deriv did not state a minimum duration via contracts_for; checking the bot's own duration by quote");
+    const proposalCheck = await checkBinaryProposal(token, "demo", "frxEURUSD", useDuration);
+    mark(proposalCheck.ok ? "binary_path_ok" : "binary_path_failed", proposalCheck.message);
+    if (!proposalCheck.ok) {
+      return await finish(false, `Binary order path rejected by Deriv (this is what small-account signals will use): ${proposalCheck.message}`);
     }
-
-    mark("pending", `buy request sent: frxEURUSD CALL, ${useDuration.value}${useDuration.unit} (Deriv's own reported minimum), stake 0.50`);
-    const buy = await placeDerivTrade({
-      token, environment: "demo", symbol: "frxEURUSD", direction: "buy", stakeAmount: 0.50,
-      currency: account.currency, forceBinary: true, binaryDuration: useDuration,
-    });
-    if (!buy.ok || !buy.contractId) {
-      return await finish(false, `Buy did not confirm: ${buy.message ?? "unknown"}${buy.ambiguous ? " (ambiguous; check Diagnostics frames)" : ""}`);
-    }
-    mark("confirmed", `contract ${buy.contractId} bought at ${buy.buyPrice}`);
-
-    // Wait proportional to the actual contract duration plus a buffer for
-    // settlement lag and polling overhead, rather than a value hardcoded
-    // for a specific duration guess.
-    const waitMs = binaryDurationMs(useDuration) + 120_000;
-    const deadline = Date.now() + waitMs;
-    while (Date.now() < deadline) {
-      await new Promise((r) => setTimeout(r, 3_000));
-      const m = await fetchContractStatuses(token, "demo", [buy.contractId]);
-      const info = m.get(buy.contractId);
-      if (info?.isSold) {
-        mark("closed", `profit ${info.profit}, sell_price ${info.sellPrice}`);
-        return await finish(true, `Passed: order confirmed and settled in ${((Date.now() - t0) / 1000).toFixed(1)}s`, buy.contractId);
-      }
-    }
-    return await finish(false, `Order confirmed but did not settle within ${Math.round(waitMs / 1000)}s`, buy.contractId);
+    return await finish(
+      true,
+      `Passed: a real multiplier was bought and sold back on the demo account` +
+      // Sign kept explicit: the spread makes this a small loss, and printing
+      // it as "$0.02" read as neither a loss nor a gain.
+      `${roundTripPnl != null ? ` (round trip ${roundTripPnl >= 0 ? "+" : "-"}$${Math.abs(roundTripPnl).toFixed(2)})` : ""}` +
+      `, Deriv's closing of it was detected, and the binary path was accepted at ${useDuration.value}${useDuration.unit} by quote.`,
+      mBuy.contractId,
+    );
   } catch (err) {
     return await finish(false, err instanceof Error ? err.message.replace(/otp=[^&\s]+/g, "otp=[redacted]") : "self-test error");
   } finally {

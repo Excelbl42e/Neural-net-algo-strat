@@ -104,6 +104,8 @@ class CandleFeeder {
   /** Symbols Deriv refused for now (market closed, rate limit), retried by the resubscribe check. */
   private retryingSymbols = new Map<string, string>();
   private lastResubscribeAt = new Map<string, number>();
+  /** Deriv's subscription id per symbol, so a re-subscribe can cancel the old stream first. */
+  private tickSubscriptionIds = new Map<string, string>();
   private resubscribeTimer: NodeJS.Timeout | null = null;
   private pingTimer: NodeJS.Timeout | null = null;
   private buckets = new Map<string, OHLC>();
@@ -173,7 +175,17 @@ class CandleFeeder {
       const lastAsked = this.lastResubscribeAt.get(code) ?? 0;
       if (now - lastSeen < TICK_RESUBSCRIBE_AFTER_MS || now - lastAsked < TICK_RESUBSCRIBE_AFTER_MS) continue;
       this.lastResubscribeAt.set(code, now);
-      try { ws.send(JSON.stringify({ ticks: code, subscribe: 1 })); } catch { return; }
+      // Cancel the stream Deriv last gave us for this symbol before asking
+      // again, so repeated re-subscribes over a quiet weekend can never stack
+      // up duplicate streams toward the 100-per-connection limit.
+      const previous = this.tickSubscriptionIds.get(code);
+      try {
+        if (previous) {
+          ws.send(JSON.stringify({ forget: previous }));
+          this.tickSubscriptionIds.delete(code);
+        }
+        ws.send(JSON.stringify({ ticks: code, subscribe: 1 }));
+      } catch { return; }
     }
   }
 
@@ -238,6 +250,8 @@ class CandleFeeder {
       let rejectedUpgrade = false;
 
       ws.on("open", () => {
+        // Subscription ids are per connection; the old ones mean nothing here.
+        this.tickSubscriptionIds.clear();
         this.connectedAt = new Date();
         this.reconnectAttempts = 0;
         this.lastError = null;
@@ -320,6 +334,7 @@ class CandleFeeder {
       echo_req?: { ticks?: string; ticks_history?: string; granularity?: number };
       error?: { message: string; code?: string };
       msg_type?: string;
+      subscription?: { id?: string };
     };
     try { msg = JSON.parse(raw); } catch { return; }
     if (msg.error) {
@@ -421,6 +436,7 @@ class CandleFeeder {
     const { symbol, quote, epoch } = msg.tick;
     const localSymbol = normalizeSymbol(symbol);
     this.retryingSymbols.delete(localSymbol);
+    if (typeof msg.subscription?.id === "string") this.tickSubscriptionIds.set(localSymbol, msg.subscription.id);
     const tickAt = epoch * 1000;
     const previousTick = this.lastTick.get(localSymbol);
     // Ignore out-of-order delivery instead of reopening an already completed

@@ -1,5 +1,15 @@
 # Changes in this build (vs. your Replit export)
 
+## Second pass against Deriv's docs: rate limits, connection limits, keep-alive
+
+- **Self-test would have tripped Deriv's rate limit.** With `contracts_for` now working, the self-test would have learned Deriv's short minimum binary duration (likely ~15 minutes). It would then have bought one and polled for settlement with a fresh login every few seconds: about 40 REST calls a minute against Deriv's documented 60-per-minute limit, for up to 17 minutes. That branch had never run live. The binary step is now quote-only at the duration the bot actually sends; Deriv's minimum is reported for information.
+- **One failed balance poll paused trading for five minutes.** The first failed sync marked the connection "error". An errored connection is neither traded nor monitored, and is retried only every 5 minutes. It is now marked after 3 consecutive failures. A stale balance is still refused on its own: the dispatcher rejects equity older than 10 minutes.
+- **Balance polls run one at a time.** Deriv allows 5 concurrent WebSocket connections per user, and the contract monitor, reconciler and dispatcher open their own.
+- **Re-subscribing a quiet pair cancels the old stream first** (`forget` with Deriv's subscription id), so repeated re-subscribes over a weekend can never stack duplicate streams toward the 100-per-connection limit.
+- **`profit_table` rows with a null `contract_id`** (allowed by the schema) are skipped instead of being read as contract 0.
+- Removed the unused `binaryDurationMs` helper.
+
+
 ## Checked against Deriv's own API documentation and schemas
 
 Every request the bot sends was validated against Deriv's published JSON schemas (developers.deriv.com/schemas), and every response field it reads was checked to exist. Deriv's schemas reject any field they do not list.

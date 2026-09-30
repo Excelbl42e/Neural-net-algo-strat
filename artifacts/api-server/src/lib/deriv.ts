@@ -475,12 +475,6 @@ export async function queryBinaryMinDuration(
   }
 }
 
-/** Rough upper bound past which a self-test shouldn't try to synchronously wait for settlement. */
-export function binaryDurationMs(d: { value: number; unit: "t" | "s" | "m" | "h" | "d" }): number {
-  const perUnit: Record<string, number> = { t: 2_000, s: 1_000, m: 60_000, h: 3_600_000, d: 86_400_000 };
-  return d.value * (perUnit[d.unit] ?? 60_000);
-}
-
 /**
  * Diagnostic-only check that Deriv accepts the binary (CALL/PUT) parameter
  * shape at whatever duration the caller supplies — a quote-only `proposal`,
@@ -585,6 +579,8 @@ export async function fetchRecentContracts(token: string, environment: "demo" | 
     });
     if ((pt as { error?: unknown }).error) throw new Error("Deriv profit_table request rejected");
     for (const t of pt.profit_table?.transactions ?? []) {
+      // The schema allows a null contract_id; Number(null) would read as contract 0.
+      if (t.contract_id == null) continue;
       const sym = typeof t.underlying_symbol === "string" ? t.underlying_symbol
         : typeof t.shortcode === "string" ? (t.shortcode.split("_")[1] ?? null) : null;
       const buy = t.buy_price != null ? Number(t.buy_price) : null;
