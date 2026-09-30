@@ -48,12 +48,28 @@ function hasBrokerContractId(annotations: string | null): boolean {
   }
 }
 
+/**
+ * Broker trades placed by the current dispatcher store the underlying price the
+ * order was placed against, marked `openPriceSource: "reference_spot"`. Older
+ * broker trades stored the contract's purchase cost — the stake — in the same
+ * column, which is not a price at all, so those still cannot be classified.
+ */
+function hasReferenceSpot(annotations: string | null): boolean {
+  if (!annotations) return false;
+  try {
+    const parsed = JSON.parse(annotations) as Record<string, unknown> | null;
+    return parsed != null && parsed.openPriceSource === "reference_spot";
+  } catch {
+    return false;
+  }
+}
+
 function classify(
   trade: Trade,
   candles: Array<{ high: string; low: string; close: string }>,
   outcome: ReturnType<typeof outcomeFor>,
 ): { classification: string; evidenceStatus: "sufficient" | "insufficient"; evidenceSummary: string } {
-  if (hasBrokerContractId(trade.annotations)) {
+  if (hasBrokerContractId(trade.annotations) && !hasReferenceSpot(trade.annotations)) {
     return {
       classification: "insufficient_evidence",
       evidenceStatus: "insufficient",

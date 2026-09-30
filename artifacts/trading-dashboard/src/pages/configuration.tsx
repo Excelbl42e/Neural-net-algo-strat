@@ -187,6 +187,9 @@ export default function ConfigurationPage() {
   // First preview row is the synced balance when there is one (see the query's
   // equity list below), so it reflects this account rather than a sample rung.
   const yourRow = equity > 0 ? stakeQuery.data?.[0] : undefined;
+  // Losing trades of headroom above the ~$4.00 balance where the $1.00 floor lift stops.
+  const headroomLoss = yourRow?.typicalLoss != null && yourRow.typicalLoss > 0 ? yourRow.typicalLoss : 0.5;
+  const headroomTrades = Math.max(0, Math.floor((equity - 4) / headroomLoss));
 
   return (
     <div className="space-y-6 max-w-4xl">
@@ -247,9 +250,11 @@ export default function ConfigurationPage() {
           <div className="flex items-start gap-2 rounded-lg border border-border p-3 text-[11px] text-muted-foreground">
             <TrendingUp className="w-3.5 h-3.5 mt-0.5 shrink-0 text-primary" />
             <span>
-              <strong className="text-foreground">Typical loss</strong> is the stop the order actually carries: Deriv will not
-              accept a stop under $0.50, so at a $1.00 stake a losing trade costs $0.50 rather than the ~$0.10 the
-              strategy's 1-ATR stop would imply. <strong className="text-foreground">Worst case</strong> is a stop that
+              <strong className="text-foreground">Typical loss</strong> is the stop the order actually carries. The stop sits at
+              the setup's structural level, at least one H1 ATR from entry — about $0.10 plus Deriv's commission on a
+              $1.00 stake. If Deriv's minimum stop-loss is higher (the demo self-test reports it), the stop is widened to
+              that minimum, and a setup whose reward:risk no longer clears your floor waits instead of trading. Each stop
+              is also capped at what is left of the day's loss budget. <strong className="text-foreground">Worst case</strong> is a stop that
               gaps — capped at 80% of stake on a multiplier, but the whole stake on a binary, which carries no stop at
               all. A <span className="text-amber-400">↑</span> marks a stake raised to $1.00 to keep it off the binary
               path; a <span className="text-primary">↓</span> marks risk tapered below your saved setting by the balance
@@ -274,9 +279,9 @@ export default function ConfigurationPage() {
               <span>
                 The $1.00 floor holds your trades on multipliers down to a balance of about <strong>$4.00</strong>. Below
                 that, a $1.00 stake would put more than 20% of the account at risk in one trade, so the lift stops and
-                trades become binaries: no stop-loss, no take-profit, the full stake gone on a loser. At a $0.50 typical
-                loss per trade you have roughly {Math.max(0, Math.floor((equity - 4) / 0.5))} losing trade
-                {Math.max(0, Math.floor((equity - 4) / 0.5)) === 1 ? "" : "s"} of headroom before that happens.
+                trades become binaries: no stop-loss, no take-profit, the full stake gone on a loser. At a $
+                {headroomLoss.toFixed(2)} typical loss per trade you have roughly {headroomTrades} losing trade
+                {headroomTrades === 1 ? "" : "s"} of headroom before that happens.
               </span>
             </div>
           )}
@@ -506,7 +511,7 @@ export default function ConfigurationPage() {
                 ["maxPerAssetClass", "Max open positions per asset class — forex is a single class here, so this is usually your real ceiling on concurrent trades, not \u201cMax positions\u201d above", "1"],
                 ["newsBlackoutBeforeMin", "News blackout: minutes before a high-impact release", "1"],
                 ["newsBlackoutAfterMin", "News blackout: minutes after a high-impact release", "1"],
-                ["maxSpreadCostPct", "Max indicative trading cost (% of stake)", "0.01"],
+                ["maxSpreadCostPct", "Max trading cost (% of position size, i.e. stake × multiplier) — Deriv's commission from a live quote of the exact order", "0.01"],
                 ["maxPositionHoldHours", "Buy back any open position after this many hours — a multiplier that has hit neither SL nor TP, or a binary still short of its expiry", "1"],
               ] as const).map(([name, label, step]) => (
                 <FormField key={name} control={form.control} name={name} render={({ field }) => (

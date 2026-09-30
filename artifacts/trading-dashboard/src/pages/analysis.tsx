@@ -14,7 +14,7 @@ const TIMEFRAMES = ["M5", "M15", "M30", "H1", "H4", "D1"];
 interface Rejection {
   at: string;
   symbol: string;
-  stage: "pre_gpt" | "no_tick" | "expert_judge" | "post_gpt" | "portfolio" | "sizing" | "execution" | "forex_readiness";
+  stage: "pre_gpt" | "no_tick" | "expert_judge" | "post_gpt" | "portfolio" | "sizing" | "entry" | "execution" | "forex_readiness";
   reason: string;
   metrics?: Record<string, unknown>;
 }
@@ -32,6 +32,7 @@ const STAGE_LABEL: Record<Rejection["stage"], string> = {
   post_gpt: "Geometry / claim check",
   portfolio: "Portfolio caps",
   sizing: "Risk sizing",
+  entry: "Entry timing",
   forex_readiness: "Market readiness",
   execution: "Execution",
 };
@@ -162,8 +163,9 @@ export default function AnalysisPage() {
         </CardHeader>
         <CardContent>
           <p className="text-[11px] text-muted-foreground mb-3">
-            Each scan records the exact gate that dropped a symbol. An empty list with an active worker means nothing was
-            refused — no setup qualified. The last 200 are kept.
+            Each scan records the exact gate that dropped a symbol, and approved signals report here while they wait for
+            price to retrace into their entry zone. The same refusal for the same pair is recorded once per 10 minutes, so
+            a rescan with nothing new adds nothing new. The last 200 are kept.
           </p>
           {rejections.isLoading ? (
             <div className="text-xs text-muted-foreground">Loading…</div>

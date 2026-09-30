@@ -66,6 +66,10 @@ interface SettledContract {
 async function runCycle(): Promise<void> {
   if (cycleRunning) return;
   cycleRunning = true;
+  // Errors are reported for the cycle they occurred in. Without this reset a
+  // single transient Deriv failure left the health panel "degraded" until
+  // the process restarted, which hides whether the monitor is healthy now.
+  let cycleError: string | null = null;
 
   try {
     // Load all open trades that have a contractId
@@ -113,7 +117,8 @@ async function runCycle(): Promise<void> {
           }
         }
       } catch (err) {
-        lastError = err instanceof Error ? err.message : "contract status query failed";
+        cycleError = err instanceof Error ? err.message.replace(/otp=[^&\s]+/g, "otp=[redacted]") : "contract status query failed";
+        logger.warn({ connId, msg: cycleError }, "contract-monitor: contract status query failed");
       }
     }
 
@@ -222,9 +227,10 @@ async function runCycle(): Promise<void> {
     // settlement and review persistence is repaired by the next poll.
     await rebuildMissingTradeReviews();
   } catch (err) {
-    lastError = err instanceof Error ? err.message.replace(/otp=[^&\s]+/g, "otp=[redacted]") : "cycle error";
-    logger.error({ msg: lastError }, "contract-monitor: cycle error");
+    cycleError = err instanceof Error ? err.message.replace(/otp=[^&\s]+/g, "otp=[redacted]") : "cycle error";
+    logger.error({ msg: cycleError }, "contract-monitor: cycle error");
   } finally {
+    lastError = cycleError;
     lastCycleAt = new Date();
     cycleRunning = false;
   }

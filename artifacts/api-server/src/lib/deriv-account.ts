@@ -74,10 +74,18 @@ export async function inspectDerivAccount(
       return { account_id: r.account_id, account_type: environment, status: "active", balance, currency: r.currency };
     })
     .filter((a): a is OptionsAccount => a !== null);
+  // A login often holds more than one real account (a USD account next to a
+  // crypto one, say). Every stake, minimum and cost in this system is in USD,
+  // so exactly one USD account is an unambiguous choice; anything else still
+  // refuses rather than guess which account to trade.
+  if (matches.length > 1) {
+    const usd = matches.filter((a) => a.currency.toUpperCase() === "USD");
+    if (usd.length === 1) return { account: usd[0]!, headers };
+  }
   if (matches.length !== 1) {
     throw new Error(matches.length === 0
       ? `No active ${environment} Options account confirmed by Deriv`
-      : `Multiple active ${environment} Options accounts found; account selection is required before syncing safely`);
+      : `Multiple active ${environment} Options accounts found and none is the single USD account; keep one active ${environment} USD account for this token`);
   }
   return { account: matches[0], headers };
 }

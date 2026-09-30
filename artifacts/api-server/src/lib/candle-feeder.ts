@@ -65,6 +65,25 @@ const PRUNE_MAX_BATCHES = 200;
 /** Long enough after boot that housekeeping never competes with the feed coming up. */
 const PRUNE_STARTUP_DELAY_MS = 90_000;
 
+/**
+ * A subscribed symbol with no tick for this long is asked for again. Deriv
+ * answers AlreadySubscribed when the stream is in fact alive (a quiet market),
+ * MarketIsClosed over the weekend, and resumes the stream when it had quietly
+ * stopped — so one periodic request covers every way a stream can go silent.
+ */
+const TICK_RESUBSCRIBE_AFTER_MS = 5 * 60_000;
+const TICK_RESUBSCRIBE_CHECK_MS = 60_000;
+
+/**
+ * Only a symbol Deriv does not recognise is dropped for good. Everything else
+ * it refuses with — market closed, rate limit, a hiccup — passes, and dropping
+ * the symbol for those used to end its feed until the process restarted: a
+ * reconnect over the weekend could leave Monday with no live prices at all.
+ */
+function isPermanentSymbolError(error: { message?: string; code?: string }): boolean {
+  return error.code === "InvalidSymbol" || /invalid symbol|unknown symbol|symbol \S+ (is )?invalid/i.test(error.message ?? "");
+}
+
 // Public endpoint verified with a 101 upgrade and real ticks/candles.
 // Do not reuse it for account authorization or trading.
 const DERIV_PUBLIC_WS_URL = "wss://api.derivws.com/trading/v1/options/ws/public";
@@ -80,6 +99,10 @@ class CandleFeeder {
   private pruneTimer: NodeJS.Timeout | null = null;
   /** Symbols Deriv refused, with its reason. Reported separately: one bad symbol is not a broken feed. */
   private rejectedSymbols = new Map<string, string>();
+  /** Symbols Deriv refused for now (market closed, rate limit), retried by the resubscribe check. */
+  private retryingSymbols = new Map<string, string>();
+  private lastResubscribeAt = new Map<string, number>();
+  private resubscribeTimer: NodeJS.Timeout | null = null;
   private buckets = new Map<string, OHLC>();
   private lastTick = new Map<string, { price: number; at: number }>();
   private lastError: string | null = null;
@@ -99,6 +122,8 @@ class CandleFeeder {
     setTimeout(() => { void this.pruneOldCandles(); }, PRUNE_STARTUP_DELAY_MS).unref?.();
     this.pruneTimer ??= setInterval(() => { void this.pruneOldCandles(); }, CANDLE_PRUNE_EVERY_MS);
     this.pruneTimer.unref?.();
+    this.resubscribeTimer ??= setInterval(() => this.resubscribeSilentSymbols(), TICK_RESUBSCRIBE_CHECK_MS);
+    this.resubscribeTimer.unref?.();
     // Always connect — the user can lazy-subscribe symbols later via ensureSubscribed().
     this.connect();
   }
@@ -124,6 +149,21 @@ class CandleFeeder {
     }
   }
 
+  /** Ask again for any subscribed symbol that has gone quiet. See TICK_RESUBSCRIBE_AFTER_MS. */
+  private resubscribeSilentSymbols(): void {
+    const ws = this.ws;
+    if (!ws || ws.readyState !== WebSocket.OPEN || !this.connectedAt) return;
+    const now = Date.now();
+    const connectedAt = this.connectedAt.getTime();
+    for (const code of this.subscribedSymbols) {
+      const lastSeen = Math.max(this.lastTick.get(code)?.at ?? 0, connectedAt);
+      const lastAsked = this.lastResubscribeAt.get(code) ?? 0;
+      if (now - lastSeen < TICK_RESUBSCRIBE_AFTER_MS || now - lastAsked < TICK_RESUBSCRIBE_AFTER_MS) continue;
+      this.lastResubscribeAt.set(code, now);
+      try { ws.send(JSON.stringify({ ticks: code, subscribe: 1 })); } catch { return; }
+    }
+  }
+
   status() {
     const latestTickAt = Math.max(0, ...Array.from(this.lastTick.values(), (tick) => tick.at));
     const tickAgeMs = latestTickAt > 0 ? Math.max(0, Date.now() - latestTickAt) : null;
@@ -144,6 +184,7 @@ class CandleFeeder {
       connectedAt: this.connectedAt?.toISOString() ?? null,
       symbols: Array.from(this.subscribedSymbols),
       rejectedSymbols: Array.from(this.rejectedSymbols, ([symbol, reason]) => ({ symbol, reason })),
+      retryingSymbols: Array.from(this.retryingSymbols, ([symbol, reason]) => ({ symbol, reason })),
       bucketsFlushed: this.bucketsFlushed,
       lastError: this.lastError,
       lastErrorAt: this.lastErrorAt,
@@ -274,6 +315,19 @@ class CandleFeeder {
       // with no symbol named — unactionable, and indistinguishable from the
       // whole feed being broken when in fact the other 27 were streaming fine.
       const symbol = msg.echo_req?.ticks ?? msg.echo_req?.ticks_history;
+      if (symbol && !isPermanentSymbolError(msg.error)) {
+        const code = normalizeSymbol(symbol);
+        // The stream is alive; the resubscribe check asked about a quiet market.
+        if (msg.error.code === "AlreadySubscribed") return;
+        if (this.retryingSymbols.get(code) !== msg.error.message) {
+          logger.info(
+            { symbol: code, err: msg.error.message, code: msg.error.code },
+            "Candle feeder: Deriv refused a request for now; the symbol stays subscribed and is retried",
+          );
+        }
+        this.retryingSymbols.set(code, msg.error.message);
+        return;
+      }
       if (symbol) {
         const code = normalizeSymbol(symbol);
         // Deriv will reject it identically on every reconnect, so stop asking.
@@ -353,6 +407,7 @@ class CandleFeeder {
     if (this.lastError) { this.lastError = null; this.lastErrorAt = null; }
     const { symbol, quote, epoch } = msg.tick;
     const localSymbol = normalizeSymbol(symbol);
+    this.retryingSymbols.delete(localSymbol);
     const tickAt = epoch * 1000;
     const previousTick = this.lastTick.get(localSymbol);
     // Ignore out-of-order delivery instead of reopening an already completed
@@ -490,6 +545,21 @@ class CandleFeeder {
     }
   }
 
+  /**
+   * High and low of the newest bucket still being built for a symbol — the
+   * part of recent price history that is not in the database yet.
+   */
+  getOpenBucketRange(symbol: string, tf: string): { startMs: number; high: number; low: number } | null {
+    const prefix = `${normalizeSymbol(symbol)}|${tf}|`;
+    let best: { startMs: number; high: number; low: number } | null = null;
+    for (const [key, b] of this.buckets) {
+      if (!key.startsWith(prefix)) continue;
+      const startMs = Number(key.slice(prefix.length)) * 1000;
+      if (!best || startMs > best.startMs) best = { startMs, high: b.high, low: b.low };
+    }
+    return best;
+  }
+
   /** Get the latest in-memory tick for a symbol (used by the chart's live overlay). */
   getLastTick(symbol: string): { price: number; at: number } | null {
     return this.lastTick.get(normalizeSymbol(symbol)) ?? null;
@@ -517,6 +587,10 @@ export function getCandleFeederStatus() {
  */
 export function symbolRejectionReason(symbol: string): string | null {
   return feeder.rejectionReason(symbol);
+}
+
+export function getOpenBucketRange(symbol: string, tf: string) {
+  return feeder.getOpenBucketRange(symbol, tf);
 }
 
 export function getLastTick(symbol: string) {
