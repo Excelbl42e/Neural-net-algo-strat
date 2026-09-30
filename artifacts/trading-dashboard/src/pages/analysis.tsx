@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { useRunAnalysis, useGetWorkerStatus, getGetWorkerStatusQueryKey } from "@workspace/api-client-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -59,6 +59,20 @@ export default function AnalysisPage() {
   const [timeframe, setTimeframe] = useState("H1");
   const run = useRunAnalysis();
   const { data: workerStatus } = useGetWorkerStatus({ query: { refetchInterval: 10000, queryKey: getGetWorkerStatusQueryKey() } });
+  // The scan loop runs every 30 minutes. The endpoint to run one on demand
+  // existed but nothing called it, so waiting out the interval was the only
+  // way to see the effect of a config change.
+  const runScan = useMutation({
+    mutationFn: async () => {
+      const r = await fetch("/api/brain/generate-signals", { method: "POST" });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      return r.json() as Promise<{ started: boolean; message: string }>;
+    },
+    onSuccess: () => {
+      // Give the tick a moment to record its refusals, then show them.
+      setTimeout(() => { void rejections.refetch(); }, 4000);
+    },
+  });
   const ws = (workerStatus ?? {}) as { scheduled?: boolean; stalled?: boolean; nextRunAt?: string | null };
   const nextRun = ws.nextRunAt ? new Date(ws.nextRunAt) : null;
   const minsToNext = nextRun ? Math.max(0, Math.round((nextRun.getTime() - Date.now()) / 60000)) : null;
@@ -131,9 +145,20 @@ export default function AnalysisPage() {
       {/* Why nothing traded: the recorded refusal reasons, newest first. */}
       <Card className="border-border" data-testid="card-rejections">
         <CardHeader className="pb-3">
-          <CardTitle className="uppercase tracking-wider text-sm flex items-center gap-2">
-            <AlertCircle className="w-4 h-4 text-primary" /> Why no trade was placed
-          </CardTitle>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <CardTitle className="uppercase tracking-wider text-sm flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 text-primary" /> Why no trade was placed
+            </CardTitle>
+            <div className="flex items-center gap-2">
+              {runScan.data && (
+                <span className="text-[11px] text-muted-foreground" data-testid="text-scan-result">{runScan.data.message}</span>
+              )}
+              {runScan.isError && <span className="text-[11px] text-amber-300">Could not start a scan.</span>}
+              <Button size="sm" variant="outline" disabled={runScan.isPending} onClick={() => runScan.mutate()} data-testid="button-run-scan">
+                {runScan.isPending ? <><Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> Scanning…</> : "Run scan now"}
+              </Button>
+            </div>
+          </div>
         </CardHeader>
         <CardContent>
           <p className="text-[11px] text-muted-foreground mb-3">

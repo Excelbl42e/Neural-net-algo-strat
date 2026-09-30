@@ -1,5 +1,14 @@
 # Changes in this build (vs. your Replit export)
 
+## Add: "Run scan now"
+
+The scan loop runs every thirty minutes, and `POST /api/brain/generate-signals` existed to run one on demand — but nothing in the app ever called it. Waiting out the interval was the only way to see the effect of a settings change, which makes every adjustment a thirty-minute experiment.
+
+There is now a button on the Analysis page, next to the refusal panel. It reports which of the two things happened (a scan started, or one was already running), and refreshes the refusals a few seconds later so the result of that scan is on screen without a reload.
+
+Verified in a browser: click → "Signal generation cycle started" → the panel repopulates with that scan's refusals.
+
+
 ## Fix: why every scan said "No price tick received yet"
 
 The refusal panel did its job — it showed the real reason immediately, and the reason was a bug.
