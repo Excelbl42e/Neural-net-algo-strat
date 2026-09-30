@@ -1,5 +1,20 @@
 # Changes in this build (vs. your Replit export)
 
+## Make candle pruning safe on a real-sized table
+
+The retention prune filtered on `(timeframe, open_time)`, but the only index on `candles` leads with `symbol` — so every prune fell back to a **sequential scan of the whole table**. Measured on 480,000 rows: ~200ms per timeframe, seven times an hour, growing with the table forever.
+
+It also issued one unbounded `DELETE` per timeframe. On a table this feed writes to continuously, a single large delete holds row locks for its whole duration and builds one enormous transaction, so live candle inserts queue up behind housekeeping.
+
+Three changes:
+
+- **An index the prune can actually use** — `candles (timeframe, open_time)`. Verified: the plan goes from `Seq Scan` to `Bitmap Heap Scan`.
+- **Batched deletes** — 5,000 rows per statement, so each lock is brief and inserts are never blocked behind a cleanup. Verified against 120,000 stale M1 rows: cleared completely while the app answered `200` throughout.
+- **The first prune waits 90 seconds after boot** instead of running during startup, so a large cleanup can never compete with the feed coming up.
+
+Verified end to end: the production bundle boots against a 480,000-row candles table, responds on its port immediately, prunes in the background, and clears every retired row without a single failed request.
+
+
 ## Fix: the demo self-test never placed an order
 
 You noticed the Deriv balance never moved when you ran it. It never moved because **nothing was ever bought**, and I had told you otherwise. That was wrong, and it mattered — it was the one thing the test was supposed to prove.
