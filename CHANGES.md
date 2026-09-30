@@ -1,5 +1,22 @@
 # Changes in this build (vs. your Replit export)
 
+## Fix: "Signal worker — Not running" on a perfectly healthy worker
+
+The Overview tile read **Not running**, and the Analysis page read **WORKER IDLE**, while the System Health panel right below said the worker was `OK` with a tick two minutes earlier. The health panel was right.
+
+`running` is true only while a tick is actually executing — a few seconds out of every thirty minutes. Both displays reported that flag directly, so a healthy, scheduled worker looked stopped for 29 minutes out of every 30, contradicting the panel beside it.
+
+The status now distinguishes the states that matter:
+
+- `scheduled` — the scan loop is running, which is what "is the worker working?" actually asks
+- `stalled` — scheduled, but ticks are overdue (same rule the health panel already used)
+- `nextRunAt` — when the next scan is due
+
+Overview now reads **Scheduled · next scan in ~30 min**, Analysis reads **SCHEDULED · Next scan in ~29 min**, and both say **SCANNING NOW** during a tick, **SCAN OVERDUE** if ticks stop, **STOPPED** if the loop is not scheduled at all. That also answers "when will it trade?" without anyone having to know the interval.
+
+Verified against a live server: `scheduled: true`, `stalled: false`, `nextRunAt` 30 minutes after the last tick, and both pages rendering it.
+
+
 ## Whole-repo audit: five more, one of them dangerous
 
 Read the ~16,400 hand-written lines outside the vendored UI primitives. Five findings.

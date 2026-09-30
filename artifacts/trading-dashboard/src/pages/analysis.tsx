@@ -59,6 +59,9 @@ export default function AnalysisPage() {
   const [timeframe, setTimeframe] = useState("H1");
   const run = useRunAnalysis();
   const { data: workerStatus } = useGetWorkerStatus({ query: { refetchInterval: 10000, queryKey: getGetWorkerStatusQueryKey() } });
+  const ws = (workerStatus ?? {}) as { scheduled?: boolean; stalled?: boolean; nextRunAt?: string | null };
+  const nextRun = ws.nextRunAt ? new Date(ws.nextRunAt) : null;
+  const minsToNext = nextRun ? Math.max(0, Math.round((nextRun.getTime() - Date.now()) / 60000)) : null;
   // Every refusal is already recorded server-side; until now the only way to
   // read it was to request the endpoint by hand, which left "why has it not
   // traded?" — the question that actually matters — unanswerable from the app.
@@ -95,10 +98,20 @@ export default function AnalysisPage() {
       {/* Worker Status Bar */}
       {workerStatus && (
         <div className="border border-violet-500/20 bg-violet-500/5 rounded-lg p-3 flex items-center gap-4 text-[11px] font-mono-numbers">
-          <div className={cn("flex items-center gap-1.5", workerStatus.running ? "text-violet-300" : "text-muted-foreground")}>
-            <span className={cn("w-2 h-2 rounded-full", workerStatus.running ? "bg-violet-400 animate-pulse" : "bg-muted-foreground/40")} />
-            <span className="uppercase tracking-wider font-bold">{workerStatus.running ? "WORKER ACTIVE" : "WORKER IDLE"}</span>
+          {/* Between ticks the worker is idle by design, which is not the same
+              as stopped. "IDLE" for 29 of every 30 minutes read like a fault. */}
+          <div className={cn("flex items-center gap-1.5", ws.stalled ? "text-amber-300" : ws.scheduled ? "text-violet-300" : "text-muted-foreground")}>
+            <span className={cn("w-2 h-2 rounded-full", workerStatus.running ? "bg-violet-400 animate-pulse" : ws.stalled ? "bg-amber-400" : ws.scheduled ? "bg-violet-400" : "bg-muted-foreground/40")} />
+            <span className="uppercase tracking-wider font-bold">
+              {workerStatus.running ? "SCANNING NOW" : ws.stalled ? "SCAN OVERDUE" : ws.scheduled ? "SCHEDULED" : "STOPPED"}
+            </span>
           </div>
+          {ws.scheduled && !workerStatus.running && minsToNext != null && (
+            <>
+              <span className="text-muted-foreground/60">|</span>
+              <span className="text-muted-foreground">Next scan in <span className="text-foreground">~{minsToNext} min</span></span>
+            </>
+          )}
           <span className="text-muted-foreground/60">|</span>
           <span className="text-muted-foreground">Signals generated (worker counter, not dispatched): <span className="text-foreground">{workerStatus.signalsGeneratedTotal}</span></span>
           <span className="text-muted-foreground/60">|</span>
