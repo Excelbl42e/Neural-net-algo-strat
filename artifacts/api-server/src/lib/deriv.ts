@@ -19,6 +19,14 @@ export interface DerivTradeParams {
   targetPrice?: number | null;
   /** Use binary CALL/PUT (stake < $1 makes multipliers ineligible). */
   forceBinary?: boolean;
+  /**
+   * The exact multiplier stop-loss / take-profit, in USD, as approved by
+   * planEntry against the live price. When present these are sent verbatim;
+   * entry/stop/target prices are then only used for logging. Without them the
+   * bracket is derived from the prices (the self-test path).
+   */
+  stopLossUsd?: number | null;
+  takeProfitUsd?: number | null;
   /** Override binary duration, skipping the probe. Default: the shortest duration Deriv accepts, preferring DERIV_BINARY_DURATION_DAYS (1) day. */
   binaryDuration?: BinaryDuration;
 }
@@ -166,8 +174,14 @@ export async function placeDerivTrade(params: DerivTradeParams): Promise<DerivTr
       contract_type: params.direction === "buy" ? "MULTUP" : "MULTDOWN",
       underlying_symbol: symbol, amount: params.stakeAmount, basis: "stake", currency, multiplier,
     };
-    const limit = computeLimitOrder(params, multiplier);
-    if (limit) parameters.limit_order = limit;
+    const approved = params.stopLossUsd != null || params.takeProfitUsd != null;
+    const limit = approved
+      ? {
+          ...(params.stopLossUsd != null ? { stop_loss: params.stopLossUsd } : {}),
+          ...(params.takeProfitUsd != null ? { take_profit: params.takeProfitUsd } : {}),
+        }
+      : computeLimitOrder(params, multiplier);
+    if (limit && Object.keys(limit).length > 0) parameters.limit_order = limit;
   } else {
     // An explicit override (the self-test) is obeyed verbatim; otherwise probe.
     let d: BinaryDuration;
@@ -236,54 +250,100 @@ function classifyContractType(raw: unknown): "multiplier" | "binary" | null {
   return raw.toUpperCase().startsWith("MULT") ? "multiplier" : "binary";
 }
 
+export interface ContractQuote {
+  /**
+   * Trading cost as a percentage of position size: stake x multiplier for a
+   * multiplier, the stake itself for a binary. Position size is the unit FX
+   * costs are normally quoted in, and it does not move with leverage the way a
+   * percentage of the stake does.
+   */
+  costPct: number;
+  /**
+   * What costPct was measured from. "commission" is Deriv's own figure.
+   * "ask_price" means Deriv reported no commission, and on a stake-basis quote
+   * the ask always equals the stake, so costPct is then 0 and says nothing
+   * beyond "the quote succeeded".
+   */
+  costSource: "commission" | "ask_price";
+  commissionUsd: number | null;
+  /** Deriv's current spot for the underlying, when it reports one. */
+  spot: number | null;
+  /** Deriv's own limits on the multiplier stop-loss / take-profit amount, when reported. */
+  limits: { stopLossMin: number | null; stopLossMax: number | null; takeProfitMin: number | null; takeProfitMax: number | null };
+}
+
 /**
- * Indicative live trading cost as a percentage of stake, read from a real
- * Deriv `proposal` quote for a $1 MULTUP (basis=stake, so ask_price should
- * equal amount modulo the spread/commission Deriv actually prices in). Used
- * by the forex readiness dispatch gate to refuse trading when the market is
- * too expensive right now. Returns null (never throws) if the quote can't be
- * read; forex-readiness.ts treats null as "refuse rather than trade blind".
+ * Live quote for exactly the contract about to be sent, at the real stake and
+ * direction. Never opens a position.
  *
- * Evidence label: code review only — the proposal shape (`ask_price`,
- * `amount`, `basis: "stake"`) matches Deriv's documented multiplier proposal
- * response, but this has not been run against a live Deriv connection.
+ * This replaces getIndicativeCostPct, which computed |ask_price - stake| / stake.
+ * On a stake-basis proposal Deriv's ask_price always equals the stake — the
+ * self-test shows "ask_price 1" for $1 and "ask_price 0.5" for $0.50 — so that
+ * figure was 0% every time, and the configured cost ceiling never refused
+ * anything except a failed quote. The real cost of a multiplier is its
+ * commission, which Deriv reports separately; it is used whenever present.
+ *
+ * The same response is also where Deriv states its minimum and maximum
+ * stop-loss / take-profit amounts. The dispatcher used a $0.50 floor carried
+ * over from the original import that nothing had verified; reading Deriv's own
+ * numbers replaces a guess with the broker's answer whenever it gives one.
  */
-export async function getIndicativeCostPct(
+export async function getContractQuote(
   token: string,
   environment: "demo" | "real",
   symbol: string,
-  opts: { stakeAmount?: number; binary?: boolean } = {},
-): Promise<number | null> {
+  opts: { stakeAmount: number; binary: boolean; direction: "buy" | "sell"; currency?: string },
+): Promise<ContractQuote | null> {
   const meta = getSyntheticSymbol(symbol);
   const multiplier = meta?.multiplier ?? 100;
-  // Quote the contract actually about to be sent. This used to always ask for
-  // a MULTUP at $1: on a sub-$1 account the order is a binary, so the gate
-  // measured an instrument that would not be traded — and could refuse the
-  // trade outright ("refusing to trade blind") because Deriv declined a
-  // multiplier quote the account was never going to use.
-  const amount = Number.isFinite(opts.stakeAmount) && (opts.stakeAmount ?? 0) > 0 ? opts.stakeAmount! : 1;
+  const amount = Number.isFinite(opts.stakeAmount) && opts.stakeAmount > 0 ? opts.stakeAmount : 1;
+  const buy = opts.direction === "buy";
   let session: DerivSession | null = null;
   try {
     session = await openDerivSession(token, environment);
+    // Quote in the account's own currency, as the order will be placed.
+    const currency = opts.currency ?? session.account.currency ?? "USD";
     const req: Record<string, unknown> = opts.binary
       ? {
-          proposal: 1, amount, basis: "stake", contract_type: "CALL", currency: "USD",
+          proposal: 1, amount, basis: "stake", contract_type: buy ? "CALL" : "PUT", currency,
           underlying_symbol: symbol,
           duration: defaultBinaryDurationDays(), duration_unit: "d",
         }
       : {
-          proposal: 1, amount, basis: "stake", contract_type: "MULTUP", currency: "USD",
+          proposal: 1, amount, basis: "stake", contract_type: buy ? "MULTUP" : "MULTDOWN", currency,
           underlying_symbol: symbol, multiplier,
         };
-    const res = await session.request<{ proposal?: { ask_price?: number | string }; error?: { message?: string } }>(
-      req, { timeoutMs: 8_000 },
-    );
-    if (res.error) return null;
-    const askPrice = toFiniteNumber(res.proposal?.ask_price);
+    type Range = { min?: number | string; max?: number | string } | undefined;
+    const res = await session.request<{
+      proposal?: {
+        ask_price?: number | string;
+        commission?: number | string;
+        spot?: number | string;
+        validation_params?: { stop_loss?: Range; take_profit?: Range };
+      };
+      error?: { message?: string };
+    }>(req, { timeoutMs: 8_000 });
+    if (res.error || !res.proposal) return null;
+    const askPrice = toFiniteNumber(res.proposal.ask_price);
     if (askPrice === null) return null;
-    // Cost as a percentage of the stake, so the configured ceiling means the
-    // same thing at every stake size.
-    return Math.abs(askPrice - amount) / amount * 100;
+
+    const commissionUsd = toFiniteNumber(res.proposal.commission);
+    const positionSize = opts.binary ? amount : amount * multiplier;
+    const costSource: ContractQuote["costSource"] = commissionUsd != null ? "commission" : "ask_price";
+    const costUsd = commissionUsd != null ? commissionUsd : Math.abs(askPrice - amount);
+    const vp = res.proposal.validation_params;
+    return {
+      costPct: (costUsd / positionSize) * 100,
+      costSource,
+      commissionUsd,
+      spot: toFiniteNumber(res.proposal.spot),
+      limits: {
+        stopLossMin: toFiniteNumber(vp?.stop_loss?.min),
+        stopLossMax: toFiniteNumber(vp?.stop_loss?.max),
+        takeProfitMin: toFiniteNumber(vp?.take_profit?.min),
+        takeProfitMax: toFiniteNumber(vp?.take_profit?.max),
+      },
+    };
   } catch {
     return null;
   } finally {

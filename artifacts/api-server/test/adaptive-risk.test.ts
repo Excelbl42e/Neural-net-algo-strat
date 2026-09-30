@@ -75,13 +75,14 @@ test("an already-multiplier stake is left exactly alone", () => {
   assert.equal(r.stake, 4);
 });
 
-test("a losing trade at the $1.00 floor costs $0.50, not the modelled 1-ATR stop", () => {
-  // Deriv's $0.50 minimum stop_loss binds here: 1 ATR on a $1 stake models to
-  // ~$0.10, but the order builder cannot send that. Worth asserting because the
-  // difference is 5x and it decides how many losses a $5 account survives.
-  assert.equal(typicalLoss(1, "multiplier"), 0.5);
-  assert.equal(typicalLoss(40, "multiplier"), 4);      // floor no longer binds
+test("a losing trade at the $1.00 floor costs its 1-ATR stop, not a guessed $0.50 floor", () => {
+  // 1 ATR (~0.1% of price) on $1 x 100 is ~$0.10. The old model clamped this to
+  // an unverified $0.50 Deriv minimum, which the dispatcher no longer assumes.
+  assert.equal(typicalLoss(1, "multiplier"), 0.1);
+  assert.equal(typicalLoss(40, "multiplier"), 4);
   assert.equal(typicalLoss(0.99, "binary"), 0.99);     // a binary always costs everything
+  // Never over the 80% stop cap, however wide the modelled stop.
+  assert.equal(typicalLoss(1, "multiplier", 100, 0.02), 0.8);
 });
 
 test("$5.00 funds one $1.00 multiplier trade, and the day's budget stops there", () => {

@@ -20,14 +20,30 @@ export interface RejectionEntry {
     | "post_gpt"         // geometry gate / cited-structure verification
     | "portfolio"
     | "sizing"
+    | "entry"            // waiting for price to reach the approved zone, or setup over
     | "execution"
     | "forex_readiness";
   reason: string;
   metrics?: Record<string, unknown>;
 }
 
+/**
+ * The same refusal for the same symbol inside this window is recorded once.
+ * The entry watcher re-attempts pending signals every few seconds, and many
+ * refusals — outside the killzone, today's loss budget already spent — stay
+ * true for hours; recording each attempt would push every other entry out of
+ * the 200-entry log within the hour and bury the one line that matters.
+ */
+const REPEAT_WINDOW_MS = 10 * 60_000;
+const lastRecorded = new Map<string, { key: string; at: number }>();
+
 /** Persists the last 200 filter rejections so the journal can show what blocked what. */
 export function recordRejection(e: Omit<RejectionEntry, "at">): void {
+  const key = `${e.stage}|${e.reason}`;
+  const prev = lastRecorded.get(e.symbol);
+  const now = Date.now();
+  if (prev && prev.key === key && now - prev.at < REPEAT_WINDOW_MS) return;
+  lastRecorded.set(e.symbol, { key, at: now });
   queue = queue.then(async () => {
     try {
       const raw = await getSecret(KEY);

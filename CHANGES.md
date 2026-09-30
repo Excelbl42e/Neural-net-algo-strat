@@ -1,5 +1,61 @@
 # Changes in this build (vs. your Replit export)
 
+## Pre-funding audit: the trade that executed was not the trade that was approved
+
+### Critical: the bracket was measured from the wrong price
+
+A multiplier fills **at market**. Signals fire while price is still *above* the FVG it is expected to retrace into, and the dispatcher measured the stop-loss and take-profit dollar amounts from the **FVG midpoint** — then sent them with a market order. On the judge's own test setup:
+
+| | approved | as it would have executed |
+|---|---|---|
+| stop | at the sweep, beyond structure | ~100 pips higher, **on top of the FVG** the retrace goes into |
+| target | the liquidity pool | ~100 pips **past** the pool |
+| reward:risk | 2.73 | **0.59** |
+
+The strategy's normal entry (the retrace) would have stopped it out.
+
+**Now:** a signal waits for price to actually come into its entry zone. A new entry watcher checks pending signals against live ticks every 15 seconds; the full dispatch runs only once price is in the zone. The bracket is measured **from the live price to the structural stop and target**, and reward:risk is re-checked there, after Deriv's minimums, cent rounding and commission. A signal whose stop is hit, or whose target is reached before entry, is cancelled rather than chased. A 20,000-case property test holds the invariants: executed RR ≥ floor, stop never tighter than structure, target never beyond the pool, no entry outside the zone.
+
+### A setup that was already broken could still be entered
+
+The dispatcher cancelled a setup whose stop had been hit only when it reached its own entry check, and it only looked at the price *now*. The killzone, news and loss-budget gates run first and return early. So a buy whose stop was taken at 03:00 UTC stayed pending, and when price came back into the zone at the London open it would have been entered on a structure that no longer existed. A wick through the stop between two checks was missed the same way, and so was anything that happened while the server was restarting.
+
+The entry watcher now cancels a pending setup **before any gate**. It judges on every price traded since the signal was created: stored M5 candles, the candle still forming, and the live tick. The partial candle the signal was born in is left out, so earlier price can never cancel it. Verified against the database: the broken setup was cancelled with *"Price traded down to 1.00000, through the stop 1.00100, before an entry"*, and the valid one next to it stayed pending.
+
+### The trading-cost gate measured nothing
+
+It computed `|ask_price − stake| / stake`. On a stake-basis proposal Deriv's `ask_price` **always equals the stake** (the self-test showed `ask_price 1` for $1), so the cost was 0% on every quote. It now reads Deriv's **commission** from a quote of the exact contract (real stake, real direction, account currency) as a % of position size, and reads Deriv's own stop-loss / take-profit min/max from the same response.
+
+### The bracket now includes the commission
+
+Deriv books the commission as a loss at open. A stop-loss of $X therefore fires after a price move worth only $X − commission, and a take-profit of $Y needs $Y + commission. Both amounts now include it, so the stop fires at structure and the target at the pool, and reward:risk is measured in money actually won or lost.
+
+### An unverified $0.50 minimum would have kept a $5 account idle
+
+When Deriv's quote does not state a minimum, the dispatcher assumed $0.50, a value carried over from the original import and never checked. On the $1.00 stake at x100 that forces every stop to at least **~58 pips** on EURUSD and, at 2:1, every target to **117+ pips**. Almost no M30 setup qualifies. The assumed minimum is now **$0.10** (a lower minimum only ever permits a *tighter* stop, never more money at risk). If Deriv's real minimum is higher it refuses the order, nothing opens, and the dispatcher **learns the minimum from the refusal** and re-plans the signal. The demo self-test now prints Deriv's actual limits and commission.
+
+### Each stop is capped at what is left of today's loss budget
+
+After a loss on a small account the daily-loss guard shrinks the stake below $1.00, then the multiplier floor lifts it back to $1.00. That lifted trade could carry a stop larger than the budget it was sized against. The stop is now capped at the lowest of 80% of stake, Deriv's maximum, and the remaining daily budget.
+
+### Other fixes
+
+- **Open price was the stake.** Trades stored the contract's buy price ($1.00) as the open price on every pair, so the trade review could not classify anything. It now stores the live price the order was placed against.
+- **Pending signals stacked.** A new signal on a symbol now supersedes older pending ones on that symbol, rather than several waiting to fire at once.
+- **Position ceiling is enforced per account at dispatch.** Signals now wait hours for entry, so the count checked at signal time was stale by the time one filled.
+- **Price feed could silently lose pairs.** Any Deriv error naming a symbol dropped it for good, including "market is closed" and rate limits. A reconnect over the weekend could leave Monday with no live prices until a restart. Only an invalid symbol is dropped now, and any pair with no tick for 5 minutes is re-subscribed.
+- **Multiple real accounts.** A login holding a USD account next to, say, a crypto account failed to connect ("multiple active accounts"). The single USD account is now chosen.
+- **Contract monitor health stayed "degraded" forever** after one transient Deriv error. Errors now describe the current cycle.
+- **Rejections panel churn.** The watcher re-evaluates every 15s; identical reasons are recorded once (10-minute dedupe per symbol) and unchanged reasons are not re-written to the database.
+- **Demo self-test** now also proves the contract monitor can see a closed contract (the path that notices a real stop-loss or take-profit being hit), and fails loudly if it cannot.
+
+### ATR percentile: checked, left as is
+
+The computation is correct (Wilder ATR-14 on H1, ranked within the last 200 values). The 91–98 readings on the AUD/NZD crosses were clustered in one region at one time, consistent with a genuine volatility event rather than a bug. The baseline includes quiet Asian hours while the bot only scans London/New York. Modelled on a pair whose session range is 2.2x its Asian range, that raises how often an ordinary in-session reading exceeds the 90th percentile from ~9% to ~13%. That is a mild extra strictness, not a blocker. `atrPercentileMax` stays at 90 and the efficiency-ratio floor at 0.15.
+
+75 tests pass. Production build boots cleanly; all 11 pages render with zero console errors at 1440px and 375px.
+
+
 ## Fix: take-profit targets were noise, so reward:risk could almost never pass
 
 The first live scan showed the judge **finding real setups** and every one of them dying at the geometry gate — not narrowly, but by an order of magnitude: `RR 0.06`, `RR 0.35`, `RR 0.51` against a floor of 2.0.

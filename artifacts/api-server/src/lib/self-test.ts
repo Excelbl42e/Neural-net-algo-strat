@@ -7,8 +7,11 @@
  *    buy at Deriv's $1 minimum with a stop-loss and take-profit attached,
  *    confirm the contract opened, then sell it straight back. The demo balance
  *    moves by the spread, which is the visible proof that an order really went
- *    out. This is also the only place the sell path runs before real money
- *    depends on it.
+ *    out. It then asks Deriv for the contract's status the way the contract
+ *    monitor does, proving a close at the broker is actually seen — otherwise
+ *    a closed trade would stay "open" and block further trading. This is the
+ *    only place the sell path and that status query run before real money
+ *    depends on them.
  *  - Binary (the small-account fallback): a forex binary runs for days, far too
  *    long to buy and wait out here, so this stays a quote-only proposal at the
  *    exact duration production code uses.
@@ -19,7 +22,7 @@
 import { brokerConnectionsTable } from "@workspace/db";
 import { decryptSecret } from "./crypto.js";
 import {
-  fetchContractStatuses, placeDerivTrade, checkMultiplierProposal, sellDerivTrade,
+  fetchContractStatuses, placeDerivTrade, checkMultiplierProposal, sellDerivTrade, getContractQuote,
   queryBinaryMinDuration, checkBinaryProposal, binaryDurationMs, defaultBinaryDurationDays,
 } from "./deriv.js";
 import { inspectDerivAccount } from "./deriv-account.js";
@@ -81,6 +84,24 @@ export async function runDemoSelfTest(conn: Conn): Promise<SelfTestResult> {
       return await finish(false, `Multiplier order path rejected by Deriv (this is what real signals will use): ${multiplierCheck.message}`);
     }
 
+    // What Deriv itself says about limits and cost, recorded so the numbers the
+    // dispatcher relies on come from the broker rather than from a guess. When
+    // Deriv reports no minimum the dispatcher assumes $0.10 and learns a higher
+    // one from Deriv's refusal of an order.
+    const quote = await getContractQuote(token, "demo", "frxEURUSD", { stakeAmount: MULTIPLIER_TEST_STAKE, binary: false, direction: "buy" });
+    if (quote) {
+      const l = quote.limits;
+      const show = (v: number | null) => (v == null ? "not reported" : `$${v.toFixed(2)}`);
+      mark(
+        "deriv_limits",
+        `stop-loss min ${show(l.stopLossMin)} / max ${show(l.stopLossMax)}; take-profit min ${show(l.takeProfitMin)} / max ${show(l.takeProfitMax)}; ` +
+        `commission ${quote.commissionUsd == null ? "not reported" : `$${quote.commissionUsd.toFixed(4)}`} ` +
+        `(${quote.costPct.toFixed(4)}% of position, from ${quote.costSource})`,
+      );
+    } else {
+      mark("deriv_limits", "quote for limits failed; the dispatcher will assume a $0.10 minimum and learn Deriv's from any refusal");
+    }
+
     // A reference price lets the order carry a real stop-loss/take-profit, so
     // the limit_order attachment is exercised too rather than only the bare buy.
     const { getLastTick } = await import("./candle-feeder.js");
@@ -115,6 +136,30 @@ export async function runDemoSelfTest(conn: Conn): Promise<SelfTestResult> {
     }
     const roundTripPnl = sold.soldFor != null ? Number((sold.soldFor - MULTIPLIER_TEST_STAKE).toFixed(2)) : null;
     mark("multiplier_closed", `sold for ${sold.soldFor}${roundTripPnl != null ? ` (round trip ${roundTripPnl >= 0 ? "+" : ""}${roundTripPnl})` : ""}`);
+
+    // Prove the contract monitor can see the close. This is the path that
+    // notices a real position hit its stop-loss or take-profit at Deriv, and
+    // it had never run against Deriv. If it cannot see a closed contract, a
+    // closed trade stays "open" in the ledger for ever: its stake keeps
+    // counting against the daily loss budget and it holds a position slot, so
+    // on a small account the first trade quietly ends all further trading.
+    let settled: { profit: number | null; sellPrice: number | null } | null = null;
+    const settleDeadline = Date.now() + 20_000;
+    while (Date.now() < settleDeadline) {
+      const info = (await fetchContractStatuses(token, "demo", [mBuy.contractId])).get(mBuy.contractId);
+      if (info?.isSold) { settled = { profit: info.profit, sellPrice: info.sellPrice }; break; }
+      await new Promise((r) => setTimeout(r, 2_000));
+    }
+    if (!settled) {
+      mark("settlement_not_seen", `contract ${mBuy.contractId} was sold, but the status query never reported it as closed`);
+      return await finish(
+        false,
+        `The sell went through, but the contract monitor's status query could not see contract ${mBuy.contractId} as closed. ` +
+        `Real trades would stay open in the ledger after Deriv closed them, blocking further trading. Do not fund until this passes.`,
+        mBuy.contractId,
+      );
+    }
+    mark("settlement_detected", `status query reports contract ${mBuy.contractId} closed: profit ${settled.profit}, sell price ${settled.sellPrice}`);
 
     // Test the actual instrument class the bot trades (forex, via binary
     // CALL/PUT — the small-account fallback real signals use when their

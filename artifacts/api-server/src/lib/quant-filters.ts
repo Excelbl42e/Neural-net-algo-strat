@@ -888,16 +888,21 @@ export function runExpertJudge(
   return {
     direction: bias,
     confidence,
-    entryZone: entry.toFixed(5),
+    // The whole FVG is the entry zone. It used to be published as a single
+    // point (low === high === the midpoint), which is fine for measuring
+    // reward:risk but gives the dispatcher nothing to wait for: an order is
+    // only placed once price actually retraces into this range. The midpoint
+    // is still what the geometry gate measures, as (low + high) / 2.
+    entryZone: `${fvg.low.toFixed(5)}–${fvg.high.toFixed(5)}`,
     targetZone: target.toFixed(5),
     stopZone: stop.toFixed(5),
-    entryLow: entry,
-    entryHigh: entry,
+    entryLow: fvg.low,
+    entryHigh: fvg.high,
     stopLevel: stop,
     target1Level: target,
     target2Level: null,
     levels,
     conceptsDetected: concepts.join(", "),
-    reasoning: `Deterministic expert-system signal (no AI): ${bias} M30 ${wantedSweepSide.replace("_", "-")} liquidity sweep at ${sweep.level.toFixed(5)}, structure break confirmed, entry at ${wantedFvgKind} FVG midpoint ${entry.toFixed(5)}, stop beyond the sweep, target at the next opposing M30 swing ${target.toFixed(5)}. Confluence: ${agreeingVotes.length} agreeing / ${disagreeingVotes.length} disagreeing of ${relevantVotes.length} strategy-library voters with an opinion (${concepts.length} concepts total).`,
+    reasoning: `Deterministic expert-system signal (no AI): ${bias} M30 ${wantedSweepSide.replace("_", "-")} liquidity sweep at ${sweep.level.toFixed(5)}, structure break confirmed, entry on a retrace into the ${wantedFvgKind} FVG ${fvg.low.toFixed(5)}–${fvg.high.toFixed(5)} (midpoint ${entry.toFixed(5)}), stop beyond the sweep, target at the next significant opposing M30 swing ${target.toFixed(5)}. Confluence: ${agreeingVotes.length} agreeing / ${disagreeingVotes.length} disagreeing of ${relevantVotes.length} strategy-library voters with an opinion (${concepts.length} concepts total).`,
   };
 }

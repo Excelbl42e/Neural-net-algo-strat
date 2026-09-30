@@ -8,7 +8,7 @@
  * GPT-based ICT analysis produces signals; the Node/TypeScript Deriv path is
  * the execution layer.
  */
-import { eq, sql, and, or, gte, lt, lte, isNull, desc } from "drizzle-orm";
+import { eq, ne, sql, and, or, gte, lt, lte, isNull, desc, inArray } from "drizzle-orm";
 import {
   db,
   signalsTable,
@@ -22,9 +22,14 @@ import {
 
 import { getOpenAI } from "./ai-client.js";
 import { logger } from "./logger.js";
-import { placeDerivTrade, getIndicativeCostPct } from "./deriv.js";
+import { placeDerivTrade, getContractQuote } from "./deriv.js";
+import { getLastTick, getOpenBucketRange } from "./candle-feeder.js";
 import { ALL_FOREX_INSTRUMENTS, getSyntheticSymbol, isForexCode } from "./synthetic-catalog.js";
-import { calculateCappedStake, calculateDailyLossCappedStake, applyMultiplierFloor, effectiveRiskPcts, worstCaseLoss, MULTIPLIER_MIN_STAKE } from "./execution-risk.js";
+import {
+  calculateCappedStake, calculateDailyLossCappedStake, applyMultiplierFloor, effectiveRiskPcts, worstCaseLoss,
+  planEntry, entryZoneState, MULTIPLIER_MIN_STAKE, MULTIPLIER_STOP_CAP_PCT, DEFAULT_MIN_LIMIT_ORDER_USD,
+  parseDerivLimitRejection, setupInvalidation,
+} from "./execution-risk.js";
 import { forexPreScanGate, tradingCostGate } from "./forex-readiness.js";
 import { getNewsEvents } from "./news-calendar.js";
 import { scoreConcepts } from "./trade-review.js";
@@ -92,7 +97,12 @@ let activeMode: "auto_demo" | "auto_live" | null = null;
 /** Extra confidence a setup must carry before it is worth taking on the stop-less binary path. */
 const BINARY_CONFIDENCE_PREMIUM = 0.08;
 
-let activeConfig: { smallAccountMaxRiskPct: number; minConfidence: number } = { smallAccountMaxRiskPct: 10, minConfidence: 0.7 };
+let activeConfig: { smallAccountMaxRiskPct: number; minConfidence: number; minRiskReward: number; maxPerAssetClass: number } = {
+  smallAccountMaxRiskPct: 10, minConfidence: 0.7, minRiskReward: 2, maxPerAssetClass: 2,
+};
+
+/** An order is never placed against a quote older than this. Ticks arrive every second or two on the majors. */
+const EXECUTION_TICK_MAX_AGE_MS = 60_000;
 let lastLock: { locked: boolean; reason: string | null } = { locked: false, reason: null };
 const LOCK_MSG = "Autonomous dispatch waiting: the reconciler is resolving an unresolved Deriv order";
 
@@ -558,11 +568,29 @@ async function transitionSignalExecution(
   return Boolean(updated);
 }
 
+/**
+ * Record why a pending signal is still waiting — once. The entry watcher looks
+ * at pending signals every few seconds, so writing the reason (and a refusal
+ * panel entry) on every look would bury the panel and churn the database with
+ * the same sentence. Only a change of reason is news.
+ */
+async function noteWaiting(signal: SignalRow, reason: string): Promise<void> {
+  if (signal.id == null || signal.executionReason === reason) return;
+  signal.executionReason = reason;
+  await recordGeneratedReason(signal.id, reason);
+  recordRejection({ symbol: signal.symbol, stage: "entry", reason });
+}
+
 async function recordGeneratedReason(signalId: number, reason: string): Promise<void> {
   await db
     .update(signalsTable)
     .set({ executionStatus: "generated", executionReason: reason })
-    .where(and(eq(signalsTable.id, signalId), eq(signalsTable.executionStatus, "generated")));
+    .where(and(
+      eq(signalsTable.id, signalId),
+      eq(signalsTable.executionStatus, "generated"),
+      // An unchanged reason is not worth a write; the watcher re-checks often.
+      sql`${signalsTable.executionReason} IS DISTINCT FROM ${reason}`,
+    ));
 }
 
 async function findUntrackedExecutedSignal(): Promise<number | null> {
@@ -593,6 +621,51 @@ interface SignalRow {
   expiresAt: Date | null;
   executionStatus: "generated" | "awaiting_broker" | "executed" | "rejected" | "ambiguous";
   executionReason: string | null;
+  /** When the signal was stored; price history since then decides whether the setup is still valid. */
+  createdAt?: Date | null;
+}
+
+/**
+ * Whole M5 candles that start after the signal was created, plus the candle
+ * still forming and the live tick. The partial candle the signal was created
+ * in is left out, so price from before the signal can never cancel it.
+ */
+const INVALIDATION_TF = "M5";
+const INVALIDATION_TF_MS = 5 * 60_000;
+
+async function invalidationSince(signal: SignalRow): Promise<string | null> {
+  if (!signal.createdAt) return null;
+  const stop = signal.stopLevel != null ? parseFloat(signal.stopLevel) : Number.NaN;
+  const target = signal.target1Level != null ? parseFloat(signal.target1Level) : Number.NaN;
+  if (!Number.isFinite(stop) || !Number.isFinite(target)) return null;
+  const createdMs = signal.createdAt.getTime();
+  const sinceMs = Math.ceil(createdMs / INVALIDATION_TF_MS) * INVALIDATION_TF_MS;
+  let low = Number.POSITIVE_INFINITY;
+  let high = Number.NEGATIVE_INFINITY;
+  const [row] = await db
+    .select({ low: sql<string | null>`min(${candlesTable.low})`, high: sql<string | null>`max(${candlesTable.high})` })
+    .from(candlesTable)
+    .where(and(
+      eq(candlesTable.symbol, signal.symbol),
+      eq(candlesTable.timeframe, INVALIDATION_TF),
+      gte(candlesTable.openTime, new Date(sinceMs)),
+    ));
+  if (row?.low != null) low = Math.min(low, Number(row.low));
+  if (row?.high != null) high = Math.max(high, Number(row.high));
+  const open = getOpenBucketRange(signal.symbol, INVALIDATION_TF);
+  if (open && open.startMs >= sinceMs) { low = Math.min(low, open.low); high = Math.max(high, open.high); }
+  const tick = getLastTick(signal.symbol);
+  if (tick && tick.at >= createdMs) { low = Math.min(low, tick.price); high = Math.max(high, tick.price); }
+  if (!Number.isFinite(low) || !Number.isFinite(high)) return null;
+  return setupInvalidation(signal.direction === "sell" ? "sell" : "buy", stop, target, low, high);
+}
+
+async function cancelInvalidated(signal: SignalRow, reason: string): Promise<void> {
+  if (signal.id == null) return;
+  const cancelled = await transitionSignalExecution(signal.id, "generated", "rejected", reason, { signalStatus: "cancelled" });
+  if (!cancelled) return;
+  recordRejection({ symbol: signal.symbol, stage: "entry", reason });
+  logger.info({ symbol: signal.symbol, signalId: signal.id, reason }, "Pending signal cancelled: setup over before entry");
 }
 
 let dispatchQueue: Promise<void> = Promise.resolve();
@@ -792,6 +865,24 @@ async function dispatchTradeUnlocked(
     .select({ count: sql<number>`count(*)::int` })
     .from(tradesTable)
     .where(and(eq(tradesTable.accountId, conn.accountId), eq(tradesTable.status, "open")));
+  // Per-account position ceiling, enforced here where the account is known.
+  // The portfolio gate at signal time can only see "open trades somewhere",
+  // and signals now wait hours for their entry, so by the time one fills the
+  // count it was approved against is stale. This bot is forex-only and every
+  // pair is one asset class, so the ceiling is the lower of the two caps —
+  // the same figure the Configuration page shows as "at once".
+  {
+    const ceiling = Math.min(maxConcurrentPositions, activeConfig.maxPerAssetClass);
+    const openCount = openRow?.count ?? Number.NaN;
+    if (!Number.isFinite(openCount) || openCount >= ceiling) {
+      const reason = Number.isFinite(openCount)
+        ? `${openCount} position(s) already open on this account; the ceiling is ${ceiling}`
+        : "Could not count open positions on this account; refusing execution";
+      await recordGeneratedReason(signal.id, reason);
+      recordRejection({ symbol: signal.symbol, stage: "portfolio", reason, metrics: { openCount, ceiling } });
+      return;
+    }
+  }
   // Balance-adaptive ceiling. The configured percentages are what the operator
   // is willing to risk; the band is what the balance can survive. The lower of
   // the two applies, so a setting that made sense at $5 tapers on its own as
@@ -944,35 +1035,112 @@ async function dispatchTradeUnlocked(
     }
   }
 
-  // Trading-cost gate, now that the stake and contract type are settled. It
-  // quotes exactly what is about to be sent: asking for a $1 multiplier quote
-  // on an account whose order is a sub-$1 binary measured an instrument that
-  // would never be traded, and a refusal of that quote refused the trade.
+  // ── Entry timing: the order waits for price to come into the approved zone ──
+  //
+  // A multiplier fills at market. Signals fire while price is still away from
+  // the FVG it has to retrace into, and the bracket used to be measured from
+  // the FVG midpoint while the order filled at market — shifting the stop up
+  // onto the FVG (where the retrace goes) and the target past the liquidity
+  // pool. planEntry measures everything from the live price instead, and
+  // holds the signal until that price is actually inside the zone.
+  const entryLowNum  = signal.entryLow  != null ? parseFloat(signal.entryLow)  : Number.NaN;
+  const entryHighNum = signal.entryHigh != null ? parseFloat(signal.entryHigh) : Number.NaN;
+  const stopNum      = signal.stopLevel    != null ? parseFloat(signal.stopLevel)    : Number.NaN;
+  const targetNum    = signal.target1Level != null ? parseFloat(signal.target1Level) : Number.NaN;
+  const direction = signal.direction === "sell" ? "sell" as const : "buy" as const;
+  const minRiskReward = activeConfig.minRiskReward;
+
+  const tick = getLastTick(signal.symbol);
+  const tickAgeMs = tick ? Date.now() - tick.at : Number.POSITIVE_INFINITY;
+  if (!tick || tickAgeMs > EXECUTION_TICK_MAX_AGE_MS) {
+    await noteWaiting(signal, `No live price in the last ${EXECUTION_TICK_MAX_AGE_MS / 1000}s for ${signal.symbol}; an order is never placed against a stale quote`);
+    return;
+  }
+  const livePrice = tick.price;
+  const levels = { direction, price: livePrice, entryLow: entryLowNum, entryHigh: entryHighNum, stop: stopNum, target: targetNum, minRiskReward };
+
+  // Phase 1, no network: is the setup still valid, and is the live price in
+  // the zone with enough reward:risk?
   {
-    const costPct = await getIndicativeCostPct(token, wantEnv, signal.symbol, { stakeAmount, binary: forceBinary });
-    const costGate = tradingCostGate(costPct, forex.maxSpreadCostPct);
-    if (!costGate.ok) {
-      const reason = costGate.reason ?? "Trading-cost gate refused dispatch";
-      await recordGeneratedReason(signal.id, reason);
-      recordRejection({ symbol: signal.symbol, stage: "forex_readiness", reason, metrics: { costPct, stakeAmount, binary: forceBinary } });
-      logger.warn({ symbol: signal.symbol, costPct, stakeAmount, forceBinary }, reason);
+    const over = await invalidationSince(signal);
+    if (over) {
+      await cancelInvalidated(signal, over);
+      return;
+    }
+    const first = planEntry(levels);
+    if (first.action === "cancel") {
+      await transitionSignalExecution(signal.id, "generated", "rejected", first.reason, { signalStatus: "cancelled" });
+      recordRejection({ symbol: signal.symbol, stage: "entry", reason: first.reason });
+      logger.info({ symbol: signal.symbol, signalId: signal.id, livePrice, reason: first.reason }, "Signal cancelled at entry");
+      return;
+    }
+    if (first.action === "refuse") {
+      // Unusable stored levels do not get better with time.
+      await transitionSignalExecution(signal.id, "generated", "rejected", first.reason, { signalStatus: "cancelled" });
+      recordRejection({ symbol: signal.symbol, stage: "entry", reason: first.reason });
+      return;
+    }
+    if (first.action !== "enter") {
+      await noteWaiting(signal, first.reason);
       return;
     }
   }
 
-  // ── FIX 4: Validate numeric levels — NaN propagates to Deriv as invalid
-  const entryLowNum  = signal.entryLow  != null ? parseFloat(signal.entryLow)  : null;
-  const entryHighNum = signal.entryHigh != null ? parseFloat(signal.entryHigh) : null;
-  const entryMid =
-    entryLowNum != null && entryHighNum != null && Number.isFinite(entryLowNum) && Number.isFinite(entryHighNum)
-      ? (entryLowNum + entryHighNum) / 2
-      : (Number.isFinite(entryLowNum ?? NaN) ? entryLowNum : null) ??
-        (Number.isFinite(entryHighNum ?? NaN) ? entryHighNum : null) ?? null;
-  const stopNum   = signal.stopLevel    != null && Number.isFinite(parseFloat(signal.stopLevel))    ? parseFloat(signal.stopLevel)    : null;
-  const targetNum = signal.target1Level != null && Number.isFinite(parseFloat(signal.target1Level)) ? parseFloat(signal.target1Level) : null;
+  // Phase 2: quote exactly this contract. Deriv's quote carries the real cost
+  // and, for multipliers, its own stop-loss / take-profit limits.
+  const quote = await getContractQuote(token, wantEnv, signal.symbol, {
+    stakeAmount, binary: forceBinary, direction, currency: linkedAccount.currency ?? undefined,
+  });
+  const costGate = tradingCostGate(quote?.costPct ?? null, forex.maxSpreadCostPct);
+  if (!costGate.ok) {
+    const reason = costGate.reason ?? "Trading-cost gate refused dispatch";
+    await recordGeneratedReason(signal.id, reason);
+    recordRejection({ symbol: signal.symbol, stage: "forex_readiness", reason, metrics: { costPct: quote?.costPct ?? null, costSource: quote?.costSource ?? null, stakeAmount, binary: forceBinary } });
+    logger.warn({ symbol: signal.symbol, quote, stakeAmount, forceBinary }, reason);
+    return;
+  }
+
+  const multiplier = getSyntheticSymbol(signal.symbol)?.multiplier ?? 100;
+  // Deriv's own minimums when its quote states them; a minimum learned from an
+  // earlier refusal can only raise them.
+  const minStopUsd = Math.max(quote?.limits.stopLossMin ?? DEFAULT_MIN_LIMIT_ORDER_USD, learnedLimitMins.stopLossMin);
+  const minTakeProfitUsd = Math.max(quote?.limits.takeProfitMin ?? DEFAULT_MIN_LIMIT_ORDER_USD, learnedLimitMins.takeProfitMin);
+  // The stop is capped three ways: 80% of stake (exit before Deriv's stop-out),
+  // Deriv's own maximum, and what is left of today's loss budget. The last one
+  // matters after a loss on a small account: the guard shrinks the stake under
+  // $1.00, the floor lifts it back, and without this the lifted trade could
+  // carry a stop larger than the budget it was sized against.
+  const capFraction = Math.min(
+    MULTIPLIER_STOP_CAP_PCT,
+    quote?.limits.stopLossMax != null ? quote.limits.stopLossMax / stakeAmount : Number.POSITIVE_INFINITY,
+    dailyLossSizing.remainingBudget / stakeAmount,
+  );
+  const plan = planEntry(forceBinary ? levels : {
+    ...levels,
+    bracket: {
+      stake: stakeAmount, multiplier, minStopUsd, minTakeProfitUsd, maxStopFraction: capFraction,
+      commissionUsd: quote?.commissionUsd != null && quote.commissionUsd > 0 ? quote.commissionUsd : 0,
+    },
+  });
+  if (plan.action !== "enter") {
+    if (plan.action === "cancel") {
+      await transitionSignalExecution(signal.id, "generated", "rejected", plan.reason, { signalStatus: "cancelled" });
+      recordRejection({ symbol: signal.symbol, stage: "entry", reason: plan.reason });
+    } else {
+      quoteBackoff.set(signal.id, Date.now() + QUOTE_BACKOFF_MS);
+      await noteWaiting(signal, plan.reason);
+    }
+    return;
+  }
 
   logger.info(
-    { symbol: signal.symbol, direction: signal.direction, stakeAmount, broker: conn.label, entryMid, stopNum, targetNum },
+    {
+      symbol: signal.symbol, direction, stakeAmount, broker: conn.label, livePrice,
+      zone: [entryLowNum, entryHighNum], structuralStop: stopNum, structuralTarget: targetNum,
+      executedStop: plan.stopPrice, executedTarget: plan.targetPrice, rrAtFill: plan.rr,
+      stopLossUsd: plan.stopLossUsd, takeProfitUsd: plan.takeProfitUsd, stopWidened: plan.stopWidened,
+      limitsFromDeriv: quote?.limits.stopLossMin != null, costPct: quote?.costPct, costSource: quote?.costSource,
+    },
     "Dispatching trade to Deriv",
   );
 
@@ -1008,9 +1176,11 @@ async function dispatchTradeUnlocked(
     direction: signal.direction as "buy" | "sell",
     stakeAmount,
     currency: linkedAccount.currency,
-    entryPrice: entryMid,
-    stopPrice: stopNum,
-    targetPrice: targetNum,
+    entryPrice: livePrice,
+    stopPrice: plan.stopPrice,
+    targetPrice: plan.targetPrice,
+    stopLossUsd: plan.stopLossUsd,
+    takeProfitUsd: plan.takeProfitUsd,
     forceBinary,
   });
 
@@ -1053,6 +1223,20 @@ async function dispatchTradeUnlocked(
       return;
     }
     const reason = result.message ?? "Deriv explicitly rejected the buy request";
+    // A refusal of the stop-loss / take-profit amount opened nothing, and says
+    // Deriv's minimum is higher than the one planned against. Raise it and put
+    // the signal back so the next attempt plans a bracket Deriv will take —
+    // or waits, if that bracket no longer clears reward:risk. Bounded: the
+    // minimum only ever rises, so this cannot repeat on the same refusal.
+    const learned = forceBinary ? null : learnLimitMins(result.message, minStopUsd, minTakeProfitUsd);
+    if (learned) {
+      const retryReason = `Deriv refused the bracket (${reason}); minimum raised to ${learned}, re-planning`;
+      const transitioned = await transitionSignalExecution(signal.id, "awaiting_broker", "generated", retryReason);
+      if (!transitioned) logger.warn("Execution state unresolved; the reconciler will resolve it against Deriv");
+      recordRejection({ symbol: signal.symbol, stage: "entry", reason: retryReason, metrics: { stopLossUsd: plan.stopLossUsd, takeProfitUsd: plan.takeProfitUsd } });
+      logger.warn({ symbol: signal.symbol, signalId: signal.id, error: result.message, learnedLimitMins, statePersisted: transitioned }, "Deriv refused the bracket; minimum learned");
+      return;
+    }
     const transitioned = await transitionSignalExecution(signal.id, "awaiting_broker", "rejected", reason, {
       dispatchedAt: new Date(),
       signalStatus: "cancelled",
@@ -1090,10 +1274,15 @@ async function dispatchTradeUnlocked(
     accountId,
     symbol: signal.symbol,
     direction: signal.direction,
-    openPrice: String(result.buyPrice ?? 0),
+    // The underlying price the order was placed against. This used to be the
+    // contract's buy price — the stake — which read as an open price of 1.00
+    // on every pair and left the trade review unable to classify anything.
+    openPrice: String(livePrice),
     lotSize: String(stakeAmount),
-    stopLoss: signal.stopLevel,
-    takeProfit: signal.target1Level,
+    // The levels the broker will actually act on, which differ from the
+    // structural ones only when Deriv's minimum stop widened the stop.
+    stopLoss: String(plan.stopPrice),
+    takeProfit: String(plan.targetPrice),
     status: "open" as const,
     strategy: signal.strategy,
     reasonChain: signal.reasoning ?? "ICT/CRT auto-signal",
@@ -1103,6 +1292,17 @@ async function dispatchTradeUnlocked(
       confidence: signal.confidence,
       entryLow: signal.entryLow,
       entryHigh: signal.entryHigh,
+      openPriceSource: "reference_spot",
+      structuralStop: signal.stopLevel,
+      structuralTarget: signal.target1Level,
+      rrAtFill: Number(plan.rr.toFixed(3)),
+      stopLossUsd: plan.stopLossUsd,
+      takeProfitUsd: plan.takeProfitUsd,
+      stopWidened: plan.stopWidened,
+      costPct: quote?.costPct ?? null,
+      costSource: quote?.costSource ?? null,
+      commissionUsd: quote?.commissionUsd ?? null,
+      derivLimits: quote?.limits ?? null,
     }),
   };
 
@@ -1140,6 +1340,182 @@ async function dispatchTradeUnlocked(
 
 // ── Worker tick ──────────────────────────────────────────────────────────────
 
+type BotConfigRow = typeof botConfigTable.$inferSelect;
+
+/**
+ * Load the saved configuration into the module state the dispatcher reads.
+ * Both the 30-minute scan and the entry watcher call this, so a change of
+ * mode takes effect within one watcher interval — including switching
+ * trading off, which must never wait for the next scan.
+ */
+function applyConfig(config: BotConfigRow): void {
+  // Cache for getWorkerStatus() so the status endpoint always reflects current config
+  cachedEnabled = config.enabled;
+  cachedAutotradeMode = config.autotradeMode;
+  activeMode = config.enabled && (config.autotradeMode === "auto_demo" || config.autotradeMode === "auto_live")
+    ? config.autotradeMode
+    : null;
+  // An unreadable threshold must not silently disable the binary bar: NaN
+  // compares false against everything, which would wave every setup through.
+  const parsedMinConfidence = parseFloat(config.minConfidence);
+  const parsedMinRr = parseFloat(config.minRiskReward);
+  activeConfig = {
+    smallAccountMaxRiskPct: parseFloat(config.smallAccountMaxRiskPct),
+    minConfidence: Number.isFinite(parsedMinConfidence) ? parsedMinConfidence : 0.7,
+    // Same reasoning: an unreadable floor must not quietly become "no floor".
+    minRiskReward: Number.isFinite(parsedMinRr) && parsedMinRr > 0 ? parsedMinRr : 2,
+    maxPerAssetClass: Number.isFinite(config.maxPerAssetClass) && config.maxPerAssetClass > 0 ? config.maxPerAssetClass : 2,
+  };
+}
+
+function forexParamsFrom(config: BotConfigRow): ForexDispatchParams {
+  return {
+    killzones: config.killzones,
+    newsBlackoutBeforeMin: config.newsBlackoutBeforeMin,
+    newsBlackoutAfterMin: config.newsBlackoutAfterMin,
+    maxSpreadCostPct: parseFloat(config.maxSpreadCostPct),
+  };
+}
+
+function signalRowFrom(p: typeof signalsTable.$inferSelect): SignalRow {
+  return {
+    id: p.id,
+    symbol: p.symbol,
+    direction: p.direction,
+    confidence: p.confidence,
+    strategy: p.strategy,
+    reasoning: p.reasoning,
+    stopLevel: p.stopLevel,
+    target1Level: p.target1Level,
+    entryLow: p.entryLow,
+    entryHigh: p.entryHigh,
+    expiresAt: p.expiresAt,
+    executionStatus: p.executionStatus,
+    executionReason: p.executionReason,
+    createdAt: p.createdAt,
+  };
+}
+
+// ── Entry watcher ────────────────────────────────────────────────────────────
+//
+// Signals now wait for price to retrace into their zone, and a thirty-minute
+// scan would mostly miss that retrace: an FVG is a narrow range and price
+// can pass through it between two scans. The live tick is already in memory,
+// so checking pending signals against it every few seconds is nearly free.
+// Only a signal whose price is in its zone, or whose setup is over, is handed
+// to the dispatcher, which re-runs every check before anything is sent.
+
+const ENTRY_WATCH_MS = 15_000;
+let entryWatchHandle: ReturnType<typeof setInterval> | null = null;
+let entryWatchRunning = false;
+
+async function runEntryWatch(): Promise<void> {
+  // The scan runs its own replay pass over the same signals.
+  if (entryWatchRunning || workerRunning) return;
+  entryWatchRunning = true;
+  try {
+    const [config] = await db.select().from(botConfigTable).where(eq(botConfigTable.id, 1));
+    if (!config) return;
+    applyConfig(config);
+    if (!activeMode) return;
+
+    const now = new Date();
+    const pending = await db.select().from(signalsTable).where(and(
+      eq(signalsTable.status, "active"),
+      eq(signalsTable.executionStatus, "generated"),
+      isNull(signalsTable.dispatchedAt),
+      gte(signalsTable.expiresAt, now),
+    ));
+    if (pending.length === 0) return;
+
+    const forexParams = forexParamsFrom(config);
+    // Expired signals are never looked at again; drop their stale entries.
+    for (const [id, until] of quoteBackoff) if (Date.now() >= until) quoteBackoff.delete(id);
+    for (const p of pending) {
+      // Cancel a setup that is over here, ahead of every account-level gate.
+      // Left to the dispatcher, a buy whose stop was taken at 03:00 — outside
+      // the killzone, so the dispatch stopped at that gate — stayed pending,
+      // and was entered when price came back into the zone at the London open.
+      const row = signalRowFrom(p);
+      const over = await invalidationSince(row).catch((err) => {
+        logger.warn({ symbol: p.symbol, signalId: p.id, err: err instanceof Error ? err.message : String(err) }, "Entry watcher could not read price history");
+        return null;
+      });
+      if (over) {
+        await cancelInvalidated(row, over);
+        continue;
+      }
+      const tick = getLastTick(p.symbol);
+      if (!tick || Date.now() - tick.at > EXECUTION_TICK_MAX_AGE_MS) continue;
+      const num = (v: string | null) => (v == null ? Number.NaN : parseFloat(v));
+      const state = entryZoneState(
+        p.direction === "sell" ? "sell" : "buy", tick.price,
+        num(p.entryLow), num(p.entryHigh), num(p.stopLevel), num(p.target1Level),
+      );
+      if (state === "wait") continue;
+      if (quoteBackoffActive(p.id)) continue;
+      // One attempt per signal per minute at most. A signal in its zone can
+      // still be refused for account-level reasons that hold for hours (today's
+      // loss budget spent, outside the killzone), and each attempt is a handful
+      // of queries. A qualifying entry goes out on the first attempt anyway.
+      if (!quoteBackoff.has(p.id)) quoteBackoff.set(p.id, Date.now() + WATCH_ATTEMPT_SPACING_MS);
+      await dispatchTrade(
+        row,
+        parseFloat(config.riskPerTradePct),
+        config.maxConcurrentPositions,
+        parseFloat(config.maxDailyLossPct),
+        forexParams,
+      ).catch((err) => {
+        logger.error({ symbol: p.symbol, signalId: p.id, err: err instanceof Error ? err.message : String(err) }, "Entry watcher dispatch failed");
+      });
+    }
+  } catch (err) {
+    logger.warn({ err: err instanceof Error ? err.message : String(err) }, "Entry watcher cycle failed");
+  } finally {
+    entryWatchRunning = false;
+  }
+}
+
+/**
+ * A signal that is in its zone but still cannot be entered after Deriv's quote
+ * (its minimum stop, say) would otherwise be re-quoted every watcher cycle for
+ * as long as price sits there — a Deriv session every fifteen seconds. Hold it
+ * off for a couple of minutes instead; price has usually moved by then.
+ */
+const QUOTE_BACKOFF_MS = 2 * 60_000;
+const WATCH_ATTEMPT_SPACING_MS = 60_000;
+
+/**
+ * Stop-loss / take-profit minimums learned from Deriv refusing an order, for
+ * when its quote does not state them. Process-lifetime only: after a restart
+ * the first refusal teaches it again, at the cost of one order that was never
+ * opened.
+ */
+const learnedLimitMins = { stopLossMin: 0, takeProfitMin: 0 };
+
+/** Raise the learned minimums from a refusal; returns what changed, or null if nothing did. */
+function learnLimitMins(message: string | undefined, usedStopMin: number, usedTakeProfitMin: number): string | null {
+  const parsed = parseDerivLimitRejection(message);
+  if (!parsed) return null;
+  const changes: string[] = [];
+  if (parsed.stopLossMin != null && parsed.stopLossMin > usedStopMin + 1e-9) {
+    learnedLimitMins.stopLossMin = Math.max(learnedLimitMins.stopLossMin, parsed.stopLossMin);
+    changes.push(`stop-loss $${learnedLimitMins.stopLossMin.toFixed(2)}`);
+  }
+  if (parsed.takeProfitMin != null && parsed.takeProfitMin > usedTakeProfitMin + 1e-9) {
+    learnedLimitMins.takeProfitMin = Math.max(learnedLimitMins.takeProfitMin, parsed.takeProfitMin);
+    changes.push(`take-profit $${learnedLimitMins.takeProfitMin.toFixed(2)}`);
+  }
+  return changes.length > 0 ? changes.join(", ") : null;
+}
+const quoteBackoff = new Map<number, number>();
+function quoteBackoffActive(signalId: number): boolean {
+  const until = quoteBackoff.get(signalId);
+  if (until == null) return false;
+  if (Date.now() >= until) { quoteBackoff.delete(signalId); return false; }
+  return true;
+}
+
 async function runWorkerTick(): Promise<void> {
   if (workerRunning) return; // prevent overlap
   workerRunning = true;
@@ -1148,31 +1524,12 @@ async function runWorkerTick(): Promise<void> {
   try {
     // Load bot config
     const [config] = await db.select().from(botConfigTable).where(eq(botConfigTable.id, 1));
-    // Cache for getWorkerStatus() so the status endpoint always reflects current config
-    if (config) {
-      cachedEnabled = config.enabled;
-      cachedAutotradeMode = config.autotradeMode;
-    }
+    if (config) applyConfig(config);
     if (!config?.enabled) {
       logger.info("Signal worker: bot disabled, skipping tick");
       return;
     }
-    activeMode = config.autotradeMode === "auto_demo" || config.autotradeMode === "auto_live" ? config.autotradeMode : null;
-    {
-      // An unreadable threshold must not silently disable the binary bar: NaN
-      // compares false against everything, which would wave every setup through.
-      const parsedMinConfidence = parseFloat(config.minConfidence);
-      activeConfig = {
-        smallAccountMaxRiskPct: parseFloat(config.smallAccountMaxRiskPct),
-        minConfidence: Number.isFinite(parsedMinConfidence) ? parsedMinConfidence : 0.7,
-      };
-    }
-    const forexParams: ForexDispatchParams = {
-      killzones: config.killzones,
-      newsBlackoutBeforeMin: config.newsBlackoutBeforeMin,
-      newsBlackoutAfterMin: config.newsBlackoutAfterMin,
-      maxSpreadCostPct: parseFloat(config.maxSpreadCostPct),
-    };
+    const forexParams = forexParamsFrom(config);
     const thresholds: QuantThresholds = {
       atrPercentileMin: parseFloat(config.atrPercentileMin),
       atrPercentileMax: parseFloat(config.atrPercentileMax),
@@ -1276,23 +1633,8 @@ async function runWorkerTick(): Promise<void> {
         ));
       logger.info({ pendingCount: pending.length }, "Replay pass: pending signals to dispatch");
       for (const p of pending) {
-        const replayRow: SignalRow = {
-          id: p.id,
-          symbol: p.symbol,
-          direction: p.direction,
-          confidence: p.confidence,
-          strategy: p.strategy,
-          reasoning: p.reasoning,
-          stopLevel: p.stopLevel,
-          target1Level: p.target1Level,
-          entryLow: p.entryLow,
-          entryHigh: p.entryHigh,
-          expiresAt: p.expiresAt,
-          executionStatus: p.executionStatus,
-          executionReason: p.executionReason,
-        };
         await dispatchTrade(
-          replayRow,
+          signalRowFrom(p),
           parseFloat(config.riskPerTradePct),
           config.maxConcurrentPositions,
           parseFloat(config.maxDailyLossPct),
@@ -1309,6 +1651,14 @@ async function runWorkerTick(): Promise<void> {
     // (was 2h against a 1-4 day hold; kept roughly the same fraction).
     const COOLDOWN_MIN = 60;
     const cooldownCutoff = new Date(Date.now() - COOLDOWN_MIN * 60 * 1000);
+
+    // Accounts this mode actually trades on (all accounts when signals-only).
+    const tradedAccountIds: number[] = activeMode
+      ? (await db.select({ accountId: brokerConnectionsTable.accountId }).from(brokerConnectionsTable).where(and(
+          eq(brokerConnectionsTable.enabled, true),
+          eq(brokerConnectionsTable.environment, activeMode === "auto_live" ? "real" : "demo"),
+        ))).map((r) => r.accountId).filter((id): id is number => id != null)
+      : [];
 
     let generated = 0;
     for (const symbol of instruments) {
@@ -1495,8 +1845,13 @@ async function runWorkerTick(): Promise<void> {
         recordRejection({ symbol, stage: "post_gpt", reason: `Cited structures not found in candles: ${claimFailures.join("; ")}` });
         continue;
       }
+      // Only positions on the accounts this mode actually trades count: an old
+      // open demo position must not use up a live account's allowance.
       const openNow = await db.select({ symbol: tradesTable.symbol, direction: tradesTable.direction })
-        .from(tradesTable).where(eq(tradesTable.status, "open"));
+        .from(tradesTable).where(and(
+          eq(tradesTable.status, "open"),
+          tradedAccountIds.length > 0 ? inArray(tradesTable.accountId, tradedAccountIds) : sql`true`,
+        ));
       const pf = portfolioGate(
         openNow.map((o) => ({ symbol: o.symbol, direction: o.direction === "sell" ? "sell" as const : "buy" as const, group: getSyntheticSymbol(o.symbol)?.group })),
         { symbol, direction: result.direction, group: getSyntheticSymbol(symbol)?.group },
@@ -1539,6 +1894,28 @@ async function runWorkerTick(): Promise<void> {
       signalsGeneratedTotal++;
       generated++;
       logger.info({ symbol, signalId: inserted?.id, direction: result.direction, confidence: result.confidence }, "Signal generated");
+
+      // A newer read of the structure replaces an older one still waiting for
+      // its entry. Signals now wait — up to their 24h expiry — for price to
+      // retrace, while the cooldown above only looks back an hour, so without
+      // this a pair could accumulate several pending signals that all fill when
+      // price comes back: several positions on one pair from one move. Only
+      // signals that never reached the broker are touched.
+      if (inserted?.id != null) {
+        const superseded = await db.update(signalsTable)
+          .set({ status: "cancelled", executionStatus: "rejected", executionReason: `Superseded by signal ${inserted.id} on the same pair` })
+          .where(and(
+            eq(signalsTable.symbol, symbol),
+            ne(signalsTable.id, inserted.id),
+            eq(signalsTable.status, "active"),
+            eq(signalsTable.executionStatus, "generated"),
+            isNull(signalsTable.dispatchedAt),
+          ))
+          .returning({ id: signalsTable.id });
+        if (superseded.length > 0) {
+          logger.info({ symbol, newSignalId: inserted.id, superseded: superseded.map((r) => r.id) }, "Older pending signals superseded");
+        }
+      }
 
       // Auto-execute trade if bot is in auto mode and a connected broker exists
       if (activeMode) {
@@ -1589,12 +1966,17 @@ export function startSignalWorker(): void {
   // Run once after 10s, then every interval
   setTimeout(() => runWorkerTick(), 10_000);
   intervalHandle = setInterval(() => runWorkerTick(), SIGNAL_INTERVAL_MS);
+  entryWatchHandle ??= setInterval(() => { void runEntryWatch(); }, ENTRY_WATCH_MS);
 }
 
 export function stopSignalWorker(): void {
   if (intervalHandle) {
     clearInterval(intervalHandle);
     intervalHandle = null;
+  }
+  if (entryWatchHandle) {
+    clearInterval(entryWatchHandle);
+    entryWatchHandle = null;
   }
 }
 
