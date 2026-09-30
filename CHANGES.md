@@ -1,5 +1,12 @@
 # Changes in this build (vs. your Replit export)
 
+## Scan right after each M30 close, and never read the candle still forming
+
+**Scan timing.** The scan ran every 30 minutes counted from process start. In production that put it at 17:28:54, 17:58:55 and so on, a minute *before* each M30 close. Setups are read from M30 candles, so a setup completed at 17:30 was not seen until 17:58, and a quick retrace into its FVG could be over by then. Scans now run 20 seconds after every M30 close (:00:20 and :30:20 UTC), which cuts the delay from up to ~30 minutes to ~20 seconds. The dashboard's "next scan in" shows the real time.
+
+**Forming candles.** The newest stored H4, H1 or M30 row can be the candle still in progress: Deriv's history includes it, and the feed writes it on every reconnect. The analysis could judge "did price close beyond structure?" on a close that had not happened yet. The scan now uses only finished candles.
+
+
 ## Scan only the 14 pairs Deriv offers as multipliers
 
 The catalogue listed 28 forex pairs. Deriv's Multipliers → Forex list for this account has 14: EUR/USD, GBP/USD, USD/JPY, AUD/USD, USD/CAD, USD/CHF, EUR/GBP, EUR/JPY, EUR/AUD, EUR/CAD, EUR/CHF, GBP/JPY, GBP/AUD, AUD/JPY.

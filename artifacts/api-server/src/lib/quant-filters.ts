@@ -906,3 +906,37 @@ export function runExpertJudge(
     reasoning: `Deterministic expert-system signal (no AI): ${bias} M30 ${wantedSweepSide.replace("_", "-")} liquidity sweep at ${sweep.level.toFixed(5)}, structure break confirmed, entry on a retrace into the ${wantedFvgKind} FVG ${fvg.low.toFixed(5)}–${fvg.high.toFixed(5)} (midpoint ${entry.toFixed(5)}), stop beyond the sweep, target at the next significant opposing M30 swing ${target.toFixed(5)}. Confluence: ${agreeingVotes.length} agreeing / ${disagreeingVotes.length} disagreeing of ${relevantVotes.length} strategy-library voters with an opinion (${concepts.length} concepts total).`,
   };
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Scan timing
+// ─────────────────────────────────────────────────────────────────────────────
+
+const TIMEFRAME_MS: Record<string, number> = {
+  M5: 5 * 60_000, M15: 15 * 60_000, M30: 30 * 60_000, H1: 60 * 60_000, H4: 4 * 60 * 60_000, D1: 24 * 60 * 60_000,
+};
+
+/**
+ * True once a candle's period has ended. The newest stored row can be the
+ * candle still forming: Deriv's history includes it, and the feed writes it on
+ * every reconnect. Judging "did price close beyond structure?" on a close that
+ * has not happened yet reads a live price as a decision.
+ */
+export function isClosedCandle(openTimeMs: number, timeframe: string, nowMs: number): boolean {
+  const len = TIMEFRAME_MS[timeframe];
+  if (len == null || !Number.isFinite(openTimeMs)) return true;
+  return openTimeMs + len <= nowMs;
+}
+
+/**
+ * The next scan time: just after the next boundary of the entry timeframe.
+ * Setups are read from M30 candles, so nothing new can be seen between two
+ * closes. Scanning on a fixed 30 minutes from process start — as before —
+ * landed anywhere in that window: in production it ran a minute before each
+ * close, so a setup completed at :30 was first seen at :58.
+ */
+export function nextAlignedScanAt(nowMs: number, intervalMs: number, offsetMs: number): number {
+  const boundary = Math.floor(nowMs / intervalMs) * intervalMs;
+  const thisSlot = boundary + offsetMs;
+  return thisSlot > nowMs ? thisSlot : thisSlot + intervalMs;
+}
+
