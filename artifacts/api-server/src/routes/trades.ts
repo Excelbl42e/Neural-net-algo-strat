@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { eq, desc, and, inArray } from "drizzle-orm";
+import { eq, desc, and, inArray, sql } from "drizzle-orm";
 import { db, tradesTable, brokerConnectionsTable } from "@workspace/db";
 import {
   CreateTradeBody,
@@ -199,25 +199,44 @@ router.post("/trades/:id/close", async (req, res): Promise<void> => {
   res.json({ ok: true, message: closedTrade ? result.message : "Sold at Deriv, but trade was already updated elsewhere" });
 });
 
+/**
+ * Bulk housekeeping for the trade ledger.
+ *
+ * An open row is never deleted, whatever is asked. Deleting one does not close
+ * anything at Deriv — the position stays open with real money on it, while the
+ * only record of it disappears: the contract monitor stops tracking it so it
+ * is never force-closed or settled, and the daily-loss guard stops counting
+ * its stake as open exposure, so the very next trade is sized as though that
+ * risk were not there. "Clear all" in the UI was two clicks from doing exactly
+ * that on a funded account.
+ */
 router.post("/trades/bulk-delete", async (req, res): Promise<void> => {
   const { status } = req.body as { status?: string };
-  let ids: number[];
-  if (status) {
-    const rows = await db
-      .select({ id: tradesTable.id })
-      .from(tradesTable)
-      .where(eq(tradesTable.status, status as any));
-    ids = rows.map((r) => r.id);
-  } else {
-    const rows = await db.select({ id: tradesTable.id }).from(tradesTable);
-    ids = rows.map((r) => r.id);
-  }
-  if (ids.length === 0) {
-    res.json({ deleted: 0 });
+  if (status != null && status !== "closed") {
+    res.status(400).json({ error: `Only closed trades can be deleted (got status "${status}")`, deleted: 0 });
     return;
   }
-  await db.delete(tradesTable).where(inArray(tradesTable.id, ids));
-  res.json({ deleted: ids.length });
+  const [openRow] = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(tradesTable)
+    .where(eq(tradesTable.status, "open"));
+  const openKept = openRow?.n ?? 0;
+
+  const rows = await db
+    .select({ id: tradesTable.id })
+    .from(tradesTable)
+    .where(eq(tradesTable.status, "closed"));
+  const ids = rows.map((r) => r.id);
+  if (ids.length > 0) {
+    await db.delete(tradesTable).where(inArray(tradesTable.id, ids));
+  }
+  res.json({
+    deleted: ids.length,
+    openKept,
+    message: openKept > 0
+      ? `Deleted ${ids.length} closed trade(s). ${openKept} open position(s) were kept — deleting those would leave real money open at Deriv with nothing tracking it. Close them first.`
+      : `Deleted ${ids.length} closed trade(s).`,
+  });
 });
 
 export default router;

@@ -140,21 +140,26 @@ export function forexPreScanGate(input: ForexPreScanInput): ForexGateResult {
   return { ok: true };
 }
 
-export interface ForexDispatchInput extends ForexPreScanInput {
-  /** Effective trading cost as a percentage of stake, from a live indicative quote. Null = could not be read. */
-  costPct: number | null;
-  maxCostPct: number;
-}
-
-/** Gate applied right before order placement: everything in the pre-scan gate plus live cost. */
-export function forexDispatchGate(input: ForexDispatchInput): ForexGateResult {
-  const preScan = forexPreScanGate(input);
-  if (!preScan.ok) return preScan;
-  if (input.costPct === null) {
+/**
+ * Live trading-cost gate, applied immediately before the order goes out.
+ *
+ * Separate from the pre-scan gate because it needs a network quote, and that
+ * quote is only meaningful once the stake and contract type are decided — the
+ * dispatcher used to run this early against a fixed $1 multiplier quote, which
+ * measured an instrument a sub-$1 account would never trade.
+ *
+ * `costPct` is null when the quote could not be read at all, which refuses the
+ * trade: placing an order without knowing its cost is trading blind.
+ */
+export function tradingCostGate(costPct: number | null, maxCostPct: number): ForexGateResult {
+  if (costPct === null) {
     return { ok: false, reason: "Could not read a live indicative price/cost from Deriv; refusing to trade blind" };
   }
-  if (input.costPct > input.maxCostPct) {
-    return { ok: false, reason: `Indicative trading cost ${input.costPct.toFixed(3)}% of stake exceeds configured max ${input.maxCostPct}%` };
+  if (!Number.isFinite(maxCostPct) || maxCostPct < 0) {
+    return { ok: false, reason: "Maximum trading-cost setting is missing or invalid; refusing execution" };
+  }
+  if (costPct > maxCostPct) {
+    return { ok: false, reason: `Indicative trading cost ${costPct.toFixed(3)}% of stake exceeds configured max ${maxCostPct}%` };
   }
   return { ok: true };
 }

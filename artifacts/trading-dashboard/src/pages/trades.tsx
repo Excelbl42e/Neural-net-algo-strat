@@ -130,9 +130,12 @@ export default function TradesPage() {
     );
   };
 
-  const handleBulkDelete = (scope: "closed" | "all") => {
+  // Always scoped to closed. The server refuses to delete an open row anyway —
+  // removing one would leave a real position open at Deriv with nothing
+  // tracking it — so asking for "all" only ever meant "all the closed ones".
+  const handleBulkDelete = (_scope: "closed" | "all") => {
     bulkDelete.mutate(
-      { data: scope === "closed" ? { status: "closed" } : {} },
+      { data: { status: "closed" } },
       { onSuccess: () => { setConfirmBulk(null); invalidateAll(); } }
     );
   };
@@ -174,13 +177,13 @@ export default function TradesPage() {
                   disabled={bulkDelete.isPending}
                   className="text-[10px] bg-destructive text-destructive-foreground px-2 py-1 rounded font-mono-numbers uppercase"
                 >
-                  {bulkDelete.isPending ? "Clearing..." : `Confirm clear all ${trades?.length}`}
+                  {bulkDelete.isPending ? "Clearing..." : `Confirm clear ${closedCount} closed (open kept)`}
                 </button>
                 <button onClick={() => setConfirmBulk(null)} className="text-[10px] text-muted-foreground hover:text-foreground px-1 py-1 rounded">✕</button>
               </div>
             ) : (
               <Button size="sm" variant="outline" className="text-destructive/70 border-destructive/30 hover:text-destructive hover:border-destructive/60" onClick={() => setConfirmBulk("all")}>
-                Clear All
+                Clear History
               </Button>
             )
           )}

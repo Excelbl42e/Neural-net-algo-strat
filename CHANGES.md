@@ -1,5 +1,43 @@
 # Changes in this build (vs. your Replit export)
 
+## Whole-repo audit: five more, one of them dangerous
+
+Read the ~16,400 hand-written lines outside the vendored UI primitives. Five findings.
+
+### "Clear All" on the Trades page could orphan a live position
+
+`POST /trades/bulk-delete` with an empty body deleted **every** trade row, open positions included — and "Clear All" in the UI was two clicks away from calling it.
+
+Deleting an open row does not close anything at Deriv. The position stays open with real money on it while the only record of it disappears: the contract monitor stops tracking it, so it is never force-closed or settled, and the daily-loss guard stops counting its stake as open exposure, so **the very next trade is sized as though that risk were not there**.
+
+The server now refuses to delete an open row whatever it is asked, reports how many it kept and why, and rejects an explicit `status: "open"` outright. Verified against a live server with a real open row: both the old "clear all" call and a direct attempt left it untouched. The button is now "Clear History".
+
+### Two tables grew forever
+
+- **`deriv_frames`** — every Deriv frame in and out, up to 20 KB each, never deleted. The contract monitor alone opens a session every 30s while a position is open. Left long enough the database fills, every write starts failing, and the bot dies weeks later with no obvious cause. Now kept to a 7-day window, pruned hourly.
+- **`candles`** — nothing ever pruned them either. Now retained per timeframe (M5 7d, M15 14d, M30 30d, H1 90d, H4 180d, D1 2y), comfortably more than anything that reads them needs: the judge's deepest look-back is 250 H1 bars (~10 days) and 150 M30 bars (~3 days).
+
+### M1 candles were built and stored but read by nothing
+
+The chart offers M5 and up; the judge uses H4/H1/M30. Nothing has ever queried M1 — and at 1,440 bars a day per symbol it was roughly **three quarters of all candle writes**, plus 500 rows per symbol re-fetched on every reconnect. Removed, and the prune sweeps up any left behind. Verified: 400 M1 rows deleted, M5 trimmed 400 → 6, H1 650 → 339, everything else inside its window.
+
+### The cost gate quoted the wrong instrument
+
+`getIndicativeCostPct` always asked Deriv for a **$1 multiplier** quote, then the gate refused the trade if it came back empty — "refusing to trade blind". But on a sub-$1 account the order is a *binary*, so it was pricing an instrument that would never be traded, and a refusal of that irrelevant quote refused the real trade.
+
+It was also running *before* sizing, so it could not have known. The market-hours/killzone/news checks stay early where they are free; the cost check moved to after sizing, and now quotes the actual contract type at the actual stake. `forexDispatchGate` was replaced by a `tradingCostGate` the worker really calls, so the tested helper and the production path cannot drift — two new tests cover the boundary and an invalid ceiling.
+
+### Checked and found correct
+
+- **No SQL injection** — every user-supplied value goes through drizzle's parameterisation, including the journal's `ilike` search and the weighted-decay `sql` templates
+- **No other page has the autotrade dropdown bug** — the four pages that pair a Select with `form.reset()` all reset to static defaults after a create, never to async server data
+- **Schema** — the unique index `onConflictDoUpdate` depends on exists in both the bootstrap and the migration; stake and P&L precision are far above anything this account can produce
+- **The daily healthcheck script** is read-only diagnostics
+- **Credentials** are stripped from every broker response and only ever leave the DB decrypted at the point of a Deriv call
+
+49 tests pass. All 11 pages render with zero console errors, no overflow at 1440px or 375px.
+
+
 ## Full codebase audit before real money: three more bugs, two of them accounting
 
 Went through the money paths line by line — execution, reconciliation, settlement, the risk math, the live-trading gate and the auth surface.

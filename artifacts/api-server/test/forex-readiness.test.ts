@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   isForexWeekendClosed, activeSessions, parseKillzones, sessionAllowed,
-  symbolCurrencyPair, newsBlackoutActive, forexPreScanGate, forexDispatchGate,
+  symbolCurrencyPair, newsBlackoutActive, forexPreScanGate, tradingCostGate,
 } from "../src/lib/forex-readiness.ts";
 import type { NewsEvent } from "../src/lib/news-calendar.ts";
 
@@ -74,7 +74,11 @@ test("pre-scan gate composes weekend + session + news", () => {
 test("dispatch gate additionally requires a readable, acceptable cost", () => {
   const weekday = new Date("2026-10-01T13:00:00Z");
   const base = { symbol: "frxEURUSD", now: weekday, killzones: "", newsEvents: [] as NewsEvent[], newsBlackoutBeforeMin: 30, newsBlackoutAfterMin: 30 };
-  assert.equal(forexDispatchGate({ ...base, costPct: null, maxCostPct: 0.5 }).ok, false);
-  assert.equal(forexDispatchGate({ ...base, costPct: 0.2, maxCostPct: 0.5 }).ok, true);
-  assert.equal(forexDispatchGate({ ...base, costPct: 0.9, maxCostPct: 0.5 }).ok, false);
+  // An unreadable quote refuses the trade: placing an order without knowing its
+  // cost is trading blind, which is worse than missing the setup.
+  assert.equal(tradingCostGate(null, 0.5).ok, false);
+  assert.equal(tradingCostGate(0.2, 0.5).ok, true);
+  assert.equal(tradingCostGate(0.9, 0.5).ok, false);
+  assert.equal(tradingCostGate(0.5, 0.5).ok, true, "exactly at the ceiling is allowed");
+  assert.equal(tradingCostGate(0.2, Number.NaN).ok, false, "an invalid ceiling must not wave trades through");
 });

@@ -248,20 +248,42 @@ function classifyContractType(raw: unknown): "multiplier" | "binary" | null {
  * `amount`, `basis: "stake"`) matches Deriv's documented multiplier proposal
  * response, but this has not been run against a live Deriv connection.
  */
-export async function getIndicativeCostPct(token: string, environment: "demo" | "real", symbol: string): Promise<number | null> {
+export async function getIndicativeCostPct(
+  token: string,
+  environment: "demo" | "real",
+  symbol: string,
+  opts: { stakeAmount?: number; binary?: boolean } = {},
+): Promise<number | null> {
   const meta = getSyntheticSymbol(symbol);
   const multiplier = meta?.multiplier ?? 100;
+  // Quote the contract actually about to be sent. This used to always ask for
+  // a MULTUP at $1: on a sub-$1 account the order is a binary, so the gate
+  // measured an instrument that would not be traded — and could refuse the
+  // trade outright ("refusing to trade blind") because Deriv declined a
+  // multiplier quote the account was never going to use.
+  const amount = Number.isFinite(opts.stakeAmount) && (opts.stakeAmount ?? 0) > 0 ? opts.stakeAmount! : 1;
   let session: DerivSession | null = null;
   try {
     session = await openDerivSession(token, environment);
+    const req: Record<string, unknown> = opts.binary
+      ? {
+          proposal: 1, amount, basis: "stake", contract_type: "CALL", currency: "USD",
+          underlying_symbol: symbol,
+          duration: defaultBinaryDurationDays(), duration_unit: "d",
+        }
+      : {
+          proposal: 1, amount, basis: "stake", contract_type: "MULTUP", currency: "USD",
+          underlying_symbol: symbol, multiplier,
+        };
     const res = await session.request<{ proposal?: { ask_price?: number | string }; error?: { message?: string } }>(
-      { proposal: 1, amount: 1, basis: "stake", contract_type: "MULTUP", currency: "USD", underlying_symbol: symbol, multiplier },
-      { timeoutMs: 8_000 },
+      req, { timeoutMs: 8_000 },
     );
     if (res.error) return null;
     const askPrice = toFiniteNumber(res.proposal?.ask_price);
     if (askPrice === null) return null;
-    return Math.abs(askPrice - 1) * 100;
+    // Cost as a percentage of the stake, so the configured ceiling means the
+    // same thing at every stake size.
+    return Math.abs(askPrice - amount) / amount * 100;
   } catch {
     return null;
   } finally {
