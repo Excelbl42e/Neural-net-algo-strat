@@ -41,6 +41,7 @@ import {
   atrPercentile, conceptKey, geometryGate, portfolioGate, preTradeGate, premiumDiscount, runExpertJudge,
   verifyClaims, DEFAULT_THRESHOLDS,
   type AnalysisLevel, type AnalysisResult, type OHLC, type QuantThresholds,
+  isClosedCandle, nextAlignedScanAt,
 } from "./quant-filters.js";
 import { STRATEGY_LIBRARY } from "./strategy-library.js";
 
@@ -106,7 +107,10 @@ const EXECUTION_TICK_MAX_AGE_MS = 60_000;
 let lastLock: { locked: boolean; reason: string | null } = { locked: false, reason: null };
 const LOCK_MSG = "Autonomous dispatch waiting: the reconciler is resolving an unresolved Deriv order";
 
-let intervalHandle: ReturnType<typeof setInterval> | null = null;
+let intervalHandle: ReturnType<typeof setTimeout> | null = null;
+/** Seconds after each M30 close before scanning, so the closed candle has been written. */
+const SCAN_OFFSET_MS = 20_000;
+let nextScanAt: Date | null = null;
 
 export function getWorkerStatus() {
   const staleMs = lastRunAt ? Date.now() - lastRunAt.getTime() : null;
@@ -123,7 +127,7 @@ export function getWorkerStatus() {
     /** Ticks are late enough to be a problem, using the same rule as the health panel. */
     stalled: intervalHandle !== null && staleMs != null && staleMs > 2 * SIGNAL_INTERVAL_MS + 60_000,
     /** When the next scan is due, so "when will it trade?" is answerable from the UI. */
-    nextRunAt: lastRunAt ? new Date(lastRunAt.getTime() + SIGNAL_INTERVAL_MS).toISOString() : null,
+    nextRunAt: nextScanAt?.toISOString() ?? null,
     lastRunAt: lastRunAt?.toISOString() ?? null,
     lastError,
     signalsGeneratedTotal,
@@ -1724,7 +1728,7 @@ async function runWorkerTick(): Promise<void> {
       }
 
       // Fetch the actual H4 sample used for higher-timeframe directional bias.
-      const h4Candles = await db
+      let h4Candles = await db
         .select({
           openTime: candlesTable.openTime,
           open: candlesTable.open,
@@ -1738,7 +1742,7 @@ async function runWorkerTick(): Promise<void> {
         .limit(30);
 
       // Fetch the actual H1 sample for higher-timeframe structure.
-      const h1Candles = await db
+      let h1Candles = await db
         .select({
           openTime: candlesTable.openTime,
           open: candlesTable.open,
@@ -1753,7 +1757,7 @@ async function runWorkerTick(): Promise<void> {
 
       // Fetch M30 candles for entry timing; prompt claims must remain
       // anchored to this actual series rather than inferred lower-timeframe data.
-      const m30Candles = await db
+      let m30Candles = await db
         .select({
           openTime: candlesTable.openTime,
           open: candlesTable.open,
@@ -1765,6 +1769,14 @@ async function runWorkerTick(): Promise<void> {
         .where(and(eq(candlesTable.symbol, symbol), eq(candlesTable.timeframe, "M30")))
         .orderBy(desc(candlesTable.openTime))
         .limit(30);
+
+      // Finished candles only; see isClosedCandle.
+      const scanNow = Date.now();
+      const dropForming = <T extends { openTime: Date }>(rows: T[], tf: string) =>
+        rows.filter((r) => isClosedCandle(r.openTime.getTime(), tf, scanNow));
+      h4Candles = dropForming(h4Candles, "H4");
+      h1Candles = dropForming(h1Candles, "H1");
+      m30Candles = dropForming(m30Candles, "M30");
 
       if (h4Candles.length === 0 || h1Candles.length === 0 || m30Candles.length === 0) {
         logger.info(
@@ -1782,7 +1794,10 @@ async function runWorkerTick(): Promise<void> {
           .where(and(eq(candlesTable.symbol, symbol), eq(candlesTable.timeframe, tf)))
           .orderBy(desc(candlesTable.openTime))
           .limit(n);
-        return rows.reverse().map((r) => ({ open: +r.o, high: +r.h, low: +r.l, close: +r.c, t: r.t.getTime() }));
+        return rows
+          .filter((r) => isClosedCandle(r.t.getTime(), tf, scanNow))
+          .reverse()
+          .map((r) => ({ open: +r.o, high: +r.h, low: +r.l, close: +r.c, t: r.t.getTime() }));
       };
       const h1Long = await loadAsc("H1", 250);
       const m30Long = await loadAsc("M30", 150);
@@ -1963,16 +1978,24 @@ async function runWorkerTick(): Promise<void> {
 export function startSignalWorker(): void {
   if (intervalHandle) return;
   logger.info({ intervalMs: SIGNAL_INTERVAL_MS }, "Starting signal worker");
-  // Run once after 10s, then every interval
+  // Once shortly after boot, then just after every M30 close (:00:20, :30:20 UTC).
   setTimeout(() => runWorkerTick(), 10_000);
-  intervalHandle = setInterval(() => runWorkerTick(), SIGNAL_INTERVAL_MS);
+  const scheduleNext = () => {
+    const at = nextAlignedScanAt(Date.now(), SIGNAL_INTERVAL_MS, SCAN_OFFSET_MS);
+    nextScanAt = new Date(at);
+    intervalHandle = setTimeout(() => {
+      void Promise.resolve(runWorkerTick()).finally(() => { if (intervalHandle) scheduleNext(); });
+    }, at - Date.now());
+  };
+  scheduleNext();
   entryWatchHandle ??= setInterval(() => { void runEntryWatch(); }, ENTRY_WATCH_MS);
 }
 
 export function stopSignalWorker(): void {
   if (intervalHandle) {
-    clearInterval(intervalHandle);
+    clearTimeout(intervalHandle);
     intervalHandle = null;
+    nextScanAt = null;
   }
   if (entryWatchHandle) {
     clearInterval(entryWatchHandle);
