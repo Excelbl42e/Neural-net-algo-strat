@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {
   atrSeries, atrPercentile, efficiencyRatio, findFvgs, findSweeps, swingPoints, findDisplacements,
   premiumDiscount, geometryGate, preTradeGate, verifyClaims, portfolioGate, currencyLegs,
-  orderBlockPresent, srFlipSignal, DEFAULT_THRESHOLDS as T, type OHLC,
+  orderBlockPresent, srFlipSignal, computeConfluence, runExpertJudge, DEFAULT_THRESHOLDS as T, type OHLC,
 } from "../src/lib/quant-filters.ts";
 import { calculateCappedStake, maxFundablePositions } from "../src/lib/execution-risk.ts";
 
@@ -168,4 +168,62 @@ test("maxFundablePositions reports what really fits, not the configured ceiling"
   });
   assert.equal(funded.fundable, 3);
   assert.equal(funded.limitedBy, "configured");
+});
+
+// ── Degenerate-input safety ──────────────────────────────────────────────────
+
+const bar = (o: number, h: number, l: number, c: number) => ({ open: o, high: h, low: l, close: c });
+const DEGENERATE: Record<string, Array<{ open: number; high: number; low: number; close: number }>> = {
+  empty: [],
+  one: [bar(1, 1, 1, 1)],
+  flat: Array.from({ length: 60 }, () => bar(1, 1, 1, 1)),
+  zeros: Array.from({ length: 60 }, () => bar(0, 0, 0, 0)),
+  real: Array.from({ length: 300 }, (_, i) => {
+    const b = 1.1 + Math.sin(i / 9) * 0.01;
+    return bar(b, b + 0.002, b - 0.002, b + 0.0005);
+  }),
+};
+
+test("srFlipSignal returns null on an empty series instead of throwing", () => {
+  // It read c[c.length - 1] behind a non-null assertion, so an empty series
+  // threw a TypeError. It runs inside the worker tick, whose only handler is
+  // the catch around the whole cycle — so this aborted the scan for every
+  // remaining symbol, not just the one with no candles.
+  assert.equal(srFlipSignal([]), null);
+  assert.equal(srFlipSignal([bar(1, 1, 1, 1)]), null);
+});
+
+test("every confluence voter survives degenerate candle series", () => {
+  for (const [aName, a] of Object.entries(DEGENERATE)) {
+    for (const [bName, b] of Object.entries(DEGENERATE)) {
+      const votes = computeConfluence(a, b);
+      assert.equal(votes.length, 14, `computeConfluence(${aName}, ${bName}) lost voters`);
+      for (const v of votes) {
+        assert.ok(
+          v.direction === null || v.direction === "buy" || v.direction === "sell",
+          `${v.concept} returned ${String(v.direction)} for (${aName}, ${bName})`,
+        );
+      }
+    }
+  }
+});
+
+test("the judge never emits a non-finite level, and always says why it declined", () => {
+  for (const [aName, a] of Object.entries(DEGENERATE)) {
+    for (const [bName, b] of Object.entries(DEGENERATE)) {
+      for (const [cName, c] of Object.entries(DEGENERATE)) {
+        const declined = { reason: "" };
+        const r = runExpertJudge(a, b, c, 0.7, new Set(), declined);
+        const where = `(${aName}, ${bName}, ${cName})`;
+        if (!r) {
+          assert.ok(declined.reason.length > 0, `declined with no reason at ${where}`);
+          continue;
+        }
+        for (const n of [r.confidence, r.entryLow, r.entryHigh, r.stopLevel, r.target1Level]) {
+          assert.ok(Number.isFinite(n), `non-finite level ${n} at ${where}`);
+        }
+        assert.ok(r.confidence >= 0 && r.confidence <= 1, `confidence ${r.confidence} out of range at ${where}`);
+      }
+    }
+  }
 });

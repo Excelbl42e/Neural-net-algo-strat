@@ -1,5 +1,38 @@
 # Changes in this build (vs. your Replit export)
 
+## Audit pass: numeric edge cases, and an error handler that talked too much
+
+Rather than read the quant layer and hope, this pass drove every exported function with degenerate inputs — empty series, a single bar, sixty flat bars, all zeros, negatives, values near the floating-point floor — and reported anything that threw or produced a non-finite number. 37 functions x 8 inputs, then the judge itself across 125 combinations of those series.
+
+### One indicator threw where every other one returns null
+
+`srFlipSignal` read the last bar behind a non-null assertion:
+
+```ts
+const price = c[c.length - 1]!.close;
+```
+
+On an empty series that is `undefined.close` — a `TypeError`. Every sibling indicator returns `null` when it has insufficient data; this one crashed. And it runs inside the worker tick, whose only error handler is the catch around the **whole cycle**, so one symbol with no stored candles would abort the scan for every remaining symbol.
+
+Fixed at the source, and hardened around it: each of the fourteen confluence voters now runs behind its own guard, so an exception in any one costs that one vote rather than the scan. A missing opinion was already a first-class outcome there (`direction: null`), so a failed indicator degrades into exactly that.
+
+After the fix: no throws, no non-finite levels, and every decline carries a reason, across all 125 series combinations. Three tests pin it.
+
+### The error handler returned internal details to anyone
+
+```ts
+res.status(500).json({ error: "Internal server error", detail: message });
+```
+
+A failed query answered with the SQL itself — `Failed query: select "id" from "app_owner" limit $1` — and `/auth/status` is a public path, so anyone who could reach the app could read it. Internal error text also carries file paths and driver internals; the existing `otp=` redaction shows the risk was understood, but one pattern cannot cover whatever an arbitrary error decides to say.
+
+Worse, the detail was not even reaching the log. `logger.error({ msg: message }, "Unhandled route error")` keys the detail as `msg`, which is pino's own message field, so the second argument overwrote it — the error text survived **only** in the response body, the one place it should not have been.
+
+Now a short correlation id goes to both sides: the client gets `{"error":"Internal server error","errorId":"174c9d058e54"}` and the log gets that id plus the full cause under `detail`. Verified by taking the database down and calling the public endpoint.
+
+56 tests pass. All 11 pages render with zero console errors, no overflow at 1440px or 375px.
+
+
 ## Audit pass: time, dates and session boundaries
 
 A trading bot lives on UTC correctness, so this pass looked at nothing else. One real finding.

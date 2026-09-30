@@ -382,6 +382,9 @@ export function bollingerBreakoutSignal(closes: number[], period = 20, mult = 2,
 
 /** Support/Resistance Flip (rank 26): price back-testing a broken swing level from the far side. */
 export function srFlipSignal(c: OHLC[], k = 2): "buy" | "sell" | null {
+  // Every other indicator returns null on insufficient data; this one read
+  // c[c.length - 1] behind a non-null assertion and threw on an empty series.
+  if (c.length === 0) return null;
   const sw = swingPoints(c, k);
   const price = c[c.length - 1]!.close;
   const tol = (atrPercentile(c)?.atr ?? 0) * 0.5;
@@ -607,21 +610,37 @@ export interface ConfluenceVote { concept: string; direction: "buy" | "sell" | n
 export function computeConfluence(h1: OHLC[], m30: OHLC[]): ConfluenceVote[] {
   const m30Closes = m30.map((k) => k.close);
   const h1Closes = h1.map((k) => k.close);
+  /**
+   * One voter throwing must cost one vote, not the scan.
+   *
+   * These run inside the worker tick, whose only error handler is the
+   * top-level catch around the whole cycle — so an exception in any single
+   * indicator aborted the tick for *every* remaining symbol, not just this
+   * one. A missing opinion is already a first-class outcome here (direction
+   * null), so a failed indicator degrades into exactly that.
+   */
+  const vote = (concept: string, compute: () => "buy" | "sell" | null): ConfluenceVote => {
+    try {
+      return { concept, direction: compute() };
+    } catch {
+      return { concept, direction: null };
+    }
+  };
   return [
-    { concept: "RSI Divergence", direction: rsiDivergenceSignal(m30) },
-    { concept: "MACD Crossover", direction: macdCrossSignal(m30Closes) },
-    { concept: "Moving Average Confluence", direction: maStackSignal(h1Closes) },
-    { concept: "Bollinger Band Squeeze Breakout", direction: bollingerBreakoutSignal(m30Closes) },
-    { concept: "Support/Resistance Flip", direction: srFlipSignal(m30) },
-    { concept: "Stochastic Oscillator Overbought/Oversold Reversal", direction: stochasticSignal(m30) },
-    { concept: "ADX Trend Strength Filter", direction: adxSignal(h1) },
-    { concept: "Ichimoku Cloud Confluence", direction: ichimokuSignal(h1) },
-    { concept: "Keltner Channel Breakout", direction: keltnerBreakoutSignal(m30) },
-    { concept: "Rate of Change (ROC) Momentum Filter", direction: rocSignal(m30Closes) },
-    { concept: "Williams %R Extreme Reversal", direction: williamsRSignal(m30) },
-    { concept: "Commodity Channel Index (CCI) Extreme Filter", direction: cciSignal(m30) },
-    { concept: "Donchian Channel Breakout", direction: donchianBreakoutSignal(m30) },
-    { concept: "Failure Swing", direction: failureSwingSignal(m30) },
+    vote("RSI Divergence", () => rsiDivergenceSignal(m30)),
+    vote("MACD Crossover", () => macdCrossSignal(m30Closes)),
+    vote("Moving Average Confluence", () => maStackSignal(h1Closes)),
+    vote("Bollinger Band Squeeze Breakout", () => bollingerBreakoutSignal(m30Closes)),
+    vote("Support/Resistance Flip", () => srFlipSignal(m30)),
+    vote("Stochastic Oscillator Overbought/Oversold Reversal", () => stochasticSignal(m30)),
+    vote("ADX Trend Strength Filter", () => adxSignal(h1)),
+    vote("Ichimoku Cloud Confluence", () => ichimokuSignal(h1)),
+    vote("Keltner Channel Breakout", () => keltnerBreakoutSignal(m30)),
+    vote("Rate of Change (ROC) Momentum Filter", () => rocSignal(m30Closes)),
+    vote("Williams %R Extreme Reversal", () => williamsRSignal(m30)),
+    vote("Commodity Channel Index (CCI) Extreme Filter", () => cciSignal(m30)),
+    vote("Donchian Channel Breakout", () => donchianBreakoutSignal(m30)),
+    vote("Failure Swing", () => failureSwingSignal(m30)),
   ];
 }
 
