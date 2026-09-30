@@ -10,6 +10,7 @@ import {
   GetRecentTradesQueryParams,
 } from "@workspace/api-zod";
 import { decryptSecret } from "../lib/crypto.js";
+import { settlementPnl } from "../lib/execution-risk.js";
 import { sellDerivTrade } from "../lib/deriv.js";
 import { logger } from "../lib/logger.js";
 
@@ -188,7 +189,7 @@ router.post("/trades/:id/close", async (req, res): Promise<void> => {
     .set({
       status: "closed",
       closePrice: null,
-      pnl: result.soldFor != null ? String(Number((result.soldFor - parseFloat(trade.lotSize ?? "10")).toFixed(2))) : null,
+      pnl: (() => { const p = settlementPnl(result.soldFor, trade.lotSize); return p != null ? String(p) : null; })(),
       closedAt: new Date(),
     })
     .where(and(eq(tradesTable.id, trade.id), eq(tradesTable.status, "open")))

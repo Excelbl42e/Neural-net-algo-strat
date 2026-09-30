@@ -133,3 +133,46 @@ test("an account under the Deriv minimum is reported as blocked, not as a zero s
   assert.equal(p.fundable, 0);
   assert.match(p.blocked!, /minimum stake/);
 });
+
+// ── Settlement accounting ────────────────────────────────────────────────────
+
+test("a missing or corrupt stake yields unknown P&L, never a fabricated number", async () => {
+  const { parseStake, settlementPnl } = await import("../src/lib/execution-risk.ts");
+  // The old code did parseFloat(lotSize ?? "10"): on a $1.00 trade that turned
+  // a $0.50 profit into an $8.50 loss, and fed that to the daily-loss guard.
+  assert.equal(settlementPnl(1.5, null), null);
+  assert.equal(settlementPnl(1.5, "not-a-number"), null);
+  assert.equal(settlementPnl(1.5, "0"), null);
+  // And an unparseable stake must not produce NaN bound for a numeric column.
+  assert.equal(parseStake("abc"), null);
+  assert.equal(parseStake("-1"), null);
+  assert.equal(parseStake(undefined), null);
+});
+
+test("settlement P&L is proceeds minus stake, to the cent", async () => {
+  const { settlementPnl } = await import("../src/lib/execution-risk.ts");
+  assert.equal(settlementPnl(1.5, "1"), 0.5);      // a winning $1.00 multiplier
+  assert.equal(settlementPnl(0.5, "1"), -0.5);     // its stop being hit
+  assert.equal(settlementPnl(0, "0.99"), -0.99);   // a binary expiring worthless
+  assert.equal(settlementPnl(2, "1.005"), 1);      // rounds, never drifts
+});
+
+test("the asset-class cap is honoured, because every forex pair is one class", async () => {
+  const { maxFundablePositions } = await import("../src/lib/execution-risk.ts");
+  // This bot trades forex only, so maxPerAssetClass is a second and lower
+  // ceiling than maxConcurrentPositions at their defaults. Reporting "3 of 3"
+  // promised a third position the portfolio gate always refuses.
+  const capped = maxFundablePositions({
+    equity: 1000, riskPerTradePct: 1, maxConcurrentPositions: 3, maxDailyLossPct: 4, maxPerAssetClass: 2,
+  });
+  assert.equal(capped.configured, 2, "the lower of the two caps is what is promised");
+  assert.equal(capped.fundable, 2);
+  assert.equal(capped.limitedBy, "asset_class_cap");
+
+  // A wider asset-class cap hands the ceiling back to maxConcurrentPositions.
+  const uncapped = maxFundablePositions({
+    equity: 1000, riskPerTradePct: 1, maxConcurrentPositions: 3, maxDailyLossPct: 4, maxPerAssetClass: 9,
+  });
+  assert.equal(uncapped.configured, 3);
+  assert.equal(uncapped.limitedBy, "configured");
+});

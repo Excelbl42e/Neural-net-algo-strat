@@ -12,6 +12,7 @@ import { db, tradesTable, brokerConnectionsTable, botConfigTable } from "@worksp
 import { logger } from "./logger.js";
 import { rebuildMissingTradeReviews } from "./trade-review.js";
 import { decryptSecret } from "./crypto.js";
+import { settlementPnl } from "./execution-risk.js";
 import { fetchContractStatuses, sellDerivTrade } from "./deriv.js";
 
 const POLL_INTERVAL_MS = 30_000;
@@ -157,7 +158,7 @@ async function runCycle(): Promise<void> {
           continue;
         }
         forceCloseFailureLogged.delete(entry.contractId);
-        const pnl = result.soldFor != null ? result.soldFor - parseFloat(entry.trade.lotSize ?? "10") : null;
+        const pnl = settlementPnl(result.soldFor, entry.trade.lotSize);
         const [closedTrade] = await db
           .update(tradesTable)
           .set({ status: "closed", pnl: pnl != null ? String(Number(pnl.toFixed(2))) : null, closedAt: new Date() })
@@ -189,9 +190,9 @@ async function runCycle(): Promise<void> {
       const entry = tradesToCheck.find((x) => x.contractId === cs.contractId);
       if (!entry) continue;
 
-      const pnl = cs.profit ?? (cs.sellPrice != null
-        ? cs.sellPrice - parseFloat(entry.trade.lotSize ?? "10")
-        : null);
+      // Deriv's own `profit` is authoritative when present; otherwise derive it,
+      // and accept null rather than inventing a stake to subtract.
+      const pnl = cs.profit ?? settlementPnl(cs.sellPrice, entry.trade.lotSize);
 
       const closePrice = cs.sellSpot != null ? String(cs.sellSpot) : null;
       const closedAt = cs.sellTime ? new Date(cs.sellTime * 1000) : new Date();

@@ -1,5 +1,51 @@
 # Changes in this build (vs. your Replit export)
 
+## Full codebase audit before real money: three more bugs, two of them accounting
+
+Went through the money paths line by line — execution, reconciliation, settlement, the risk math, the live-trading gate and the auth surface.
+
+### A settled trade with unknown P&L stopped the bot for the rest of the day
+
+The daily-loss guard refused **every** subsequent trade when it found a closed trade whose P&L it could not read:
+
+```ts
+if (!Number.isFinite(pnl)) { ...refusing execution; return; }
+```
+
+That is the wrong trade-off. The guard exists to bound losses, and halting the account until the next UTC midnight costs far more than the gap it is reacting to. It now counts such a trade at its true worst case — a full loss of the stake — which is *more* conservative for the budget and keeps the system running. The same applied to a closed row with no timestamp, which was worse still: those are never aged out of the query, so one of them blocked trading **permanently**, with a message you could not act on.
+
+And it was reachable. Three separate paths could write a closed trade with a null P&L: the force-close and the settled-contract handler in the contract monitor, and the manual close route — any time Deriv returned a sell without a price.
+
+### A fabricated $10 stake in the P&L calculation
+
+Three places computed settlement as:
+
+```ts
+parseFloat(trade.lotSize ?? "10")
+```
+
+On a $1.00 trade, a row with no stake turns a **$0.50 profit into an $8.50 loss**. Worse, a non-numeric stake makes `parseFloat` return `NaN`, `NaN.toFixed(2)` is the string `"NaN"`, and that was headed for a numeric P&L column. Both results feed the daily-loss guard, so a fabricated stake does not merely misreport history — it mis-sizes the next trade.
+
+Replaced with `settlementPnl()`, which returns null when the answer genuinely cannot be determined, so "unknown" is recorded as unknown instead of as a number nobody can stand behind. Four tests cover it.
+
+### "3 of 3" concurrent trades was never reachable
+
+`maxPerAssetClass` defaults to **2**, every forex pair is the same asset class, and this bot trades forex only — so the portfolio gate always refused a third position while the Configuration page kept promising one. The preview now reports the lower of the two caps (`2 of 2`, `limitedBy: asset_class_cap`) and the page says plainly that "Max open positions per asset class" — not "Max positions" — is the real ceiling.
+
+### What I checked and found correct
+
+Worth stating, because "no findings" is information too:
+
+- **Execution** — the claim is a single atomic conditional `UPDATE`; a buy whose outcome is unknown is marked `ambiguous` and never replayed; pre-buy failures retry at most twice; the DB write retries three times and screams if it fails after a confirmed fill.
+- **Reconciliation** — matches on symbol, stake and purchase time within a window, tracks already-linked contract ids so one contract cannot be claimed twice, and requires several clean polls past a grace window before declaring a signal not placed.
+- **The live-money gate** — `auto_live` is refused at both the config endpoint and the dispatcher, needs a passed demo self-test *and* a connected real connection, and `placeDerivTrade` independently re-checks Deriv's `is_virtual` flag against the requested environment.
+- **Auth** — every `/api` route is behind the session check bar a small login allowlist; the cookie is `httpOnly`, `sameSite: lax` and `secure`, which is what makes the permissive CORS reflection harmless rather than exploitable; login is rate-limited per IP.
+- **Self-learning suppression** — unseen concepts stay eligible and scoring uses a Bayesian prior, so it cannot suppress the whole library on day one and starve the bot of setups.
+- **Numeric columns** — stake and P&L precision are far above anything this account can produce.
+
+49 tests pass. All 11 pages: zero console errors, no overflow at 1440px or 375px.
+
+
 ## Audit before funding: four findings, all fixed
 
 ### "Why no trade was placed" is now a panel, not an API call
