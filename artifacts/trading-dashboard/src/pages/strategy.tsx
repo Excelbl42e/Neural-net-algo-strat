@@ -22,10 +22,11 @@ export default function StrategyPage() {
         <p className="text-sm text-muted-foreground mt-2 max-w-2xl">
           Curated once in code, not scanned from uploaded books. Every concept below is individually gated by real closed-trade
           performance — a concept with a poor historical win rate is automatically suppressed from future signals until its
-          sample-adjusted score recovers. While no AI budget is configured, the signal worker runs a deterministic expert-system
-          judge instead of GPT: a liquidity-sweep + FVG setup still sets the actual entry/stop/target, but whether it fires is a
-          live confluence vote across most of the entries below, computed on real candles — only Parabolic SAR, Pivot Point
-          Confluence, SMT Divergence, and Inducement aren't independently computed yet (still listed and scored, ready for GPT).
+          sample-adjusted score recovers. Signals are decided by a deterministic expert-system judge running entirely in this
+          codebase — there is no language model in the path, no API key and no per-signal cost, and that is the design rather
+          than a budget stopgap. A liquidity-sweep + FVG setup sets the actual entry/stop/target, and whether it fires is a live
+          confluence vote across most of the entries below, computed on real candles. Four are listed and scored but not yet
+          independently computed: Parabolic SAR, Pivot Point Confluence, SMT Divergence and Inducement.
         </p>
       </header>
 

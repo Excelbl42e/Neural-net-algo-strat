@@ -47,6 +47,8 @@ class CandleFeeder {
   private reconnectTimer: NodeJS.Timeout | null = null;
   private reconnectAttempts = 0;
   private subscribedSymbols = new Set<string>();
+  /** Symbols Deriv refused, with its reason. Reported separately: one bad symbol is not a broken feed. */
+  private rejectedSymbols = new Map<string, string>();
   private buckets = new Map<string, OHLC>();
   private lastTick = new Map<string, { price: number; at: number }>();
   private lastError: string | null = null;
@@ -71,6 +73,8 @@ class CandleFeeder {
   ensureSubscribed(symbol: string): void {
     const code = normalizeSymbol(symbol);
     if (!isSyntheticCode(code)) return;
+    // Deriv already refused this one; re-asking just re-raises the same error.
+    if (this.rejectedSymbols.has(code)) return;
     if (this.subscribedSymbols.has(code)) return;
     this.subscribedSymbols.add(code);
     if (this.ws?.readyState === WebSocket.OPEN) {
@@ -98,6 +102,7 @@ class CandleFeeder {
       tickAgeMs,
       connectedAt: this.connectedAt?.toISOString() ?? null,
       symbols: Array.from(this.subscribedSymbols),
+      rejectedSymbols: Array.from(this.rejectedSymbols, ([symbol, reason]) => ({ symbol, reason })),
       bucketsFlushed: this.bucketsFlushed,
       lastError: this.lastError,
       lastErrorAt: this.lastErrorAt,
@@ -199,12 +204,27 @@ class CandleFeeder {
       tick?: { symbol: string; quote: number; epoch: number };
       candles?: { open: number; high: number; low: number; close: number; epoch: number }[];
       history?: { symbol: string };
-      echo_req?: { ticks_history?: string; granularity?: number };
-      error?: { message: string };
+      echo_req?: { ticks?: string; ticks_history?: string; granularity?: number };
+      error?: { message: string; code?: string };
       msg_type?: string;
     };
     try { msg = JSON.parse(raw); } catch { return; }
     if (msg.error) {
+      // Deriv echoes the failing request back, which is the only way to learn
+      // WHICH symbol it rejected. Without this the status read "Invalid symbol"
+      // with no symbol named — unactionable, and indistinguishable from the
+      // whole feed being broken when in fact the other 27 were streaming fine.
+      const symbol = msg.echo_req?.ticks ?? msg.echo_req?.ticks_history;
+      if (symbol) {
+        const code = normalizeSymbol(symbol);
+        // Deriv will reject it identically on every reconnect, so stop asking.
+        // Re-subscribing forever would keep the feed noisy and keep re-raising
+        // an error the operator cannot do anything about.
+        this.subscribedSymbols.delete(code);
+        this.rejectedSymbols.set(code, msg.error.message);
+        logger.warn({ symbol: code, err: msg.error.message }, "Candle feeder: Deriv rejected a symbol; dropped from the subscription set");
+        return;
+      }
       this.lastError = msg.error.message;
       this.lastErrorAt = new Date().toISOString();
       logger.warn({ err: msg.error.message }, "Candle feeder: Deriv error");
@@ -268,6 +288,10 @@ class CandleFeeder {
     }
 
     if (!msg.tick) return;
+    // A tick proves the feed is alive. Without this, a transient error stayed
+    // pinned in the status forever and the Chart page kept showing it while
+    // prices were streaming in perfectly well behind it.
+    if (this.lastError) { this.lastError = null; this.lastErrorAt = null; }
     const { symbol, quote, epoch } = msg.tick;
     const localSymbol = normalizeSymbol(symbol);
     const tickAt = epoch * 1000;

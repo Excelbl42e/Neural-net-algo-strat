@@ -1,5 +1,25 @@
 # Changes in this build (vs. your Replit export)
 
+## Fix: "Invalid symbol" that named no symbol and never cleared
+
+The Chart page showed `Feeder error: Invalid symbol.` next to a feed badge reading `FEED CONNECTED · 28 symbols`. Both were true at once, and neither was useful.
+
+Three separate faults:
+
+- **The error named no symbol.** Deriv echoes the failing request back in `echo_req`, which is the only way to learn which of the 28 subscriptions it refused. That field was being parsed and then discarded, leaving a message nothing could be done about.
+- **It never cleared.** `lastError` was only reset when a new socket opened, so a single refused symbol pinned an error into the status forever while the other 27 streamed normally — making a healthy feed look broken indefinitely.
+- **The refused symbol was re-subscribed on every reconnect**, guaranteeing the same rejection again.
+
+Now: the symbol is named, dropped from the subscription set so it is not asked for again, and recorded with Deriv's reason. Any tick arriving clears a stale feed error, because a tick is proof the feed is alive. The Chart page distinguishes the three cases it could not before — *this* symbol was refused and is not streaming; *other* symbols were refused and this one is fine; or the feed itself is in trouble.
+
+## Fix: smaller honesty problems found in the same pass
+
+- **"Generate signals" always reported success.** The worker returns immediately without doing anything if a cycle is already in flight, and the route reported `Signal generation cycle started` regardless. It now says which of the two actually happened.
+- **The Strategy page still described the LLM as a budget stopgap** — "while no AI budget is configured… ready for GPT". The language model is gone by design, with no API key and no per-signal cost. The four concepts that are listed and scored but not independently computed (Parabolic SAR, Pivot Point Confluence, SMT Divergence, Inducement) were correct and are stated plainly.
+
+Verified: 46 tests pass, all 11 pages render with zero console errors, no overflow at 1440px or 375px, and the Autotrade dropdown survives reloads.
+
+
 ## Fix: Autotrade mode went blank on every reload
 
 Reported twice; it was a real bug, and the cause was not where it looked.
