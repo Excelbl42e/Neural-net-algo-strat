@@ -40,13 +40,14 @@ export interface SyntheticSymbol {
 
 export const SYNTHETIC_CATALOG: SyntheticSymbol[] = [
   // ── REAL MARKETS — preferred for ICT/SMC trading ──────────────────────────
-  // Forex majors + crosses (24/5, real institutional liquidity). Not
-  // independently verified against Deriv's live active_symbols list from
-  // this sandbox (no outbound network here) — if any one of these isn't
-  // actually offered, it simply never gets candle data or trades; nothing
-  // else breaks. Majors stay in DEFAULT_FEED_SYMBOLS for a fast boot
-  // subscribe; the rest lazy-subscribe the first time the signal worker
-  // scans them or a chart requests them.
+  // Forex: exactly the 14 pairs Deriv lists under Multipliers → Forex for
+  // this account (checked in the Deriv app, 2026-09-30). The catalogue used
+  // to carry 28. Five of those Deriv does not recognise at all (NZD/CAD,
+  // NZD/CHF, CAD/JPY, CAD/CHF, CHF/JPY) and nine more stream prices but are
+  // not offered as multipliers (NZD/USD, EUR/NZD, GBP/CAD, GBP/CHF, GBP/NZD,
+  // AUD/CAD, AUD/CHF, AUD/NZD, NZD/JPY). Scanning them produced setups that
+  // could never be traded. This list drives the scan, the price feed and
+  // the allow-list check, so a pair added here must be on Deriv's list.
   //
   // multiplier: 100 — live-verified. A real self-test run against
   // frxEURUSD returned ContractBuyValidationError/MultiplierOutOfRangeFrontOfficeError:
@@ -69,27 +70,13 @@ export const SYNTHETIC_CATALOG: SyntheticSymbol[] = [
   { code: "frxUSDCAD", display: "USD / CAD", group: "Forex", pipDecimals: 5, tradeType: "multiplier", multiplier: 100 },
   { code: "frxGBPJPY", display: "GBP / JPY", group: "Forex", pipDecimals: 3, tradeType: "multiplier", multiplier: 100 },
   { code: "frxUSDCHF", display: "USD / CHF", group: "Forex", pipDecimals: 5, tradeType: "multiplier", multiplier: 100 },
-  { code: "frxNZDUSD", display: "NZD / USD", group: "Forex", pipDecimals: 5, tradeType: "multiplier", multiplier: 100 },
   { code: "frxEURGBP", display: "EUR / GBP", group: "Forex", pipDecimals: 5, tradeType: "multiplier", multiplier: 100 },
   { code: "frxEURJPY", display: "EUR / JPY", group: "Forex", pipDecimals: 3, tradeType: "multiplier", multiplier: 100 },
   { code: "frxEURAUD", display: "EUR / AUD", group: "Forex", pipDecimals: 5, tradeType: "multiplier", multiplier: 100 },
   { code: "frxEURCAD", display: "EUR / CAD", group: "Forex", pipDecimals: 5, tradeType: "multiplier", multiplier: 100 },
   { code: "frxEURCHF", display: "EUR / CHF", group: "Forex", pipDecimals: 5, tradeType: "multiplier", multiplier: 100 },
-  { code: "frxEURNZD", display: "EUR / NZD", group: "Forex", pipDecimals: 5, tradeType: "multiplier", multiplier: 100 },
   { code: "frxGBPAUD", display: "GBP / AUD", group: "Forex", pipDecimals: 5, tradeType: "multiplier", multiplier: 100 },
-  { code: "frxGBPCAD", display: "GBP / CAD", group: "Forex", pipDecimals: 5, tradeType: "multiplier", multiplier: 100 },
-  { code: "frxGBPCHF", display: "GBP / CHF", group: "Forex", pipDecimals: 5, tradeType: "multiplier", multiplier: 100 },
-  { code: "frxGBPNZD", display: "GBP / NZD", group: "Forex", pipDecimals: 5, tradeType: "multiplier", multiplier: 100 },
   { code: "frxAUDJPY", display: "AUD / JPY", group: "Forex", pipDecimals: 3, tradeType: "multiplier", multiplier: 100 },
-  { code: "frxAUDCAD", display: "AUD / CAD", group: "Forex", pipDecimals: 5, tradeType: "multiplier", multiplier: 100 },
-  { code: "frxAUDCHF", display: "AUD / CHF", group: "Forex", pipDecimals: 5, tradeType: "multiplier", multiplier: 100 },
-  { code: "frxAUDNZD", display: "AUD / NZD", group: "Forex", pipDecimals: 5, tradeType: "multiplier", multiplier: 100 },
-  { code: "frxNZDJPY", display: "NZD / JPY", group: "Forex", pipDecimals: 3, tradeType: "multiplier", multiplier: 100 },
-  { code: "frxNZDCAD", display: "NZD / CAD", group: "Forex", pipDecimals: 5, tradeType: "multiplier", multiplier: 100 },
-  { code: "frxNZDCHF", display: "NZD / CHF", group: "Forex", pipDecimals: 5, tradeType: "multiplier", multiplier: 100 },
-  { code: "frxCADJPY", display: "CAD / JPY", group: "Forex", pipDecimals: 3, tradeType: "multiplier", multiplier: 100 },
-  { code: "frxCADCHF", display: "CAD / CHF", group: "Forex", pipDecimals: 5, tradeType: "multiplier", multiplier: 100 },
-  { code: "frxCHFJPY", display: "CHF / JPY", group: "Forex", pipDecimals: 3, tradeType: "multiplier", multiplier: 100 },
 
   // Commodities
   { code: "frxXAUUSD", display: "Gold / USD",  group: "Commodities", pipDecimals: 2, tradeType: "multiplier", multiplier: 30 },
