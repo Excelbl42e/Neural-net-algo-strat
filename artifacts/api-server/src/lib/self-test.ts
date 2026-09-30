@@ -1,17 +1,25 @@
 /**
  * Demo self-test. Refuses unless Deriv itself reports the account as virtual.
- * Checks both order paths real signals can take: a quote-only multiplier
- * proposal (never opens a position — this codebase cannot close one early),
- * then the binary path used by small-account signals — a real buy walked
- * pending -> confirmed -> closed if Deriv's own reported minimum duration is
- * short enough to wait out here, otherwise a quote-only proposal check at
- * the same duration production code actually uses. Nothing else calls this
- * path. A passed run is what unlocks auto_live.
+ *
+ * Covers both order paths a real signal can take:
+ *
+ *  - Multiplier (what a funded account trades): a genuine round trip — quote,
+ *    buy at Deriv's $1 minimum with a stop-loss and take-profit attached,
+ *    confirm the contract opened, then sell it straight back. The demo balance
+ *    moves by the spread, which is the visible proof that an order really went
+ *    out. This is also the only place the sell path runs before real money
+ *    depends on it.
+ *  - Binary (the small-account fallback): a forex binary runs for days, far too
+ *    long to buy and wait out here, so this stays a quote-only proposal at the
+ *    exact duration production code uses.
+ *
+ * A passed run is what unlocks auto_live, so it is deliberately the strongest
+ * check that can be made without leaving a position open.
  */
 import { brokerConnectionsTable } from "@workspace/db";
 import { decryptSecret } from "./crypto.js";
 import {
-  fetchContractStatuses, placeDerivTrade, checkMultiplierProposal,
+  fetchContractStatuses, placeDerivTrade, checkMultiplierProposal, sellDerivTrade,
   queryBinaryMinDuration, checkBinaryProposal, binaryDurationMs, defaultBinaryDurationDays,
 } from "./deriv.js";
 import { inspectDerivAccount } from "./deriv-account.js";
@@ -19,6 +27,8 @@ import { setSecret } from "./secrets.js";
 
 /** Past this, don't try to synchronously wait for a real binary contract to settle inside the self-test. */
 const MAX_SYNCHRONOUS_WAIT_MS = 20 * 60_000;
+/** Deriv's multiplier minimum. The round trip costs the spread on it, on a demo account. */
+const MULTIPLIER_TEST_STAKE = 1;
 
 type Conn = typeof brokerConnectionsTable.$inferSelect;
 let busy = false;
@@ -50,16 +60,61 @@ export async function runDemoSelfTest(conn: Conn): Promise<SelfTestResult> {
     if (account.account_type !== "demo") return { ok: false, passed: false, message: "Refused: Deriv did not report this account as virtual (is_virtual)", steps };
     mark("virtual_confirmed", `account ${account.account_id} is a demo account`);
 
-    // Quote-only check (never opens a position) that Deriv accepts the
-    // multiplier parameter shape real forex signals actually use — the
-    // binary buy below only proves the binary path, and this codebase has
-    // no way to close a multiplier position early, so this is a proposal
-    // check, not a buy.
+    // A real multiplier round trip: buy, confirm, sell back.
+    //
+    // This used to be a quote-only proposal, on the grounds that the codebase
+    // "has no way to close a multiplier position early". That has not been
+    // true for some time — sellDerivTrade exists and both the contract
+    // monitor and the manual-close route call it. Meanwhile a proposal proves
+    // only that Deriv accepts the parameter *shape*; the buy path once had a
+    // wrong field name that no amount of review caught and only a live order
+    // exposed, and the sell path has never run against Deriv at all. Leaving
+    // it that way meant the first real use of sell would be the contract
+    // monitor closing a funded position — the worst possible place to find a
+    // bug. Doing it here costs a cent of spread on a demo account.
+    //
+    // It is also what makes the auto_live gate mean something: "a passed demo
+    // self-test" should imply an order actually went out and came back.
     const multiplierCheck = await checkMultiplierProposal(token, "demo", "frxEURUSD");
-    mark(multiplierCheck.ok ? "multiplier_path_ok" : "multiplier_path_failed", multiplierCheck.message);
+    mark(multiplierCheck.ok ? "multiplier_quote_ok" : "multiplier_path_failed", multiplierCheck.message);
     if (!multiplierCheck.ok) {
       return await finish(false, `Multiplier order path rejected by Deriv (this is what real signals will use): ${multiplierCheck.message}`);
     }
+
+    // A reference price lets the order carry a real stop-loss/take-profit, so
+    // the limit_order attachment is exercised too rather than only the bare buy.
+    const { getLastTick } = await import("./candle-feeder.js");
+    const tick = getLastTick("frxEURUSD");
+    const ref = tick?.price ?? null;
+    const levels = ref != null
+      ? { entryPrice: ref, stopPrice: ref * 0.999, targetPrice: ref * 1.002 }
+      : {};
+    mark("multiplier_buy_sent", `frxEURUSD MULTUP, stake $${MULTIPLIER_TEST_STAKE.toFixed(2)}${ref != null ? `, stop/target around ${ref.toFixed(5)}` : ", no reference tick so no stop/target attached"}`);
+
+    const mBuy = await placeDerivTrade({
+      token, environment: "demo", symbol: "frxEURUSD", direction: "buy",
+      stakeAmount: MULTIPLIER_TEST_STAKE, currency: account.currency, ...levels,
+    });
+    if (!mBuy.ok || !mBuy.contractId) {
+      return await finish(false, `Multiplier buy did not confirm: ${mBuy.message ?? "unknown"}${mBuy.ambiguous ? " (ambiguous — check Diagnostics frames before retrying)" : ""}`);
+    }
+    mark("multiplier_open", `contract ${mBuy.contractId} opened at ${mBuy.buyPrice}`);
+
+    // Close it straight away. This is the first time the sell path runs
+    // against Deriv anywhere, which is the point of doing it on demo.
+    const sold = await sellDerivTrade(token, "demo", mBuy.contractId);
+    if (!sold.ok) {
+      mark("multiplier_close_failed", sold.message ?? "sell rejected");
+      return await finish(
+        false,
+        `Bought multiplier ${mBuy.contractId} but could NOT close it: ${sold.message ?? "sell rejected"}. ` +
+        `A demo position is open — the contract monitor will force-close it at the configured hold time, ` +
+        `or close it yourself from the Trades page. Do not fund until the sell path works.`,
+        mBuy.contractId,
+      );
+    }
+    const roundTripPnl = sold.soldFor != null ? Number((sold.soldFor - MULTIPLIER_TEST_STAKE).toFixed(2)) : null;
+    mark("multiplier_closed", `sold for ${sold.soldFor}${roundTripPnl != null ? ` (round trip ${roundTripPnl >= 0 ? "+" : ""}${roundTripPnl})` : ""}`);
 
     // Test the actual instrument class the bot trades (forex, via binary
     // CALL/PUT — the small-account fallback real signals use when their
@@ -89,7 +144,14 @@ export async function runDemoSelfTest(conn: Conn): Promise<SelfTestResult> {
       if (!proposalCheck.ok) {
         return await finish(false, `Binary order path rejected by Deriv (this is what small-account signals will use): ${proposalCheck.message}`);
       }
-      return await finish(true, `Passed: multiplier and binary order paths both accepted by Deriv (binary checked by quote only, at ${useDuration.value}${useDuration.unit} — too long to buy-and-wait in a self-test)`);
+      return await finish(
+        true,
+        `Passed: a real multiplier was bought and sold back on the demo account` +
+        `${roundTripPnl != null ? ` (round trip ${roundTripPnl >= 0 ? "+" : ""}$${Math.abs(roundTripPnl).toFixed(2)})` : ""}` +
+        `, and the binary path was accepted at ${useDuration.value}${useDuration.unit} by quote ` +
+        `(a forex binary runs for days, too long to buy and wait out here).`,
+        mBuy.contractId,
+      );
     }
 
     mark("pending", `buy request sent: frxEURUSD CALL, ${useDuration.value}${useDuration.unit} (Deriv's own reported minimum), stake 0.50`);

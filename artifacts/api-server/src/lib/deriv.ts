@@ -418,13 +418,13 @@ export interface DerivSellResult {
  * (price: 0 = accept any price — there is no meaningful minimum to protect
  * for a forced exit; the caller already decided this position must close).
  *
- * Evidence label: code review only. The request/response shape
- * ({sell: contract_id, price}, response.sell.{sold_for, contract_id, ...})
- * matches Deriv's current documented Sell Contract endpoint, but — like
- * every other write path in this file before today — has not been run
- * against a live Deriv connection. Given the buy path had a wrong field
- * name that only live testing caught, treat a first real use of this as
- * a genuine test, not a proven capability.
+ * Evidence label: the request/response shape ({sell: contract_id, price},
+ * response.sell.{sold_for, contract_id, ...}) matches Deriv's current
+ * documented Sell Contract endpoint. The demo self-test now exercises this
+ * for real — it buys a $1 multiplier and sells it straight back — so run
+ * that before trusting this with funded money. Until a self-test has passed
+ * on this account, treat it as reviewed but unproven: the buy path in this
+ * same file once had a wrong field name that only a live order exposed.
  */
 export async function sellDerivTrade(token: string, environment: "demo" | "real", contractId: number): Promise<DerivSellResult> {
   let session: DerivSession | null = null;
