@@ -45,6 +45,20 @@ export default function Dashboard() {
   const activeStrategies = strategies.data?.filter(s => s.active).length;
   const activeSignals = signals.data?.filter(s => s.status === "active").length;
   const connectedBrokers = brokers.data?.filter(b => b.status === "connected" && b.enabled).length;
+  // `running` is true only while a tick executes — seconds out of every 30
+  // minutes — so reporting it directly said "Not running" about a healthy
+  // worker almost all the time. `scheduled` is what the question means.
+  const w = worker.data as (typeof worker.data & { scheduled?: boolean; stalled?: boolean; nextRunAt?: string | null }) | undefined;
+  const workerState = w?.running ? "Scanning now"
+    : w?.stalled ? "Stalled"
+    : w?.scheduled ? "Scheduled"
+    : "Stopped";
+  const nextRun = w?.nextRunAt ? new Date(w.nextRunAt) : null;
+  const minsToNext = nextRun ? Math.max(0, Math.round((nextRun.getTime() - Date.now()) / 60000)) : null;
+  const workerDetail = [
+    `${w?.signalsGeneratedTotal ?? 0} generated · ${activeSignals ?? 0} active records`,
+    w?.scheduled && !w?.running && minsToNext != null ? `next scan in ~${minsToNext} min` : null,
+  ].filter(Boolean).join(" · ");
 
   return <div className="space-y-7 pb-10 max-w-[1500px]">
     <header className="flex flex-wrap items-end justify-between gap-4 border-b border-border pb-5">
@@ -60,7 +74,7 @@ export default function Dashboard() {
       <>
         <section className="grid gap-3 md:grid-cols-[1.1fr_1fr_1fr]">
           <StatusPanel icon={<Crosshair className="w-5 h-5" />} label="Strategy library" value={`${activeStrategies ?? 0} active`} detail="Hardcoded ICT + quant/TA strategies, seeded on boot" href="/strategy" />
-          <StatusPanel icon={<Activity className="w-5 h-5" />} label="Signal worker" value={worker.data?.running ? "Running" : "Not running"} detail={`${worker.data?.signalsGeneratedTotal ?? 0} generated (worker counter) · ${activeSignals ?? 0} active records`} href="/analysis" />
+          <StatusPanel icon={<Activity className="w-5 h-5" />} label="Signal worker" value={workerState} detail={workerDetail} href="/analysis" />
           <StatusPanel icon={<Radio className="w-5 h-5" />} label="Deriv connectivity" value={`${connectedBrokers ?? 0} broker connections`} detail={`Candle feeder: ${feeder.data?.connected ? "connected" : "disconnected"} · ${feeder.data?.symbols.length ?? 0} subscribed symbols`} href="/brokers" />
         </section>
         <section className="rounded-xl border border-border bg-card p-5 md:p-6">

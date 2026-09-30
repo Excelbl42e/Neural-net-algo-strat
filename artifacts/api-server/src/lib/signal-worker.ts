@@ -96,9 +96,24 @@ let activeConfig: { smallAccountMaxRiskPct: number; minConfidence: number } = { 
 let lastLock: { locked: boolean; reason: string | null } = { locked: false, reason: null };
 const LOCK_MSG = "Autonomous dispatch waiting: the reconciler is resolving an unresolved Deriv order";
 
+let intervalHandle: ReturnType<typeof setInterval> | null = null;
+
 export function getWorkerStatus() {
+  const staleMs = lastRunAt ? Date.now() - lastRunAt.getTime() : null;
   return {
+    /** True only while a tick is executing — a few seconds every SIGNAL_INTERVAL_MS. */
     running: workerRunning,
+    /**
+     * True while the scan loop is scheduled. This, not `running`, is what
+     * "is the worker working?" means: `running` is false for 29 of every 30
+     * minutes on a perfectly healthy worker, and the dashboard read that as
+     * "Not running".
+     */
+    scheduled: intervalHandle !== null,
+    /** Ticks are late enough to be a problem, using the same rule as the health panel. */
+    stalled: intervalHandle !== null && staleMs != null && staleMs > 2 * SIGNAL_INTERVAL_MS + 60_000,
+    /** When the next scan is due, so "when will it trade?" is answerable from the UI. */
+    nextRunAt: lastRunAt ? new Date(lastRunAt.getTime() + SIGNAL_INTERVAL_MS).toISOString() : null,
     lastRunAt: lastRunAt?.toISOString() ?? null,
     lastError,
     signalsGeneratedTotal,
@@ -1554,7 +1569,7 @@ async function runWorkerTick(): Promise<void> {
 
 // ── Start/stop ───────────────────────────────────────────────────────────────
 
-let intervalHandle: ReturnType<typeof setInterval> | null = null;
+
 
 export function startSignalWorker(): void {
   if (intervalHandle) return;
