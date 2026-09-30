@@ -1,5 +1,34 @@
 # Changes in this build (vs. your Replit export)
 
+## Audit pass: time, dates and session boundaries
+
+A trading bot lives on UTC correctness, so this pass looked at nothing else. One real finding.
+
+### News event times depended on the host's timezone
+
+Every date in the server is computed in UTC — except the one that parses the news calendar:
+
+```ts
+const date = new Date(item.date);
+```
+
+An ISO string with no offset (`"2026-09-30T08:30:00"`) is interpreted in **local** time by the JavaScript spec. This container resolves to UTC, so it read correctly *by luck*. On a host with `TZ` set to anything else, every high-impact blackout window would silently shift by that offset — and the bot would trade straight through NFP believing it was clear. Exactly the kind of failure that never announces itself.
+
+A timestamp that names its zone is now honoured; one that does not is read as UTC explicitly, so the answer is the same on every machine. When the feed sends zone-less dates it says so once in the log, instead of quietly guessing.
+
+### Verified correct, with tests to keep them that way
+
+Nothing else in the server uses a local-time method — no `getHours()`, `getDate()` or `toLocaleString()` anywhere in date math. The remaining boundaries are now pinned by tests:
+
+- **The forex week** — open until Friday 21:00 UTC, closed all Saturday, reopens Sunday 21:00 UTC, checked either side of each edge
+- **Session windows** — london 07:00–16:00, newyork 12:00–21:00, and that together they cover 07:00–21:00 with no gap at the handover
+- **Blank killzones really means every open hour**, not a hidden default, for blank, null and whitespace alike; an unrecognised name is ignored rather than silently blocking everything
+- **The daily-loss budget** rolls on the UTC day, and position age is an epoch difference, so neither moves with the host clock
+- **D1 candles** are chart-only and never reach the judge, so their 00:00 UTC bucket boundary cannot affect a trading decision
+
+53 tests pass.
+
+
 ## Add: "Run scan now"
 
 The scan loop runs every thirty minutes, and `POST /api/brain/generate-signals` existed to run one on demand — but nothing in the app ever called it. Waiting out the interval was the only way to see the effect of a settings change, which makes every adjustment a thirty-minute experiment.

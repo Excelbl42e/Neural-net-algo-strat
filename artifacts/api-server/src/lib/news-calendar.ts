@@ -40,15 +40,49 @@ interface RawEvent {
   impact?: unknown;
 }
 
+/** A trailing `Z` or a `+hh:mm` / `-hh:mm` offset — i.e. the string says which zone it means. */
+const HAS_TIMEZONE = /(?:Z|[+-]\d{2}:?\d{2})$/i;
+
+/**
+ * Parse one calendar timestamp without depending on the host's timezone.
+ *
+ * `new Date("2026-09-30T08:30:00")` — an ISO string with no offset — is
+ * interpreted in *local* time by the JavaScript spec. Every other date in this
+ * server is UTC, and this container happens to resolve to UTC, so it read
+ * correctly by luck. On a host with TZ set to anything else, every blackout
+ * window would silently shift by that offset and the bot would trade straight
+ * through a high-impact release believing it was clear. A timestamp that names
+ * its zone is honoured; one that does not is read as UTC explicitly, so the
+ * result is the same on every machine.
+ */
+export function parseEventDate(raw: string): { date: Date; assumedUtc: boolean } | null {
+  const text = raw.trim();
+  if (!text) return null;
+  const hasZone = HAS_TIMEZONE.test(text);
+  // A space separator instead of "T" is not ISO and is parsed inconsistently.
+  const normalised = hasZone ? text : `${text.replace(" ", "T")}Z`;
+  const date = new Date(normalised);
+  if (Number.isNaN(date.getTime())) return null;
+  return { date, assumedUtc: !hasZone };
+}
+
 function parseCalendar(raw: unknown): NewsEvent[] {
   if (!Array.isArray(raw)) throw new Error("Calendar response was not an array");
   const events: NewsEvent[] = [];
+  let assumedUtcCount = 0;
   for (const item of raw as RawEvent[]) {
     if (typeof item.title !== "string" || typeof item.country !== "string" || typeof item.date !== "string") continue;
-    const date = new Date(item.date);
-    if (Number.isNaN(date.getTime())) continue;
+    const parsed = parseEventDate(item.date);
+    if (!parsed) continue;
+    if (parsed.assumedUtc) assumedUtcCount++;
     const impact = typeof item.impact === "string" ? item.impact : "Low";
-    events.push({ title: item.title, country: item.country.toUpperCase(), date, impact });
+    events.push({ title: item.title, country: item.country.toUpperCase(), date: parsed.date, impact });
+  }
+  if (assumedUtcCount > 0) {
+    logger.warn(
+      { assumedUtcCount, total: events.length },
+      "News calendar: some events carried no timezone and were read as UTC; blackout windows for those are only right if the feed publishes in UTC",
+    );
   }
   return events;
 }
