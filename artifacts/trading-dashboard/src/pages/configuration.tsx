@@ -53,7 +53,7 @@ interface StakeRow {
   contract?: "multiplier" | "binary" | null;
   typicalLoss?: number | null; worstCaseLoss?: number | null; worstCasePctOfEquity?: number | null;
   fundablePositions?: number; configuredPositions?: number;
-  positionsLimitedBy?: "configured" | "daily_loss_budget" | "risk_sizing" | "equity";
+  positionsLimitedBy?: "configured" | "daily_loss_budget" | "risk_sizing" | "equity" | "asset_class_cap";
 }
 
 interface RiskBandRow {
@@ -426,7 +426,9 @@ export default function ConfigurationPage() {
                           ? " — the daily-loss budget reserves each open stake, so the first trade uses up the day's allowance."
                           : yourRow.positionsLimitedBy === "risk_sizing"
                             ? " — risk sizing refuses the next one at this balance."
-                            : "."}
+                            : yourRow.positionsLimitedBy === "asset_class_cap"
+                              ? " — \u201cMax open positions per asset class\u201d below is the binding limit. This bot trades forex only and every pair counts as one asset class, so that setting, not this one, is your real ceiling."
+                              : "."}
                         {" "}Raising this number will not change that. Each trade is also capped at balance ÷ this
                         number, so a higher ceiling shrinks every stake — that used to push it under Deriv's $1.00
                         multiplier minimum and turn trades into binaries, which the $1.00 floor now prevents, but the
@@ -501,7 +503,7 @@ export default function ConfigurationPage() {
                 ["atrPercentileMax", "Skip if H1 ATR percentile above", "1"],
                 ["efficiencyRatioMin", "Efficiency ratio floor (0 chop, 1 trend)", "0.01"],
                 ["minStopAtr", "Minimum stop distance (ATRs)", "0.1"],
-                ["maxPerAssetClass", "Max open positions per asset class", "1"],
+                ["maxPerAssetClass", "Max open positions per asset class — forex is a single class here, so this is usually your real ceiling on concurrent trades, not \u201cMax positions\u201d above", "1"],
                 ["newsBlackoutBeforeMin", "News blackout: minutes before a high-impact release", "1"],
                 ["newsBlackoutAfterMin", "News blackout: minutes after a high-impact release", "1"],
                 ["maxSpreadCostPct", "Max indicative trading cost (% of stake)", "0.01"],

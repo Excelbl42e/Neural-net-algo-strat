@@ -105,6 +105,7 @@ router.get("/config/stake-preview", async (req, res): Promise<void> => {
       maxConcurrentPositions: cfg.maxConcurrentPositions,
       maxDailyLossPct: cfg.maxDailyLossPct,
       smallAccountMaxRiskPct: (cfg as { smallAccountMaxRiskPct: number }).smallAccountMaxRiskPct,
+      maxPerAssetClass: (cfg as { maxPerAssetClass: number }).maxPerAssetClass,
     });
     return {
       equity,
@@ -121,7 +122,7 @@ router.get("/config/stake-preview", async (req, res): Promise<void> => {
       worstCaseLoss: plan.worstCaseLoss,
       worstCasePctOfEquity: plan.worstCasePctOfEquity,
       fundablePositions: plan.fundable,
-      configuredPositions: cfg.maxConcurrentPositions,
+      configuredPositions: Math.min(cfg.maxConcurrentPositions, (cfg as { maxPerAssetClass: number }).maxPerAssetClass),
       positionsLimitedBy: plan.limitedBy,
     };
   });

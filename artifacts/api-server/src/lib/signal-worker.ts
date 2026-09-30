@@ -810,11 +810,11 @@ async function dispatchTradeUnlocked(
   const now = new Date();
   const utcDayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
   const utcNextDay = new Date(utcDayStart.getTime() + 24 * 60 * 60 * 1000);
-  let closedToday: Array<{ pnl: string | null; closedAt: Date | null }>;
+  let closedToday: Array<{ pnl: string | null; closedAt: Date | null; lotSize: string | null }>;
   let openTrades: Array<{ lotSize: string }>;
   try {
     closedToday = await db
-      .select({ pnl: tradesTable.pnl, closedAt: tradesTable.closedAt })
+      .select({ pnl: tradesTable.pnl, closedAt: tradesTable.closedAt, lotSize: tradesTable.lotSize })
       .from(tradesTable)
       .where(and(
         eq(tradesTable.accountId, conn.accountId),
@@ -835,22 +835,35 @@ async function dispatchTradeUnlocked(
     return;
   }
 
+  // A settled trade whose P&L could not be determined (Deriv returned no
+  // profit and no sell price, or the stored stake is unusable) used to refuse
+  // every subsequent trade until the next UTC midnight. That is the wrong
+  // trade-off: the guard exists to bound losses, and halting the account for
+  // the rest of the day is a far bigger cost than the gap it is reacting to.
+  // Count it at its true worst case instead — a full loss of the stake — which
+  // is conservative for the budget and keeps the system running. Same for a
+  // closed row with no timestamp, which used to block trading permanently
+  // rather than only for the day, since such a row is never aged out.
   let realizedPnlToday = 0;
+  let unknownSettlements = 0;
   for (const trade of closedToday) {
-    if (trade.closedAt == null) {
-      const reason = "Daily loss guard found a closed trade without a close timestamp; refusing execution";
-      await recordGeneratedReason(signal.id, reason);
-      logger.warn({ symbol: signal.symbol, accountId: conn.accountId }, reason);
-      return;
-    }
     const pnl = trade.pnl == null ? Number.NaN : Number(trade.pnl);
-    if (!Number.isFinite(pnl)) {
-      const reason = "Daily loss guard found missing or invalid closed-trade P&L; refusing execution";
-      await recordGeneratedReason(signal.id, reason);
-      logger.warn({ symbol: signal.symbol, accountId: conn.accountId }, reason);
-      return;
+    if (Number.isFinite(pnl) && trade.closedAt != null) {
+      realizedPnlToday += pnl;
+      continue;
     }
-    realizedPnlToday += pnl;
+    unknownSettlements++;
+    const stake = Number(trade.lotSize);
+    // No usable stake either: charge the largest stake this balance could have
+    // funded, so an unreadable row can never understate the day's damage.
+    const assumedLoss = Number.isFinite(stake) && stake > 0 ? stake : equity * eff.riskPct / 100;
+    realizedPnlToday -= assumedLoss;
+  }
+  if (unknownSettlements > 0) {
+    logger.warn(
+      { symbol: signal.symbol, accountId: conn.accountId, unknownSettlements, realizedPnlToday },
+      "Daily loss guard counted settlements with unknown P&L as full-stake losses; check the trade ledger",
+    );
   }
   const openWorstCaseStake = openTrades.reduce((total, trade) => {
     const stake = Number(trade.lotSize);

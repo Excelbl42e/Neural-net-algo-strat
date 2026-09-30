@@ -111,6 +111,14 @@ export interface FundablePositionsInput {
   maxDailyLossPct: number;
   smallAccountMaxRiskPct?: number;
   minStake?: number;
+  /**
+   * Per-asset-class cap. This bot trades forex only, and every forex pair is
+   * the same asset class, so in practice this is a second ceiling on total
+   * concurrent positions — and a lower one than `maxConcurrentPositions` at
+   * its defaults. Omitting it makes this function claim a position count the
+   * portfolio gate will refuse.
+   */
+  maxPerAssetClass?: number;
 }
 
 export interface FundablePositionsResult {
@@ -123,7 +131,7 @@ export interface FundablePositionsResult {
   /** Per stake, whether it was raised to $1.00 to keep the order off the binary path. */
   lifted: boolean[];
   /** Why the count stopped where it did, when it is short of `configured`. */
-  limitedBy: "configured" | "daily_loss_budget" | "risk_sizing" | "equity";
+  limitedBy: "configured" | "daily_loss_budget" | "risk_sizing" | "equity" | "asset_class_cap";
 }
 
 /**
@@ -139,7 +147,12 @@ export interface FundablePositionsResult {
  * honour.
  */
 export function maxFundablePositions(input: FundablePositionsInput): FundablePositionsResult {
-  const configured = Math.max(0, Math.floor(input.maxConcurrentPositions));
+  // The binding ceiling is whichever of the two caps is lower. Reporting
+  // `maxConcurrentPositions` alone promised trades the portfolio gate blocks.
+  const assetClassCap = input.maxPerAssetClass != null && Number.isFinite(input.maxPerAssetClass)
+    ? Math.max(0, Math.floor(input.maxPerAssetClass))
+    : Number.POSITIVE_INFINITY;
+  const configured = Math.min(Math.max(0, Math.floor(input.maxConcurrentPositions)), assetClassCap);
   const stakes: number[] = [];
   const lifted: boolean[] = [];
   let reserved = 0;
@@ -178,6 +191,9 @@ export function maxFundablePositions(input: FundablePositionsInput): FundablePos
     reserved += floored.stake;
   }
 
+  if (limitedBy === "configured" && assetClassCap < Math.floor(input.maxConcurrentPositions)) {
+    limitedBy = "asset_class_cap";
+  }
   return { fundable: stakes.length, configured, stakes, lifted, limitedBy };
 }
 
@@ -390,4 +406,39 @@ export function applyMultiplierFloor(input: {
     stake: MULTIPLIER_MIN_STAKE, lifted: true,
     reason: `raised $${stake.toFixed(2)} to $1.00 to stay on a multiplier: $1.00 risks at most $${liftedWorstCase.toFixed(2)}, the binary it would otherwise become risks the full $${stake.toFixed(2)}`,
   };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Settlement accounting
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Read a stored stake. Returns null for anything that is not a usable positive
+ * number, rather than a plausible-looking wrong answer.
+ *
+ * Settlement code used to write `parseFloat(trade.lotSize ?? "10")`, which
+ * invents a $10 stake for a row that has none — on a $1.00 trade that turns a
+ * $0.50 profit into an $8.50 loss. Worse, a non-numeric value makes parseFloat
+ * return NaN, and `NaN.toFixed(2)` is the string "NaN", which then goes into a
+ * numeric P&L column. Both feed the daily-loss guard, so a fabricated or
+ * corrupt stake does not just misreport history, it mis-sizes the next trade.
+ */
+export function parseStake(raw: string | null | undefined): number | null {
+  if (raw == null) return null;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+/**
+ * Realised P&L of a settled contract: what came back, minus what went in.
+ * Returns null when it genuinely cannot be determined, so callers record
+ * "unknown" instead of a number nobody can stand behind.
+ */
+export function settlementPnl(
+  proceeds: number | null | undefined,
+  stakeRaw: string | null | undefined,
+): number | null {
+  const stake = parseStake(stakeRaw);
+  if (stake == null || proceeds == null || !Number.isFinite(proceeds)) return null;
+  return Number((proceeds - stake).toFixed(2));
 }
