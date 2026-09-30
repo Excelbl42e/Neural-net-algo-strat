@@ -23,6 +23,15 @@ import { decryptSecret } from "./crypto.js";
 
 const SYNC_INTERVAL_MS     = 60_000;   // normal healthy-connection sync cadence
 const RECOVERY_INTERVAL_MS = 300_000;  // retry errored connections every 5 min
+/**
+ * Consecutive failed syncs before a connection is marked "error". A connection
+ * in error is not traded on and not monitored, and is only retried every
+ * RECOVERY_INTERVAL_MS — so marking it on the first failure turned one Deriv
+ * hiccup into five minutes of no trading and no settlement checks. A stale
+ * balance is already refused on its own (the dispatcher rejects equity older
+ * than ten minutes), so riding out two failed polls costs nothing.
+ */
+const FAILURES_BEFORE_ERROR = 3;
 
 interface SyncEntry {
   connId: number;
@@ -106,7 +115,9 @@ async function syncOne(
       );
       await db
         .update(brokerConnectionsTable)
-        .set({ status: "error", lastError: entry.lastError })
+        .set(entry.consecutiveFailures >= FAILURES_BEFORE_ERROR || conn.status !== "connected"
+          ? { status: "error", lastError: entry.lastError }
+          : { lastError: entry.lastError })
         .where(eq(brokerConnectionsTable.id, conn.id));
     } else {
       // Success — reset failure state and restore "connected"
@@ -161,7 +172,9 @@ async function syncOne(
     logger.error({ connId: conn.id, err }, "balance-sync: unexpected error — will auto-retry");
     await db
       .update(brokerConnectionsTable)
-      .set({ status: "error", lastError: entry.lastError })
+      .set(entry.consecutiveFailures >= FAILURES_BEFORE_ERROR || conn.status !== "connected"
+        ? { status: "error", lastError: entry.lastError }
+        : { lastError: entry.lastError })
       .where(eq(brokerConnectionsTable.id, conn.id))
       .catch(() => { /* ignore secondary DB error */ });
   } finally {
@@ -194,7 +207,11 @@ async function runCycle(): Promise<void> {
 
   if (connections.length === 0) return;
 
-  await Promise.allSettled(connections.map(syncOne));
+  // One at a time: Deriv allows 5 concurrent WebSocket connections per user,
+  // and the contract monitor, reconciler and dispatcher open their own.
+  for (const conn of connections) {
+    await syncOne(conn).catch(() => { /* syncOne records its own failures */ });
+  }
 }
 
 export function startBalanceSync(): void {
