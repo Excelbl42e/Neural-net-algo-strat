@@ -134,31 +134,37 @@ test("maxFundablePositions reports what really fits, not the configured ceiling"
   assert.equal(small.fundable, 1, "only one trade fits inside a $1.00 daily budget");
   assert.equal(small.limitedBy, "daily_loss_budget");
 
-  // Raising the ceiling does NOT buy meaningfully more capacity, and it has a
-  // trap: calculateCappedStake also caps each trade at equity/slots, so a
-  // higher ceiling shrinks every stake. At $5 that drops the first trade from
-  // $1.00 to $0.62 — back under Deriv's $1.00 multiplier minimum, i.e. from
-  // multiplier contracts to 3-day binaries, purely from raising a number that
-  // looks like it should only ever permit more.
+  // Raising the ceiling still cannot conjure budget that is not there. It used
+  // to be worse than useless: calculateCappedStake also caps each trade at
+  // equity/slots, so a higher ceiling shrank every stake, and at $5 that pushed
+  // the first trade from $1.00 to $0.62 — under Deriv's $1.00 multiplier
+  // minimum, turning it into a stop-less binary purely from raising a number
+  // that looks like it should only ever permit more. The multiplier floor now
+  // catches that: the stake is lifted back to $1.00 rather than falling through.
   const raised = maxFundablePositions({
     equity: 5, riskPerTradePct: 20, maxConcurrentPositions: 8, maxDailyLossPct: 20, smallAccountMaxRiskPct: 10,
   });
   assert.ok(raised.fundable <= 2, `a higher ceiling cannot conjure budget that is not there, got ${raised.fundable}`);
-  assert.ok(
-    raised.stakes[0]! < small.stakes[0]!,
-    `raising the ceiling should shrink the per-trade stake (equity/slots), got ${raised.stakes[0]} vs ${small.stakes[0]}`,
-  );
-  assert.ok(raised.stakes[0]! < 1, "and at $5 that shrink pushes the stake under the $1 multiplier minimum");
+  assert.equal(raised.stakes[0], 1, "the floor holds the stake on a multiplier despite the equity/slots squeeze");
+  assert.equal(raised.lifted[0], true, "and reports that it had to lift it");
 
-  // A wider daily-loss budget is what actually unlocks more positions.
+  // A wider daily-loss budget no longer unlocks more positions at this balance:
+  // the floor band caps the budget at 20%, because a $5 account that is allowed
+  // to lose 60% in a day is the thing this ladder exists to prevent.
   const wider = maxFundablePositions({
     equity: 5, riskPerTradePct: 20, maxConcurrentPositions: 3, maxDailyLossPct: 60, smallAccountMaxRiskPct: 10,
   });
-  assert.ok(wider.fundable > 1, `a 60% daily budget should fund more than one, got ${wider.fundable}`);
+  assert.equal(wider.fundable, 1, `the floor band holds the daily budget at 20%, got ${wider.fundable} positions`);
+
+  // Above the floor band a wider budget does buy capacity, as it should.
+  const midsize = maxFundablePositions({
+    equity: 100, riskPerTradePct: 5, maxConcurrentPositions: 3, maxDailyLossPct: 10, smallAccountMaxRiskPct: 10,
+  });
+  assert.ok(midsize.fundable > 1, `a $100 account should fund more than one trade, got ${midsize.fundable}`);
 
   // A funded account reaches its configured ceiling normally.
   const funded = maxFundablePositions({
-    equity: 1000, riskPerTradePct: 1, maxConcurrentPositions: 3, maxDailyLossPct: 5, smallAccountMaxRiskPct: 10,
+    equity: 1000, riskPerTradePct: 1, maxConcurrentPositions: 3, maxDailyLossPct: 4, smallAccountMaxRiskPct: 10,
   });
   assert.equal(funded.fundable, 3);
   assert.equal(funded.limitedBy, "configured");

@@ -45,8 +45,12 @@ export async function recordFrame(
 }
 
 export class DerivRequestTimeout extends Error {
-  constructor(public readonly sent: boolean) {
+  // Written out longhand rather than as a constructor parameter property so the
+  // module loads under `node --experimental-strip-types`, which the unit tests use.
+  readonly sent: boolean;
+  constructor(sent: boolean) {
     super(sent ? "Deriv did not answer after the request was sent" : "Deriv connection timed out");
+    this.sent = sent;
   }
 }
 

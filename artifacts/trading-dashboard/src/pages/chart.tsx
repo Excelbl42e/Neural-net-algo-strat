@@ -87,6 +87,10 @@ export default function ChartPage() {
   }, [symbolCatalog]);
 
   const currentSymbolDisplay = symbolCatalog?.find((s) => s.code === symbol)?.display ?? symbol;
+  // Not in the generated client yet; the status route returns whatever the feeder reports.
+  const rejected = (feederStatus as { rejectedSymbols?: Array<{ symbol: string; reason: string }> } | undefined)?.rejectedSymbols ?? [];
+  const rejectedHere = rejected.find((r) => r.symbol === symbol)?.reason ?? null;
+  const rejectedElsewhere = rejected.filter((r) => r.symbol !== symbol);
   const latestCandle = candleData?.candles?.at(-1);
   const latestCandleAt = latestCandle ? new Date(latestCandle.time * 1000).toLocaleString() : null;
 
@@ -140,10 +144,21 @@ export default function ChartPage() {
         </div>
       </div>
 
-      {(latestCandle || feederStatus?.lastError) && (
+      {(latestCandle || feederStatus?.lastError || rejectedHere || rejectedElsewhere.length > 0) && (
         <div className="rounded-md border border-border bg-card/50 px-3 py-2 text-xs font-mono-numbers text-muted-foreground flex flex-wrap gap-x-4 gap-y-1">
           {latestCandle && <span data-testid="text-last-stored-close">Last stored close: <strong className="text-foreground">{latestCandle.close}</strong> · candle timestamp {latestCandleAt}. The price line is not a live tick.</span>}
-          {feederStatus?.lastError && <span className="text-amber-300" data-testid="text-feeder-error">Feeder error: {feederStatus.lastError}</span>}
+          {/* A symbol Deriv refuses is not a broken feed — say which one and what it means, instead of a bare "Invalid symbol". */}
+          {rejectedHere && (
+            <span className="text-amber-300" data-testid="text-symbol-rejected">
+              Deriv refused {currentSymbolDisplay} ({symbol}): {rejectedHere}. It is not streaming; any candles shown are stored history.
+            </span>
+          )}
+          {!rejectedHere && rejectedElsewhere.length > 0 && (
+            <span className="text-muted-foreground" data-testid="text-symbols-rejected-elsewhere">
+              {rejectedElsewhere.length} other symbol{rejectedElsewhere.length === 1 ? "" : "s"} refused by Deriv and dropped: {rejectedElsewhere.map((r) => r.symbol).join(", ")}. This symbol is unaffected.
+            </span>
+          )}
+          {feederStatus?.lastError && <span className="text-amber-300" data-testid="text-feeder-error">Feed error: {feederStatus.lastError}</span>}
         </div>
       )}
 

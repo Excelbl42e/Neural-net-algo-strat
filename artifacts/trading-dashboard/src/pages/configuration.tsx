@@ -47,10 +47,43 @@ const formSchema = z.object({
 type FormValues = z.infer<typeof formSchema>;
 
 interface StakeRow {
-  equity: number; ok: boolean; stake?: number; riskPct?: number; contract?: string; reason?: string;
+  equity: number; ok: boolean; stake?: number | null; riskPct?: number; reason?: string;
+  band?: "floor" | "build" | "grow" | "steady" | "mature";
+  dailyLossPct?: number; riskCappedByBand?: boolean; lifted?: boolean;
+  contract?: "multiplier" | "binary" | null;
+  typicalLoss?: number | null; worstCaseLoss?: number | null; worstCasePctOfEquity?: number | null;
   fundablePositions?: number; configuredPositions?: number;
   positionsLimitedBy?: "configured" | "daily_loss_budget" | "risk_sizing" | "equity";
 }
+
+interface RiskBandRow {
+  band: string; from: number; to: number | null; riskPct: number; dailyLossPct: number; why: string;
+  appliedRiskPct: number; appliedDailyLossPct: number;
+}
+interface RiskBandsResponse { configuredRiskPct: number; configuredDailyLossPct: number; bands: RiskBandRow[] }
+
+/**
+ * Autotrade labels, kept in one place so the trigger and the menu cannot drift.
+ *
+ * The trigger text has to be derived from the form value rather than left to
+ * Radix. Radix learns an option's label from the `SelectItem` that renders it,
+ * and it does not mount the menu until the select is opened — so it only knows
+ * the label of whatever was selected at mount. This form mounts with hardcoded
+ * defaults ("off") and is only filled from the server afterwards by
+ * `form.reset()`, so any saved value other than "off" arrived at a moment when
+ * Radix had no label for it and the trigger rendered empty. Passing the label
+ * as `SelectValue`'s children makes it a pure function of the form value.
+ */
+const AUTOTRADE_LABEL: Record<FormValues["autotradeMode"], string> = {
+  off: "Off: signals only, no orders",
+  auto_demo: "Auto on Deriv DEMO account",
+  auto_live: "Auto on REAL account (needs passed demo self-test)",
+};
+
+/** Plain-language name for each rung of the ladder. */
+const BAND_LABEL: Record<string, string> = {
+  floor: "Floor", build: "Build", grow: "Grow", steady: "Steady", mature: "Mature",
+};
 export default function ConfigurationPage() {
   const { data: config, isLoading } = useGetBotConfig();
   const { data: summary } = useGetAccountsSummary();
@@ -127,8 +160,19 @@ export default function ConfigurationPage() {
   const stakeQuery = useQuery<StakeRow[]>({
     queryKey: ["stake-preview", equity, config?.updatedAt],
     queryFn: async () => {
-      const list = [equity > 0 ? equity : null, 5, 20, 50, 200].filter((n): n is number => n != null);
+      // Your balance first, then rungs of the ladder — deduped so a $5 account
+      // does not get its own row printed twice.
+      const list = [...new Set([equity > 0 ? equity : null, 5, 20, 50, 200].filter((n): n is number => n != null))];
       const r = await fetch(`/api/config/stake-preview?equity=${list.join(",")}`, { cache: "no-store" });
+      if (!r.ok) throw new Error(String(r.status));
+      return r.json();
+    },
+  });
+
+  const bandsQuery = useQuery<RiskBandsResponse>({
+    queryKey: ["risk-bands", config?.updatedAt],
+    queryFn: async () => {
+      const r = await fetch("/api/config/risk-bands", { cache: "no-store" });
       if (!r.ok) throw new Error(String(r.status));
       return r.json();
     },
@@ -173,19 +217,28 @@ export default function ConfigurationPage() {
           </p>
           <div className="overflow-x-auto">
             <table className="w-full text-xs font-mono-numbers">
-              <thead><tr className="text-left text-muted-foreground uppercase tracking-wider"><th className="py-1 pr-4">Equity</th><th className="pr-4">Stake</th><th className="pr-4">% of equity</th><th className="pr-4">Trades at once</th><th>Result</th></tr></thead>
+              <thead><tr className="text-left text-muted-foreground uppercase tracking-wider"><th className="py-1 pr-4">Equity</th><th className="pr-3">Band</th><th className="pr-3">Risk</th><th className="pr-3">Stake</th><th className="pr-3">Contract</th><th className="pr-3">Typical loss</th><th className="pr-3">Worst case</th><th>At once</th></tr></thead>
               <tbody>
                 {(stakeQuery.data ?? []).map((r, i) => (
-                  <tr key={`${r.equity}-${i}`} className="border-t border-border">
+                  <tr key={`${r.equity}-${i}`} className="border-t border-border" data-testid={`stake-row-${i}`}>
                     <td className="py-1 pr-4">${r.equity.toFixed(2)}{i === 0 && equity > 0 ? " (yours)" : ""}</td>
-                    <td className="pr-4">{r.ok ? `$${r.stake!.toFixed(2)}` : "skip"}</td>
-                    <td className="pr-4">{r.ok ? `${r.riskPct}%` : "-"}</td>
-                    <td className={`pr-4 ${r.fundablePositions != null && r.configuredPositions != null && r.fundablePositions < r.configuredPositions ? "text-amber-400" : ""}`}>
+                    <td className="pr-3">{r.band ? BAND_LABEL[r.band] ?? r.band : "-"}</td>
+                    <td className={`pr-3 ${r.riskCappedByBand ? "text-primary" : ""}`} title={r.riskCappedByBand ? "Tapered down from your saved setting by the balance band" : undefined}>
+                      {r.riskPct != null ? `${r.riskPct}%` : "-"}{r.riskCappedByBand ? "\u2193" : ""}
+                    </td>
+                    <td className="pr-3">{r.ok && r.stake != null ? `$${r.stake.toFixed(2)}` : "skip"}</td>
+                    <td className={`pr-3 ${r.contract === "binary" ? "text-amber-400" : ""}`}>
+                      {r.contract ?? "-"}{r.lifted ? " \u2191" : ""}
+                    </td>
+                    <td className="pr-3">{r.typicalLoss != null ? `$${r.typicalLoss.toFixed(2)}` : "-"}</td>
+                    <td className={`pr-3 ${r.worstCasePctOfEquity != null && r.worstCasePctOfEquity > 15 ? "text-amber-400" : ""}`}>
+                      {r.worstCaseLoss != null ? `$${r.worstCaseLoss.toFixed(2)} (${r.worstCasePctOfEquity}%)` : (r.reason ?? "-")}
+                    </td>
+                    <td className={r.fundablePositions != null && r.configuredPositions != null && r.fundablePositions < r.configuredPositions ? "text-amber-400" : ""}>
                       {r.fundablePositions != null && r.configuredPositions != null
                         ? `${r.fundablePositions} of ${r.configuredPositions}`
                         : "-"}
                     </td>
-                    <td className={r.ok ? "" : "text-amber-400"}>{r.ok ? r.contract : r.reason}</td>
                   </tr>
                 ))}
               </tbody>
@@ -193,34 +246,103 @@ export default function ConfigurationPage() {
           </div>
           <div className="flex items-start gap-2 rounded-lg border border-border p-3 text-[11px] text-muted-foreground">
             <TrendingUp className="w-3.5 h-3.5 mt-0.5 shrink-0 text-primary" />
-            <span>Multiplier max loss equals the stake, so stake is the true risk. Not a quote; the daily-loss budget can lower it further at order time. When the stake falls below Deriv's $1 multiplier minimum, the trade is placed as a binary option instead — with a fixed 3-day expiry, separate from the strategy's usual 4-hour to 1-day target hold, and not affected by the "Force-close after" setting below (that only applies to multipliers).</span>
+            <span>
+              <strong className="text-foreground">Typical loss</strong> is the stop the order actually carries: Deriv will not
+              accept a stop under $0.50, so at a $1.00 stake a losing trade costs $0.50 rather than the ~$0.10 the
+              strategy's 1-ATR stop would imply. <strong className="text-foreground">Worst case</strong> is a stop that
+              gaps — capped at 80% of stake on a multiplier, but the whole stake on a binary, which carries no stop at
+              all. A <span className="text-amber-400">↑</span> marks a stake raised to $1.00 to keep it off the binary
+              path; a <span className="text-primary">↓</span> marks risk tapered below your saved setting by the balance
+              band. Binaries expire in 1 day where Deriv allows it and 3 days where it does not, and the "Force-close
+              after" setting below applies to them too, so one is bought back at that age rather than running to expiry.
+            </span>
           </div>
-          {yourRow?.ok && yourRow.stake != null && yourRow.stake >= 1 && yourRow.stake < 1.2 && (
-            <div className="flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-[11px] text-amber-400" data-testid="warn-multiplier-boundary">
+          {yourRow?.lifted && (
+            <div className="flex items-start gap-2 rounded-lg border border-primary/40 bg-primary/10 p-3 text-[11px] text-primary" data-testid="note-floor-lift">
               <AlertCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
               <span>
-                You are sitting right on Deriv's $1.00 multiplier boundary — your stake is
-                ${yourRow.stake.toFixed(2)}. The moment your balance dips below
-                ${(1 / (Number(riskPerTradePctValue) / 100)).toFixed(2)}, the stake falls under $1.00 and every trade
-                becomes a 3-day binary instead: no stop-loss, no take-profit, the full stake at risk until expiry, and
-                the force-close setting will not apply. One losing trade is enough to cross it. Winning trades push you
-                back over.
+                Your risk setting sizes this trade under $1.00, which Deriv will not open as a multiplier. Rather than
+                dropping to a binary — no stop-loss, whole stake at risk — the stake is raised to exactly $1.00, whose
+                loss is bounded by its stop at $0.80. That is <strong>less</strong> money at risk than the smaller stake
+                would have been, which is why the cap is allowed to round up here and nowhere else.
               </span>
             </div>
           )}
-          {yourRow?.ok && yourRow.stake != null && yourRow.stake < 1 && (
+          {yourRow?.ok && yourRow.contract === "multiplier" && equity > 0 && equity < 5.5 && (
+            <div className="flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-[11px] text-amber-400" data-testid="warn-multiplier-boundary">
+              <AlertCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+              <span>
+                The $1.00 floor holds your trades on multipliers down to a balance of about <strong>$4.00</strong>. Below
+                that, a $1.00 stake would put more than 20% of the account at risk in one trade, so the lift stops and
+                trades become binaries: no stop-loss, no take-profit, the full stake gone on a loser. At a $0.50 typical
+                loss per trade you have roughly {Math.max(0, Math.floor((equity - 4) / 0.5))} losing trade
+                {Math.max(0, Math.floor((equity - 4) / 0.5)) === 1 ? "" : "s"} of headroom before that happens.
+              </span>
+            </div>
+          )}
+          {yourRow?.ok && yourRow.contract === "binary" && (
             <div className="flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-[11px] text-amber-400" data-testid="warn-binary-mode">
               <AlertCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
               <span>
-                Your ${yourRow.stake.toFixed(2)} stake is below Deriv's $1.00 multiplier minimum, so trades are being
-                placed as 3-day binaries — no stop-loss, no take-profit, full stake at risk until expiry. A balance of
-                ${(1 / (Number(riskPerTradePctValue) / 100)).toFixed(2)} or more at your current risk setting returns
-                you to multiplier contracts.
+                At ${equity.toFixed(2)} the account cannot carry a $1.00 multiplier without risking over 20% in a single
+                trade, so trades are placed as binaries — no stop-loss, no take-profit, full stake at risk. Because a
+                losing binary costs everything, the bot also demands a higher-confidence setup before taking one, so
+                expect fewer trades here. A balance of <strong>$4.00</strong> or more returns you to multipliers.
               </span>
             </div>
           )}
         </CardContent>
       </Card>
+
+      {bandsQuery.data && (
+        <Card className="border-border">
+          <CardHeader className="pb-3">
+            <CardTitle className="uppercase tracking-wider text-sm flex items-center gap-2">
+              <Layers className="w-4 h-4 text-primary" />
+              Risk ladder
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <p className="text-xs text-muted-foreground">
+              A single risk percentage cannot serve both ends of an account's life. At $5, 20% is not aggression — it is
+              the smallest number that reaches Deriv's $1.00 multiplier stake, and anything less drops to a stop-less
+              binary. At $500 that same 20% is a $100 swing per trade. So your saved settings are a <em>ceiling</em>, and
+              the balance applies a second one; the lower of the two is what trades. The ladder only ever tightens, never
+              loosens, and the bands are cut so that no step ever pushes the stake back under $1.00.
+            </p>
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs font-mono-numbers">
+                <thead><tr className="text-left text-muted-foreground uppercase tracking-wider"><th className="py-1 pr-4">Balance</th><th className="pr-3">Band</th><th className="pr-3">Risk / trade</th><th className="pr-3">Daily loss</th><th>Why</th></tr></thead>
+                <tbody>
+                  {bandsQuery.data.bands.map((b) => {
+                    const active = equity > 0 && equity >= b.from && (b.to == null || equity < b.to);
+                    return (
+                      <tr key={b.band} className={`border-t border-border ${active ? "text-primary" : ""}`} data-testid={`band-${b.band}`}>
+                        <td className="py-1 pr-4">
+                          {b.to == null ? `$${b.from} +` : `$${b.from} – $${b.to}`}{active ? " ←" : ""}
+                        </td>
+                        <td className="pr-3">{BAND_LABEL[b.band] ?? b.band}</td>
+                        <td className="pr-3">
+                          {b.appliedRiskPct}%{b.appliedRiskPct < b.riskPct ? ` (yours, band allows ${b.riskPct}%)` : ""}
+                        </td>
+                        <td className="pr-3">
+                          {b.appliedDailyLossPct}%{b.appliedDailyLossPct < b.dailyLossPct ? ` (yours, band allows ${b.dailyLossPct}%)` : ""}
+                        </td>
+                        <td className="text-muted-foreground font-sans">{b.why}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            <p className="text-[11px] text-muted-foreground">
+              Stakes track your balance automatically: every stake is a percentage of the equity synced from Deriv, so a
+              win raises the next one and a loss lowers it, with no action from you. The ladder is what stops that
+              compounding from turning into a $100 trade.
+            </p>
+          </CardContent>
+        </Card>
+      )}
 
       <Form {...form}>
         <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
@@ -244,12 +366,29 @@ export default function ConfigurationPage() {
               <FormField control={form.control} name="autotradeMode" render={({ field }) => (
                 <FormItem>
                   <FormLabel>Autotrade mode</FormLabel>
-                  <Select onValueChange={field.onChange} value={field.value}>
-                    <FormControl><SelectTrigger data-testid="select-autotrade-mode"><SelectValue /></SelectTrigger></FormControl>
+                  {/*
+                    The empty-value guard is load-bearing, not defensive noise.
+                    Radix keeps a hidden native <select> whose <option>s come
+                    from the items, and the items only exist once the menu has
+                    been opened. This form mounts with hardcoded defaults and is
+                    filled from the server afterwards by form.reset(), so a
+                    saved "auto_demo" arrived when Radix had no option for it —
+                    Radix then reported the mismatch back as onValueChange("")
+                    and wiped the field a moment after reset set it. That is why
+                    the mode looked blank after every reload while the server
+                    had it saved correctly the whole time. No item has an empty
+                    value, so "" can only ever be that spurious clear.
+                  */}
+                  <Select onValueChange={(v) => { if (v) field.onChange(v); }} value={field.value}>
+                    <FormControl>
+                      <SelectTrigger data-testid="select-autotrade-mode">
+                        <SelectValue placeholder="Select a mode">{AUTOTRADE_LABEL[field.value]}</SelectValue>
+                      </SelectTrigger>
+                    </FormControl>
                     <SelectContent>
-                      <SelectItem value="off">Off: signals only, no orders</SelectItem>
-                      <SelectItem value="auto_demo">Auto on Deriv DEMO account</SelectItem>
-                      <SelectItem value="auto_live">Auto on REAL account (needs passed demo self-test)</SelectItem>
+                      {(Object.keys(AUTOTRADE_LABEL) as Array<FormValues["autotradeMode"]>).map((m) => (
+                        <SelectItem key={m} value={m}>{AUTOTRADE_LABEL[m]}</SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
                   {mode === "auto_live" && (
@@ -288,10 +427,11 @@ export default function ConfigurationPage() {
                           : yourRow.positionsLimitedBy === "risk_sizing"
                             ? " — risk sizing refuses the next one at this balance."
                             : "."}
-                        {" "}Raising this number will not change that — and it can make things worse: each trade is
-                        also capped at balance ÷ this number, so a higher ceiling shrinks every stake and can push it
-                        under Deriv's $1.00 multiplier minimum, turning your trades into 3-day binaries. A larger
-                        balance or a wider daily-loss budget is what actually unlocks more positions.
+                        {" "}Raising this number will not change that. Each trade is also capped at balance ÷ this
+                        number, so a higher ceiling shrinks every stake — that used to push it under Deriv's $1.00
+                        multiplier minimum and turn trades into binaries, which the $1.00 floor now prevents, but the
+                        shrinking is still real. A larger balance is what actually unlocks more positions; a wider
+                        daily-loss budget only helps above the Floor band, which caps it at 20% whatever you set.
                       </span>
                     </div>
                   )}
@@ -307,7 +447,7 @@ export default function ConfigurationPage() {
                     <div className="flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 p-2 text-[11px] text-amber-400">
                       <AlertCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
                       <span>
-                        This is lower than "Risk per trade %" ({Number(riskPerTradePctValue)}%) above. This budget is checked after per-trade sizing and can only shrink the stake further — so on a small account it can silently refuse every trade (or force it down to the $1 multiplier floor or below) even though risk-per-trade alone would allow a bigger one. If you need the full {Number(riskPerTradePctValue)}% to go through, raise this to at least {Number(riskPerTradePctValue)}% too.
+                        This is lower than "Risk per trade %" ({Number(riskPerTradePctValue)}%) above. This budget is checked after per-trade sizing and can only shrink the stake further — so on a small account it can silently refuse every trade even though risk-per-trade alone would allow a bigger one. A stake it shrinks under $1.00 is caught by the multiplier floor rather than falling through to a binary, but a stake it refuses outright is simply no trade. If you need the full {Number(riskPerTradePctValue)}% to go through, raise this to at least {Number(riskPerTradePctValue)}% too.
                       </span>
                     </div>
                   )}
@@ -332,14 +472,14 @@ export default function ConfigurationPage() {
                 <FormItem>
                   <FormLabel>Risk per trade % (hard ceiling)</FormLabel>
                   <FormControl><Input type="number" step="0.1" min="0" max="100" {...field} data-testid="input-risk-per-trade" /></FormControl>
-                  <FormDescription className="text-[11px]">The computed stake cannot exceed this share of verified USD equity; trades below the broker minimum are refused.</FormDescription>
+                  <FormDescription className="text-[11px]">A ceiling on the share of verified USD equity one trade may stake, and the balance band applies a second ceiling on top — the lower of the two is what trades. The single exception is the $1.00 multiplier floor, which may round a stake up because doing so lowers money at risk. Trades below the broker minimum are refused.</FormDescription>
                   {Number(riskPerTradePctValue) >= 10 && (
                     <div className="flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 p-2 text-[11px] text-amber-400">
                       <AlertCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
                       <span>
-                        At {Number(riskPerTradePctValue)}%, a single losing multiplier trade (max loss = stake) can cost roughly {Number(riskPerTradePctValue)}% of your equity in one shot
-                        {equity > 0 ? ` — about $${(equity * Number(riskPerTradePctValue) / 100).toFixed(2)} on your current $${equity.toFixed(2)} balance` : ""}.
-                        This is well above the 1% fixed-fractional default. It's a deliberate way to clear Deriv's $1 multiplier minimum on a very small account, not a setting to leave in place once equity grows — lower it back toward 1-2% as your balance increases.
+                        At {Number(riskPerTradePctValue)}%, one losing multiplier trade can cost up to about {(Number(riskPerTradePctValue) * 0.8).toFixed(0)}% of your equity — its stop is capped at 80% of stake
+                        {equity > 0 ? `, so roughly $${(equity * Number(riskPerTradePctValue) / 100 * 0.8).toFixed(2)} on your current $${equity.toFixed(2)} balance` : ""}.
+                        This is well above the 1% fixed-fractional default. It is a deliberate way to clear Deriv's $1 multiplier minimum on a very small account. You no longer have to remember to lower it: the risk ladder above tapers it to 10%, 5%, 2% and finally 1% as the balance grows, and this setting stays as the ceiling it never rises above.
                       </span>
                     </div>
                   )}
@@ -365,7 +505,7 @@ export default function ConfigurationPage() {
                 ["newsBlackoutBeforeMin", "News blackout: minutes before a high-impact release", "1"],
                 ["newsBlackoutAfterMin", "News blackout: minutes after a high-impact release", "1"],
                 ["maxSpreadCostPct", "Max indicative trading cost (% of stake)", "0.01"],
-                ["maxPositionHoldHours", "Force-close a multiplier position after this many hours if neither SL nor TP has hit", "1"],
+                ["maxPositionHoldHours", "Buy back any open position after this many hours — a multiplier that has hit neither SL nor TP, or a binary still short of its expiry", "1"],
               ] as const).map(([name, label, step]) => (
                 <FormField key={name} control={form.control} name={name} render={({ field }) => (
                   <FormItem>

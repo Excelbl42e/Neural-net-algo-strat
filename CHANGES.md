@@ -1,5 +1,115 @@
 # Changes in this build (vs. your Replit export)
 
+## Fix: "Invalid symbol" that named no symbol and never cleared
+
+The Chart page showed `Feeder error: Invalid symbol.` next to a feed badge reading `FEED CONNECTED · 28 symbols`. Both were true at once, and neither was useful.
+
+Three separate faults:
+
+- **The error named no symbol.** Deriv echoes the failing request back in `echo_req`, which is the only way to learn which of the 28 subscriptions it refused. That field was being parsed and then discarded, leaving a message nothing could be done about.
+- **It never cleared.** `lastError` was only reset when a new socket opened, so a single refused symbol pinned an error into the status forever while the other 27 streamed normally — making a healthy feed look broken indefinitely.
+- **The refused symbol was re-subscribed on every reconnect**, guaranteeing the same rejection again.
+
+Now: the symbol is named, dropped from the subscription set so it is not asked for again, and recorded with Deriv's reason. Any tick arriving clears a stale feed error, because a tick is proof the feed is alive. The Chart page distinguishes the three cases it could not before — *this* symbol was refused and is not streaming; *other* symbols were refused and this one is fine; or the feed itself is in trouble.
+
+## Fix: smaller honesty problems found in the same pass
+
+- **"Generate signals" always reported success.** The worker returns immediately without doing anything if a cycle is already in flight, and the route reported `Signal generation cycle started` regardless. It now says which of the two actually happened.
+- **The Strategy page still described the LLM as a budget stopgap** — "while no AI budget is configured… ready for GPT". The language model is gone by design, with no API key and no per-signal cost. The four concepts that are listed and scored but not independently computed (Parabolic SAR, Pivot Point Confluence, SMT Divergence, Inducement) were correct and are stated plainly.
+
+Verified: 46 tests pass, all 11 pages render with zero console errors, no overflow at 1440px or 375px, and the Autotrade dropdown survives reloads.
+
+
+## Fix: Autotrade mode went blank on every reload
+
+Reported twice; it was a real bug, and the cause was not where it looked.
+
+The server was never wrong. The mode saved correctly, the banner across the top read `MODE: AUTO_DEMO`, and `/api/config` returned `"autotradeMode":"auto_demo"` to the page. Only the dropdown on the Configuration page rendered empty.
+
+Traced by instrumenting the form. `form.reset()` set the field to `auto_demo` correctly — and roughly a second later something set it back to an empty string:
+
+```
+DBG effect: config.autotradeMode = "auto_demo"
+DBG after reset: getValues = "auto_demo"
+DBG 1s later:    getValues = ""
+```
+
+That something is the Select component itself. Radix keeps a hidden native `<select>` for form integration, whose `<option>`s come from the menu items — and it does not mount the menu until the select is first opened. This form mounts with hardcoded defaults (`off`) and is only filled from the server afterwards, so a saved `auto_demo` arrived at a moment when Radix had no option matching it. Radix reported that mismatch back as `onValueChange("")`, which wiped the form field just after `reset()` had set it.
+
+Which is why the symptom was so specific: `off` always displayed fine (it is the value present at mount), and only `auto_demo` and `auto_live` disappeared.
+
+Two changes:
+- Empty values coming back from the Select are ignored. No item has an empty value, so `""` can only ever be that spurious clear, never a real choice.
+- The trigger's text is now derived from the form value through a single `AUTOTRADE_LABEL` map used for both the trigger and the menu, instead of relying on Radix to know the label of an item it has not mounted. The trigger and the options can no longer drift apart either.
+
+Verified in a browser against a database holding `auto_demo`: correct after reload, correct after a second reload, correct after picking a different mode and saving. Zero page errors.
+
+Worth noting for later: only this page populates a dropdown from server data, so no other Select had the bug. Any new one filled the same way would need the same care.
+
+
+## Update: the stake ladder — risk that adapts to the balance
+
+Sizing was one flat percentage applied at every balance, which cannot be right at both ends of this account's life. At $5, 20% is not aggression: it is the *smallest* number that reaches Deriv's $1.00 multiplier stake. At $500 that same 20% is a $100 swing per trade. Your saved settings are now a ceiling, and the balance applies a second one; the lower of the two trades.
+
+| balance | band | risk | stake | contract | typical loss | worst case |
+|---|---|---|---|---|---|---|
+| $3.00 | Floor | 20% | $0.60 | binary | $0.60 | $0.60 (20%) |
+| $4.99 | Floor | 20% | **$1.00** ↑ | multiplier | $0.50 | $0.80 (16%) |
+| $5.00 | Floor | 20% | $1.00 | multiplier | $0.50 | $0.80 (16%) |
+| $20.00 | Build | 10% ↓ | $2.00 | multiplier | $0.50 | $1.60 (8%) |
+| $50.00 | Grow | 5% ↓ | $2.50 | multiplier | $0.50 | $2.00 (4%) |
+| $200.00 | Steady | 2% ↓ | $4.00 | multiplier | $0.50 | $3.20 (1.6%) |
+| $1000.00 | Mature | 1% ↓ | $10.00 | multiplier | $1.00 | $8.00 (0.8%) |
+
+Worst case as a share of the balance falls the whole way down that column — 20% to 0.8%. That property, not any single setting, is what stops a losing run from ending the account, and there is a test asserting it stays true.
+
+### The $4.99 row is the important one
+
+Previously a $0.99 stake was sent as a binary, because Deriv will not open a multiplier under $1.00. That is backwards. A binary has no stop-loss: a loser costs the entire stake. A $1.00 multiplier's loss is bounded by its attached stop, capped at 80% of stake. **So $1.00 as a multiplier risks at most $0.80, while $0.99 as a binary risks a certain $0.99** — shrinking the stake *increased* money at risk, which is the opposite of what a risk cap is for.
+
+A sub-$1.00 stake is now raised to exactly $1.00 whenever the balance can carry it, which holds down to about $4.00 (below that, $0.80 is more than 20% of the account and the lift correctly stops). This is the one and only place a cap is allowed to round up, and it does so because it lowers risk.
+
+**A correction to what I told you earlier:** I said a typical loss on a $1.00 multiplier was $0.10–$0.15. That is wrong. Deriv will not accept a stop under **$0.50**, so the order builder clamps it there — the strategy's own 1-ATR stop models to about $0.10 but cannot be sent. A losing trade at the $1.00 floor costs **$0.50**, half the stake. The floor stops binding once the stake passes about $5. The table now shows this per row rather than leaving it to be discovered.
+
+### The bands
+
+`Floor` under $12 (20% / 20% daily) · `Build` $12–$50 (10% / 15%) · `Grow` $50–$200 (5% / 10%) · `Steady` $200–$1000 (2% / 6%) · `Mature` $1000+ (1% / 4%).
+
+The cuts are not arbitrary: at each boundary the stake stays above $1.00 ($12 x 10% = $1.20, $50 x 5% = $2.50, $200 x 2% = $4.00, $1000 x 1% = $10), so stepping risk down never drops the account back onto the binary path. A test enforces that. The ladder can only tighten a configured setting, never loosen it — set 1% and you get 1% everywhere.
+
+One consequence worth knowing: in the Floor band the daily-loss budget is held at 20% whatever you set. A $5 account allowed to lose 60% in a day is exactly the outcome this ladder exists to prevent. At your current 20/20 settings nothing changes today.
+
+### The strategy now knows which contract it is getting
+
+A binary costs the whole stake for being wrong where a multiplier costs its stop, so the binary path asks for more evidence: **minimum confidence + 0.08** before it will take one. Below ~$4.00 you will see fewer trades, deliberately.
+
+### Seeing it
+
+The Configuration page shows band, effective risk, stake, contract, typical loss, worst case and worst case as a share of equity, per balance — and a new **Risk ladder** panel serving the actual bands from the sizing code rather than restating them, with your current band marked. Both come from `describeStakePlan()`, which calls the real sizing functions rather than re-deriving them, so the preview cannot drift from what the worker sends.
+
+46 tests pass. Verified live at $5.00: the table, the ladder and both advisories render correctly, all 11 pages have zero console errors and no overflow at 1440px or 375px.
+
+
+## Update: keep the hold inside a day, size against live equity, drop the threshold to 0.70
+
+Four things, all from the same question: *if profit grows do stakes grow, and is anything holding for more than a day?*
+
+**Stakes do grow with equity — and now they refuse to grow against a stale number.** Every stake is a percentage of `accounts.equity`, read fresh from the database at the moment the order is sized, and `balance-sync` overwrites that row from Deriv every 60 seconds. So a win raises the next stake without any action from you, and a loss lowers it. The gap was the failure case: if the sync breaks, the figure freezes, and sizing keeps working off money that may no longer be there. The worker now refuses to size a trade when the broker connection has not synced in 10 minutes (the poller runs every 60s and retries a failing connection every 5 min, so 10 minutes means broken, not slow) and records it as a visible rejection instead of trading on a guess.
+
+**Binaries no longer run for three days.** Two separate problems, both fixed:
+
+- The binary duration was a hardcoded 3 days, because 3 days was the only value ever confirmed to work live (a 5-minute attempt came back `TradingDurationNotAllowed`). It now *asks* Deriv first: a quote-only `proposal` at 1 day, which never creates a contract, and only falls back to the verified 3 days if Deriv actually refuses. The answer is cached per symbol for 6 hours, so it costs one extra round-trip, not one per trade, and the chosen duration and the reason for it are recorded on the trade rather than left silent.
+- The `maxPositionHoldHours` force-close **explicitly skipped binaries** — the filter was `contractType !== "multiplier"`, so a binary was exempt from the one control meant to bound holding time. That was the real conflict with the 4h–1day target: a fallback 3-day binary would have run for three days regardless of the setting. Both contract types are now bought back at that age. Where Deriv declines a buyback the contract still settles at expiry, and that is logged once per contract instead of every cycle.
+
+Net effect at the 36-hour setting: a binary resolves within 24 hours where Deriv allows a 1-day contract, and within 36 hours where it does not.
+
+**Minimum confidence: 0.78 → 0.70.** The expert judge replaced the LLM judge and produces confidence on a different scale (0.35 base, plus up to 0.40 from confluence and 0.25 from structure). A saved 0.78 was calibrated against the old scale and is far stricter than intended on the new one — on a small account that mostly means no trades at all. A one-time boot migration rewrites it, guarded by a marker row so it runs exactly once and only touches a row still holding the old default. Verified against Postgres: it moves 0.780 → 0.700 on the first boot, and if you later set 0.78 deliberately it is left alone.
+
+**Seven unit tests were silently not running.** The `forex-readiness` suite died on import with `ERR_MODULE_NOT_FOUND` — the source uses bundler-style `.js` specifiers that do not exist on disk when Node runs the `.ts` directly — and the failure was easy to read as one flaky file. A small resolution hook maps `./x.js` to `./x.ts` only when the `.js` genuinely is not there, and one constructor parameter property that strip-only mode rejects was written out longhand. **32 tests pass**, up from 24 passing and 1 dead file. `pnpm test` in `artifacts/api-server` now runs them.
+
+Verified live: server booted against Postgres, the migration applied cleanly at boot with no warnings, `/api/config` reports `minConfidence: 0.7`, and the configuration page renders with no console errors and no horizontal overflow at 1440px.
+
+
 ## Update: warn about the $1.00 multiplier boundary before it is crossed
 Final pre-funding check, run by walking a $5 account through the real sizing functions rather than reasoning about them.
 
