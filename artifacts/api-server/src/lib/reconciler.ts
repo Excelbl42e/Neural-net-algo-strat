@@ -160,12 +160,30 @@ export async function reconcileOnce(): Promise<{ resolved: number; pending: numb
 
   for (const { s: signal } of orphans) {
     if (signal.contractId == null) { pending++; continue; }
-    const conn = conns.find((c) => c.accountId != null);
-    if (!conn || conn.accountId == null) { pending++; continue; }
-    const list = await load(conn);
-    const info = list?.find((c) => c.contractId === signal.contractId) ?? null;
+    // Link the trade to the account that actually holds the contract. This
+    // used to take the first connected account, which with a demo and a real
+    // connection could file a real trade under demo: the contract monitor
+    // would then ask the demo account about it forever, and the real
+    // account's loss budget and position count would never see it.
+    let owner: { conn: Conn; info: DerivContractInfo } | null = null;
+    let allPolled = true;
+    for (const conn of conns) {
+      if (conn.accountId == null) continue;
+      const list = await load(conn);
+      if (!list) { allPolled = false; continue; }
+      const info = list.find((c) => c.contractId === signal.contractId);
+      if (info) { owner = { conn, info }; break; }
+    }
+    if (!owner) {
+      // Not in any account's open contracts or recent history. Leave it for
+      // the next poll rather than guess an account; the lock this holds says
+      // which signal is waiting.
+      if (allPolled) logger.warn({ signalId: signal.id, contractId: signal.contractId }, "reconciler: executed contract not found on any connected account yet");
+      pending++;
+      continue;
+    }
     const claim = parseClaim(signal.executionReason);
-    await createTradeFor(signal, signal.contractId, info, claim.stake ?? info?.buyPrice ?? null, conn.accountId);
+    await createTradeFor(signal, signal.contractId, owner.info, claim.stake ?? owner.info.buyPrice ?? null, owner.conn.accountId!);
     resolved++;
   }
   return { resolved, pending };

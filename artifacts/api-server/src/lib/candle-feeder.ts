@@ -73,6 +73,8 @@ const PRUNE_STARTUP_DELAY_MS = 90_000;
  */
 const TICK_RESUBSCRIBE_AFTER_MS = 5 * 60_000;
 const TICK_RESUBSCRIBE_CHECK_MS = 60_000;
+/** Deriv's documented keep-alive: "send a ping every 30 seconds". */
+const PING_EVERY_MS = 30_000;
 
 /**
  * Only a symbol Deriv does not recognise is dropped for good. Everything else
@@ -103,6 +105,7 @@ class CandleFeeder {
   private retryingSymbols = new Map<string, string>();
   private lastResubscribeAt = new Map<string, number>();
   private resubscribeTimer: NodeJS.Timeout | null = null;
+  private pingTimer: NodeJS.Timeout | null = null;
   private buckets = new Map<string, OHLC>();
   private lastTick = new Map<string, { price: number; at: number }>();
   private lastError: string | null = null;
@@ -124,6 +127,16 @@ class CandleFeeder {
     this.pruneTimer.unref?.();
     this.resubscribeTimer ??= setInterval(() => this.resubscribeSilentSymbols(), TICK_RESUBSCRIBE_CHECK_MS);
     this.resubscribeTimer.unref?.();
+    // Incoming ticks are not a keep-alive: Deriv asks clients to send a ping
+    // every 30s, and a connection that only listens can be dropped, costing a
+    // reconnect, a full history backfill and a gap in live prices each time.
+    this.pingTimer ??= setInterval(() => {
+      const ws = this.ws;
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        try { ws.send(JSON.stringify({ ping: 1 })); } catch { /* the close handler reconnects */ }
+      }
+    }, PING_EVERY_MS);
+    this.pingTimer.unref?.();
     // Always connect — the user can lazy-subscribe symbols later via ensureSubscribed().
     this.connect();
   }
