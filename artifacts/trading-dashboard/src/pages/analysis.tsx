@@ -14,22 +14,21 @@ const TIMEFRAMES = ["M5", "M15", "M30", "H1", "H4", "D1"];
 interface Rejection {
   at: string;
   symbol: string;
-  stage: "pre_gpt" | "no_tick" | "expert_judge" | "post_gpt" | "portfolio" | "sizing" | "entry" | "execution" | "forex_readiness";
+  stage: "poll" | "pre_gpt" | "no_tick" | "expert_judge" | "post_gpt" | "portfolio" | "sizing" | "entry" | "execution" | "forex_readiness";
   reason: string;
   metrics?: Record<string, unknown>;
 }
 
 /**
- * Plain-language name for each pipeline stage. The wire names `pre_gpt` and
- * `post_gpt` are kept in the data so entries recorded before the language
- * model was removed still render, but there is no GPT in the path — they are
- * the quant pre-filter and the post-judge geometry checks.
+ * Plain-language name for each pipeline stage. `pre_gpt`, `expert_judge` and
+ * `post_gpt` are the retired ICT pipeline, kept so stored entries still render.
  */
 const STAGE_LABEL: Record<Rejection["stage"], string> = {
+  poll: "Strategy poll",
   no_tick: "No price tick",
-  pre_gpt: "Quant pre-filter",
-  expert_judge: "Expert judge",
-  post_gpt: "Geometry / claim check",
+  pre_gpt: "Quant pre-filter (retired)",
+  expert_judge: "ICT judge (retired)",
+  post_gpt: "Geometry check (retired)",
   portfolio: "Portfolio caps",
   sizing: "Risk sizing",
   entry: "Entry timing",

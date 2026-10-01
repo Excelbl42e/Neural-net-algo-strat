@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, eq, notInArray } from "drizzle-orm";
 import { botConfigTable, brokerConnectionsTable, strategiesTable, db } from "@workspace/db";
 import { logger } from "./logger.js";
 import { encryptSecret, isEncrypted } from "./crypto.js";
@@ -37,7 +37,11 @@ export async function seedDefaults(): Promise<void> {
   await seedStrategyLibrary();
 }
 
-/** Upserts the hardcoded ICT + quant/TA strategy library into strategiesTable, by name, every boot. */
+/**
+ * Upserts the poll's 60 strategies into strategiesTable, by name, every boot,
+ * and marks every other row inactive — the retired ICT concepts stay in the
+ * table for their trade history but no longer show as active strategies.
+ */
 export async function seedStrategyLibrary(): Promise<void> {
   for (const s of STRATEGY_LIBRARY) {
     const [existingRow] = await db.select({ id: strategiesTable.id }).from(strategiesTable).where(eq(strategiesTable.name, s.name)).limit(1);
@@ -56,5 +60,8 @@ export async function seedStrategyLibrary(): Promise<void> {
       await db.insert(strategiesTable).values(values);
     }
   }
-  logger.info({ count: STRATEGY_LIBRARY.length }, "Hardcoded strategy library seeded");
+  const retired = await db.update(strategiesTable).set({ active: false })
+    .where(and(eq(strategiesTable.active, true), notInArray(strategiesTable.name, STRATEGY_LIBRARY.map((s) => s.name))))
+    .returning({ id: strategiesTable.id });
+  logger.info({ count: STRATEGY_LIBRARY.length, retired: retired.length }, "Strategy library seeded");
 }

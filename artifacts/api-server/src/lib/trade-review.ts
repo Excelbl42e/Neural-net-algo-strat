@@ -7,24 +7,18 @@ import {
   tradesTable,
   type Trade,
 } from "@workspace/db";
+import { STRATEGIES } from "./poll-strategies.js";
 
-const CONCEPT_PATTERNS: Array<[string, RegExp]> = [
-  ["fair value gap", /\bfair[\s-]?value[\s-]?gaps?\b|\bfvg\b/i],
-  ["order block", /\border[\s-]?blocks?\b|\bob\b/i],
-  ["liquidity sweep", /\bliquidity\s+sweeps?\b|\bstop\s+hunt\b/i],
-  ["breaker block", /\bbreaker\s+blocks?\b/i],
-  ["mitigation block", /\bmitigation\s+blocks?\b/i],
-  ["market structure shift", /\bmarket\s+structure\s+shift\b|\bmss\b/i],
-  ["change of character", /\bchange\s+of\s+character\b|\bchoch\b/i],
-  ["displacement", /\bdisplacement\b/i],
-  ["premium and discount", /\bpremium\b|\bdiscount\b/i],
-  ["optimal trade entry", /\boptimal\s+trade\s+entry\b|\bote\b/i],
-  ["liquidity", /\bliquidity\b/i],
-];
-
+/**
+ * The strategies that voted for the trade, read from the signal's reasoning
+ * ("... Agreeing: A, B, C. Against: ..."), so each one's record reflects the
+ * trades it actually supported. Trades from before the poll credit none.
+ */
 function claimedConcepts(trade: Trade): string[] {
-  const text = `${trade.strategy} ${trade.reasonChain}`;
-  return CONCEPT_PATTERNS.filter(([, pattern]) => pattern.test(text)).map(([name]) => name);
+  const m = /Agreeing: (.*?)\.(?: Against:| Stop )/.exec(trade.reasonChain ?? "");
+  if (!m) return [];
+  const listed = new Set(m[1]!.split(", "));
+  return STRATEGIES.filter((s) => listed.has(s.name)).map((s) => s.name);
 }
 
 function outcomeFor(pnl: number | null): "win" | "loss" | "breakeven" | "unknown" {
@@ -251,28 +245,6 @@ export async function reviewClosedTrade(trade: Trade): Promise<boolean> {
       }
     }
     return true;
-  });
-}
-
-/** Apply a sample-adjusted historical concept gate; unseen concepts remain eligible. */
-export async function scoreConcepts(
-  concepts: string[],
-  options: { threshold?: number; minSamples?: number; priorSamples?: number } = {},
-): Promise<Array<{ concept: string; score: number; sampleCount: number; eligible: boolean }>> {
-  const threshold = options.threshold ?? 0.4;
-  const minSamples = options.minSamples ?? 8;
-  const priorSamples = options.priorSamples ?? 4;
-  const rows = await db.select().from(tradePerformanceTable).where(eq(tradePerformanceTable.dimension, "concept"));
-  const byKey = new Map(rows.map((r) => [r.key.toLowerCase(), r]));
-  return concepts.map((concept) => {
-    const row = byKey.get(concept.toLowerCase());
-    if (!row) return { concept, score: 0.5, sampleCount: 0, eligible: true };
-    const n = Number(row.weightedTrades);
-    const wins = Number(row.weightedWins);
-    const score = (wins + 0.5 * priorSamples) / (n + priorSamples);
-    const sampleCount = row.tradeCount;
-    const eligible = sampleCount < minSamples || score >= threshold;
-    return { concept, score, sampleCount, eligible };
   });
 }
 

@@ -70,6 +70,29 @@ export async function ensureSchema(): Promise<void> {
           min_risk_reward = CASE WHEN min_risk_reward = 2.00 THEN 1.50 ELSE min_risk_reward END,
           max_position_hold_hours = CASE WHEN max_position_hold_hours = 36 THEN 24 ELSE max_position_hold_hours END
         WHERE EXISTS (SELECT 1 FROM once)`,
+    // One-time: min_confidence now means the strategy poll's agreement
+    // threshold (share of voting strategies that must agree), not the retired
+    // ICT judge's evidence score, so it is set once to the 70% rule.
+    sql`WITH once AS (
+          INSERT INTO app_secrets (key, value)
+          VALUES ('migration:strategy_poll_v1', now()::text)
+          ON CONFLICT (key) DO NOTHING
+          RETURNING key
+        )
+        UPDATE bot_config SET min_confidence = 0.70
+        WHERE EXISTS (SELECT 1 FROM once)`,
+    // Same upgrade: ICT signals still waiting for their entry when the poll
+    // took over must not be traded by the replay pass afterwards.
+    sql`WITH once AS (
+          INSERT INTO app_secrets (key, value)
+          VALUES ('migration:strategy_poll_pending_v1', now()::text)
+          ON CONFLICT (key) DO NOTHING
+          RETURNING key
+        )
+        UPDATE signals SET status = 'cancelled', execution_status = 'rejected',
+          execution_reason = 'Retired ICT signal: the strategy poll replaced the ICT judge'
+        WHERE status = 'active' AND execution_status = 'generated' AND dispatched_at IS NULL
+          AND EXISTS (SELECT 1 FROM once)`,
   ];
   for (const stmt of stmts) {
     try {

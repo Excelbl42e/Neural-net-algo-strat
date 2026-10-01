@@ -1,5 +1,33 @@
 # Changes in this build (vs. your Replit export)
 
+## ICT replaced by a 60-strategy poll
+
+### Why ICT is gone
+Re-run over a full year of Deriv candles (Nov 2025 – Sep 2026, all 14 pairs), the ICT setting the bot traded (sweep → structure break → FVG, reward:risk 1.5 at the fill) took 45 trades at a 33% win rate and lost **$2.16** on $1 x100. The three-month test that looked positive (+$0.71) was one good September. No ICT variant made money over the year; taking every ICT setup lost $10.48. The judge, its filters (ATR percentile, efficiency ratio, geometry, premium/discount, claim checks) and the concept-suppression gate are deleted.
+
+### What trades now
+- **60 strategies vote on every closed M30 candle of every pair: 40 quantitative, 20 technical.** Quantitative: Markov chains (up/down, three-state, second-order, candle-type, regime, run-length uplift), Monte Carlo (bootstrap, block bootstrap, permutation test), Brownian barrier probability, Fourier (dominant cycle, low-pass projection, spectral trend), Kalman filter, Hurst exponent, DFA, Ornstein-Uhlenbeck, z-score, autocorrelation, variance ratio, regression t-stat, Bayesian posterior, logistic regression, k-nearest-neighbour patterns, intraday and weekday-hour seasonality, currency strength (momentum and reversion across all 14 pairs), cross-sectional momentum, KAMA, Ehlers super smoother and instantaneous trendline, Haar wavelet, fractal dimension, entropy, and more. Technical: RSI, MACD, EMA 20/50, Bollinger, Stochastic, ADX/DMI, Ichimoku, Keltner, ROC, Williams %R, CCI, Donchian, Parabolic SAR, daily pivots, **Fibonacci retracement + MACD**, Supertrend, Aroon, Heikin-Ashi, TRIX, Vortex. None use volume (Deriv forex candles have none).
+- **The rule: when at least 70% of the strategies with an opinion agree, and at least 30 of the 60 have one, the bot buys or sells at market.** "Minimum signal confidence" on the Configuration page is now this agreement threshold; it is set to 0.70 once on upgrade.
+- **Stop 8 M30 ATRs, target 1.5× the stop after Deriv's commission, closed at the 24-hour hold limit** (and before Deriv's Friday close) if neither is reached. That is about a day's range, so most trades run to the hold limit: the stop and target are sized to the 24-hour hold.
+- **One position per pair.** The account rules are unchanged: Deriv trading hours, no new trades from Friday 16:00 UTC, sessions, news blackout, cooldown, daily loss budget, $1.00 multiplier floor, stop cap, currency-leg and asset-class caps, Deriv's minimum stop and take-profit, and the live cost quote.
+- Each strategy uses only closed candles (tested: adding later candles never changes an earlier vote). The live scan computes only the newest candle and votes exactly as the backtest does (tested against the full computation); polling all 14 pairs takes about a second.
+- The Strategy page lists the 60 voters, generated from the voting code. Each scan records the vote count for every pair it did not trade (Analysis → "Strategy poll"). Trade reviews credit the strategies that voted for each trade.
+
+### Deriv history
+Deriv returns at most about 695 M30 candles per `ticks_history` request (measured). The poll needs about 87 trading days, so the candle feed now fetches M30 history in six pages and keeps M30 candles for 130 days. A page's first candle can start mid-bucket (e.g. 11:20:58 on a 30-minute bar); such partial candles are no longer stored.
+
+### Backtest: it does not make money
+Replayed with the bot's own poll code, Deriv's measured commission ($0.02 per $1 x100 in London/New York hours, $0.06 otherwise), the $0.10 minimum stop and take-profit, the 80% stop cap, the live sessions and Friday rules. A candle that reaches both stop and target counts as a loss.
+
+| | Trades | Win % | Net | Per $1 trade |
+|---|---|---|---|---|
+| Every signal, one per pair (Nov–Jun) | 1,236 | 48.5 | −$8.60 | −0.7¢ |
+| Every signal, one per pair (Jul–Sep, out of sample) | 571 | 46.2 | −$4.09 | −0.7¢ |
+| $5 account, one position at a time (Nov–Jun) | 55 | 38.2 | −$3.54 | |
+| $5 account, one position at a time (Jul–Sep) | 68 | 47.1 | +$1.34 | |
+
+Before commission the poll's direction is worth +0.03 to +0.05 of the risk per trade; Deriv's commission is about the same size, so after costs it is slightly negative. On a $5 account, whether a given quarter ends up or down is mostly the order the trades came in. Requiring 80% agreement did worse. Selecting only the strategies that scored best on Nov–Jun did not help out of sample. Each strategy alone, and ICT, did worse than the poll per trade.
+
 ## Trade the backtest's middle setting
 
 Chosen by the operator after the three-month backtest:
