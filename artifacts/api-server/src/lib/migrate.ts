@@ -29,7 +29,7 @@ export async function ensureSchema(): Promise<void> {
     sql`ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS atr_percentile_max numeric(5,2) NOT NULL DEFAULT 90.00`,
     sql`ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS efficiency_ratio_min numeric(5,3) NOT NULL DEFAULT 0.150`,
     sql`ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS min_stop_atr numeric(5,2) NOT NULL DEFAULT 1.00`,
-    sql`ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS max_per_asset_class integer NOT NULL DEFAULT 2`,
+    sql`ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS max_per_asset_class integer NOT NULL DEFAULT 14`,
     sql`ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS news_blackout_before_min integer NOT NULL DEFAULT 30`,
     sql`ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS news_blackout_after_min integer NOT NULL DEFAULT 30`,
     sql`ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS max_spread_cost_pct numeric(5,2) NOT NULL DEFAULT 0.50`,
@@ -96,6 +96,19 @@ export async function ensureSchema(): Promise<void> {
         )
         UPDATE bot_config SET risk_per_trade_pct = 5.00
         WHERE EXISTS (SELECT 1 FROM once)`,
+    // One-time: every majority vote opens a position (one per pair) until one
+    // stake is left, as the operator asked, so the position ceilings go to 14
+    // (the number of pairs). A later choice is kept.
+    sql`WITH once AS (
+          INSERT INTO app_secrets (key, value)
+          VALUES ('migration:every_vote_until_reserve_v1', now()::text)
+          ON CONFLICT (key) DO NOTHING
+          RETURNING key
+        )
+        UPDATE bot_config SET max_concurrent_positions = 14, max_per_asset_class = 14
+        WHERE EXISTS (SELECT 1 FROM once)`,
+    sql`ALTER TABLE bot_config ALTER COLUMN max_concurrent_positions SET DEFAULT 14`,
+    sql`ALTER TABLE bot_config ALTER COLUMN max_per_asset_class SET DEFAULT 14`,
     // Same upgrade: ICT signals still waiting for their entry when the poll
     // took over must not be traded by the replay pass afterwards.
     sql`WITH once AS (

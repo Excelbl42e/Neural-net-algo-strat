@@ -63,7 +63,7 @@ let cachedAutotradeMode: string | null = null;
 let activeMode: "auto_demo" | "auto_live" | null = null;
 
 let activeConfig: { smallAccountMaxRiskPct: number; minConfidence: number; minRiskReward: number; maxPerAssetClass: number } = {
-  smallAccountMaxRiskPct: 10, minConfidence: 0.5, minRiskReward: 1.5, maxPerAssetClass: 2,
+  smallAccountMaxRiskPct: 10, minConfidence: 0.5, minRiskReward: 1.5, maxPerAssetClass: 14,
 };
 
 /** An order is never placed against a quote older than this. Ticks arrive every second or two on the majors. */
@@ -821,7 +821,7 @@ function applyConfig(config: BotConfigRow): void {
     minConfidence: Number.isFinite(parsedMinConfidence) ? parsedMinConfidence : 0.5,
     // Same reasoning: an unreadable floor must not quietly become "no floor".
     minRiskReward: Number.isFinite(parsedMinRr) && parsedMinRr > 0 ? parsedMinRr : 1.5,
-    maxPerAssetClass: Number.isFinite(config.maxPerAssetClass) && config.maxPerAssetClass > 0 ? config.maxPerAssetClass : 2,
+    maxPerAssetClass: Number.isFinite(config.maxPerAssetClass) && config.maxPerAssetClass > 0 ? config.maxPerAssetClass : 14,
   };
 }
 

@@ -26,7 +26,7 @@ const formSchema = z.object({
   enabled: z.boolean(),
   autotradeMode: z.enum(["off", "auto_demo", "auto_live"]),
   riskPerTradePct: z.coerce.number().min(0).max(100),
-  maxConcurrentPositions: z.coerce.number().int().min(1).max(10),
+  maxConcurrentPositions: z.coerce.number().int().min(1).max(100),
   smallAccountMaxRiskPct: z.coerce.number().min(0).max(100),
   minRiskReward: z.coerce.number().min(0).max(20),
   atrPercentileMin: z.coerce.number().min(0).max(100),
@@ -96,14 +96,14 @@ export default function ConfigurationPage() {
       enabled: false,
       autotradeMode: "off",
       riskPerTradePct: 5,
-      maxConcurrentPositions: 3,
+      maxConcurrentPositions: 14,
       smallAccountMaxRiskPct: 10,
       minRiskReward: 1.5,
       atrPercentileMin: 15,
       atrPercentileMax: 90,
       efficiencyRatioMin: 0.15,
       minStopAtr: 1,
-      maxPerAssetClass: 2,
+      maxPerAssetClass: 14,
       newsBlackoutBeforeMin: 30,
       newsBlackoutAfterMin: 30,
       maxSpreadCostPct: 0.5,
@@ -129,7 +129,7 @@ export default function ConfigurationPage() {
         atrPercentileMax: Number(config.atrPercentileMax ?? 90),
         efficiencyRatioMin: Number(config.efficiencyRatioMin ?? 0.15),
         minStopAtr: Number(config.minStopAtr ?? 1),
-        maxPerAssetClass: config.maxPerAssetClass ?? 2,
+        maxPerAssetClass: config.maxPerAssetClass ?? 14,
         newsBlackoutBeforeMin: config.newsBlackoutBeforeMin ?? 30,
         newsBlackoutAfterMin: config.newsBlackoutAfterMin ?? 30,
         maxSpreadCostPct: Number(config.maxSpreadCostPct ?? 0.5),
@@ -251,7 +251,7 @@ export default function ConfigurationPage() {
               stop-loss is higher, the stop is widened to it, and a trade whose reward:risk then no longer clears your floor
               is not sent. <strong className="text-foreground">Worst case</strong> is a stop that gaps — capped at 80% of
               stake, where Deriv's own stop-out would otherwise take the whole stake. Every majority vote is traded at this
-              stake while the free balance can pay for it, up to the position ceiling below; there is no daily-loss stop.
+              stake, one position per pair, until only one stake of free balance is left; there is no daily-loss stop.
               The bot trades multipliers only, never binaries.
             </span>
           </div>
@@ -377,10 +377,11 @@ export default function ConfigurationPage() {
               <FormField control={form.control} name="maxConcurrentPositions" render={({ field }) => (
                 <FormItem>
                   <FormLabel>Max positions (hard ceiling)</FormLabel>
-                  <FormControl><Input type="number" step="1" min="1" max="10" {...field} data-testid="input-max-positions" /></FormControl>
+                  <FormControl><Input type="number" step="1" min="1" max="100" {...field} data-testid="input-max-positions" /></FormControl>
                   <FormDescription className="text-[11px]">
-                    An upper bound, not a target. What actually fits is shown per balance in the "Trades at once"
-                    column above.
+                    14 (one per pair) means every majority vote opens a position until only one stake of free balance
+                    is left — the "At once" column above shows how many that is at each balance. Lower it to cap how
+                    many trades can be open together.
                   </FormDescription>
                   {yourRow?.fundablePositions != null && yourRow.configuredPositions != null
                     && yourRow.fundablePositions < yourRow.configuredPositions && (
@@ -437,7 +438,7 @@ export default function ConfigurationPage() {
             <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {([
                 ["minRiskReward", "Reward:risk — the take-profit is this many times the stop (checked again at the fill, after commission)", "0.1"],
-                ["maxPerAssetClass", "Max open positions per asset class — forex is a single class here, so this is usually your real ceiling on concurrent trades, not \u201cMax positions\u201d above", "1"],
+                ["maxPerAssetClass", "Max open positions per asset class — every pair is forex, so this is a second ceiling on open trades (14 = no extra limit)", "1"],
                 ["newsBlackoutBeforeMin", "News blackout: minutes before a high-impact release", "1"],
                 ["newsBlackoutAfterMin", "News blackout: minutes after a high-impact release", "1"],
                 ["maxSpreadCostPct", "Max trading cost (% of position size, i.e. stake × multiplier) — Deriv's commission from a live quote of the exact order", "0.01"],

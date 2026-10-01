@@ -5,7 +5,7 @@ import {
   riskBandFor, typicalLoss, worstCaseLoss, RISK_BANDS, MULTIPLIER_MIN_STAKE,
 } from "../src/lib/execution-risk.ts";
 
-const plan = (equity: number, riskPct = 5, maxPositions = 3, perClass = 2) =>
+const plan = (equity: number, riskPct = 5, maxPositions = 14, perClass = 14) =>
   describeStakePlan({ equity, riskPerTradePct: riskPct, maxConcurrentPositions: maxPositions, maxPerAssetClass: perClass });
 
 test("no band boundary pushes the stake back under the $1.00 multiplier minimum", () => {
@@ -48,12 +48,11 @@ test("the stake is sized so a stopped-out trade loses the risk percentage, never
   assert.equal((pollStake({ equity: 100, freeBalance: 100, riskPerTradePct: 5 }) as { stake: number }).stake, 8.06);
   // Small balances are held at Deriv's $1.00 minimum rather than refused...
   assert.equal((pollStake({ equity: 10, freeBalance: 10, riskPerTradePct: 5 }) as { stake: number }).stake, 1);
-  assert.equal((pollStake({ equity: 1, freeBalance: 1, riskPerTradePct: 5 }) as { stake: number }).stake, 1);
-  // ...until the free balance cannot pay for it. Money held by open trades is not free.
-  assert.equal(pollStake({ equity: 0.95, freeBalance: 0.95, riskPerTradePct: 5 }).ok, false);
-  assert.equal(pollStake({ equity: 5, freeBalance: 0.5, riskPerTradePct: 5 }).ok, false);
-  // Never more than is free.
-  assert.equal((pollStake({ equity: 20, freeBalance: 1.5, riskPerTradePct: 5 }) as { stake: number }).stake, 1.5);
+  assert.equal((pollStake({ equity: 10, freeBalance: 2, riskPerTradePct: 5 }) as { stake: number }).stake, 1);
+  // ...and positions keep opening until one stake is left. Money held by open trades is not free.
+  assert.equal(pollStake({ equity: 10, freeBalance: 1.99, riskPerTradePct: 5 }).ok, false);
+  assert.equal(pollStake({ equity: 1, freeBalance: 1, riskPerTradePct: 5 }).ok, false);
+  assert.equal(pollStake({ equity: 20, freeBalance: 3, riskPerTradePct: 5 }).ok, false);   // $1.61 stake needs $3.22 free
 });
 
 test("the ladder caps the risk lower as the balance grows", () => {
@@ -69,22 +68,20 @@ test("a losing trade costs its 0.6% stop; never over the 80% cap", () => {
   assert.equal(worstCaseLoss(1), 0.8);
 });
 
-test("$5.00: $1.00 per trade, two open at once (the position ceiling)", () => {
-  const p = plan(5);
+test("$10: $1.00 per trade, up to 9 open — every vote until one stake is left", () => {
+  const p = plan(10);
   assert.equal(p.stake, 1);
-  assert.equal(p.contract, "multiplier");
-  assert.equal(p.fundable, 2);
-  assert.equal(p.limitedBy, "configured");
+  assert.equal(p.fundable, 9);
+  assert.equal(p.limitedBy, "equity");
   assert.equal(p.worstCaseLoss, 0.8);
+  assert.equal(plan(10, 5, 3, 2).fundable, 2, "a lower ceiling set by the operator still applies");
 });
 
-test("$1.50 still trades one; under $1.00 is blocked with the reason", () => {
-  assert.equal(plan(1.5).fundable, 1);
-  assert.equal(plan(1.5).limitedBy, "equity");
-  const p = plan(0.6);
+test("under two stakes is blocked with the reason", () => {
+  const p = plan(1.5);
   assert.equal(p.stake, null);
   assert.equal(p.fundable, 0);
-  assert.match(p.blocked!, /\$1\.00 multiplier minimum/);
+  assert.match(p.blocked!, /reserve/);
 });
 
 test("the stake ladder keeps worst case shrinking as a share of equity", () => {
