@@ -1,5 +1,17 @@
 # Changes in this build (vs. your Replit export)
 
+## Trade the backtest's middle setting
+
+Chosen by the operator after the three-month backtest:
+
+- **Reward:risk is judged at the actual fill, not from the FVG midpoint.** The scan no longer demands it from the midpoint; `planEntry` enforces it at the live entry price, after Deriv's minimums and commission.
+- **The H1 premium/discount veto is removed.** Premium/discount and OTE still add to the judge's confidence score; they no longer veto a setup. The veto removed 86% of setups.
+- **Minimum reward:risk 1.5** (was 2.0) and **force-close after 24 hours** (was 36). Existing settings are moved once, only where they still held the old defaults, so a later choice is never overwritten.
+- Volatility (ATR percentile 15–90), chop (efficiency ratio 0.15), minimum stop (1 H1 ATR), confidence (0.70), killzones, news blackout, Friday cutoff and every risk cap are unchanged.
+
+On the backtest this setting took 22 trades in three months instead of 2: 50% winners, +$0.71 at a 36h hold and +$0.88 at 24h, on $1 x100 after $0.02 commission. That is a small sample: August was negative, and at $0.04 commission it was −$0.24. Taking every setup lost money, which is why the other filters stay.
+
+
 ## Friday cutoff on Deriv's hours, plain token errors, and what a 3-month backtest showed
 
 ### Deriv's real trading hours

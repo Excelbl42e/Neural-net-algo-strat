@@ -14,7 +14,7 @@ const DEFAULTS = {
   enabled: false,
   autotradeMode: "off" as const,
   smallAccountMaxRiskPct: 10,
-  minRiskReward: 2,
+  minRiskReward: 1.5,
   atrPercentileMin: 15,
   atrPercentileMax: 90,
   efficiencyRatioMin: 0.15,
@@ -23,7 +23,7 @@ const DEFAULTS = {
   newsBlackoutBeforeMin: 30,
   newsBlackoutAfterMin: 30,
   maxSpreadCostPct: 0.5,
-  maxPositionHoldHours: 36,
+  maxPositionHoldHours: 24,
   riskPerTradePct: 1,
   maxConcurrentPositions: 3,
   maxDailyLossPct: 5,
@@ -169,7 +169,7 @@ router.put("/config", async (req, res): Promise<void> => {
     newsBlackoutBeforeMin: d.newsBlackoutBeforeMin ?? prev?.newsBlackoutBeforeMin ?? 30,
     newsBlackoutAfterMin: d.newsBlackoutAfterMin ?? prev?.newsBlackoutAfterMin ?? 30,
     maxSpreadCostPct: keep(d.maxSpreadCostPct, prev?.maxSpreadCostPct, 0.5),
-    maxPositionHoldHours: d.maxPositionHoldHours ?? prev?.maxPositionHoldHours ?? 36,
+    maxPositionHoldHours: d.maxPositionHoldHours ?? prev?.maxPositionHoldHours ?? 24,
     notes: parsed.data.notes ?? null,
   };
   const [row] = await db

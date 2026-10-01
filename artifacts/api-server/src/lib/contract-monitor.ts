@@ -135,7 +135,7 @@ async function runCycle(): Promise<void> {
       .select({ maxPositionHoldHours: botConfigTable.maxPositionHoldHours })
       .from(botConfigTable)
       .where(eq(botConfigTable.id, 1));
-    const maxHoldHours = cfg?.maxPositionHoldHours ?? 36;
+    const maxHoldHours = cfg?.maxPositionHoldHours ?? 24;
     const now = Date.now();
     const settledIds = new Set(settled.map((s) => s.contractId));
     // Shortly before Deriv's Friday 20:55 UTC close every open position is
