@@ -1,5 +1,33 @@
 # Changes in this build (vs. your Replit export)
 
+## Friday cutoff on Deriv's hours, plain token errors, and what a 3-month backtest showed
+
+### Deriv's real trading hours
+Deriv's `trading_times` (checked for every Friday from October 2026 to April 2027, across the clock change, for all 14 pairs): forex opens **Monday 00:00 UTC**, trades through the week, and **"Closes early (at 20:55)" on Fridays**. The bot used the interbank week instead (Sunday 21:00 reopen, Friday 21:00 close). It now follows Deriv.
+
+### No weekend holding
+- **No new trades from Friday 16:00 UTC** (no new setups, no entries on pending ones). A trade opened late on Friday may not reach its stop or target before the close.
+- **Open positions are bought back from Friday 20:30 UTC**, before Deriv's 20:55 close. Deriv only buys a contract back while its market is open, and the contract monitor retries every 30 seconds. Monday can open far from Friday's close, straight past a stop, and a multiplier then loses up to its whole stake.
+
+### A rejected token says so
+Deriv's error docs: HTTP 401 is a missing or invalid token, 403 is a valid token without the needed scope. The demo token expired overnight on 2026-10-01 and showed only as "Deriv account lookup returned HTTP 401". It now reads "Deriv rejected the API token (HTTP 401): it has expired or was deleted. Create a new token with the Trade scope... (Deriv allows up to 90 days)". Because a rejected token never recovers on retry, the connection is flagged at once instead of after three failed polls.
+
+### Setups the order planner could never enter
+In 16% of the setups the judge found, the entry FVG reached a fraction of a pip past the stop. The order planner refuses such levels, so each became a signal that was always cancelled at entry. The judge now declines them at the scan with a clear reason. On three months of Deriv candles this changes no trade under any tested setting; it only removes signals that could not trade.
+
+### Backtest (2026-07-01 to 2026-09-30, real Deriv candles, all 14 pairs)
+The bot's own decision code (pre-filter, judge, geometry gate, entry planner, setup invalidation, market-hours gate) was replayed on the live 30-minute schedule. Entries were simulated on the retrace and brackets on 5-minute bars, at a $1 x100 stake with $0.02 commission. Of 24,052 pair-scans the strategy found 622 setups:
+
+| Setting | Trades | Win % | Net |
+|---|---|---|---|
+| Current | 2 | 50 | +$0.05 |
+| Volatility cap 95 and/or chop 0.10 | 2 | 50 | +$0.05 (no change) |
+| No premium/discount rule, reward:risk 1.5 judged at the fill | 22 | 50 | +$0.71 (+$0.88 with a 24h hold) |
+| Take every setup | 59 | 39 | -$2.86 |
+
+The volatility and chop filters are not what keeps the bot idle; the premium/discount rule and reward:risk measured from the FVG midpoint are. Loosening those trades more, but 22 trades in three months is too few to show an edge: August was negative, and at $0.04 commission it turns to -$0.24. Taking every setup loses. No setting was changed.
+
+
 ## Commission read as dollars, as measured
 
 The demo self-test compared Deriv's `commission` field at two stakes: 0.02 at $1, 0.2 at $10. It scales with the stake, so it is a dollar amount, which settles the conflict in Deriv's docs. The dispatcher had been taking the larger of the two possible readings. That is identical at the $1 stake, but at $10 it would have counted $2.00 instead of $0.20 and turned away trades that clear reward:risk. It now uses the dollar value. The same self-test run confirmed x100 is offered on all 14 pairs and that Deriv's shortest forex Rise/Fall is 1 day, which is what the bot sends.

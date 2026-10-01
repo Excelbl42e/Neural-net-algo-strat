@@ -1,17 +1,38 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  isForexWeekendClosed, activeSessions, parseKillzones, sessionAllowed,
+  isForexWeekendClosed, activeSessions, parseKillzones, sessionAllowed, isFridayNewTradeCutoff, isFridayFlattenWindow,
   symbolCurrencyPair, newsBlackoutActive, forexPreScanGate, tradingCostGate,
 } from "../src/lib/forex-readiness.ts";
 import type { NewsEvent } from "../src/lib/news-calendar.ts";
 
-test("weekend closure: Saturday closed, Friday evening closed, Sunday before reopen closed", () => {
+test("weekend closure follows Deriv's trading_times: Friday 20:55 UTC to Monday 00:00 UTC", () => {
   assert.equal(isForexWeekendClosed(new Date("2026-10-03T12:00:00Z")), true); // Saturday
   assert.equal(isForexWeekendClosed(new Date("2026-10-02T22:00:00Z")), true); // Friday 22:00 UTC
+  assert.equal(isForexWeekendClosed(new Date("2026-10-02T20:55:00Z")), true); // Friday at Deriv's close
+  assert.equal(isForexWeekendClosed(new Date("2026-10-02T20:54:00Z")), false); // one minute before it
   assert.equal(isForexWeekendClosed(new Date("2026-10-04T18:00:00Z")), true); // Sunday 18:00 UTC
-  assert.equal(isForexWeekendClosed(new Date("2026-10-04T22:00:00Z")), false); // Sunday 22:00 UTC — open
+  // Deriv does not reopen forex on Sunday evening, unlike the interbank week.
+  assert.equal(isForexWeekendClosed(new Date("2026-10-04T22:00:00Z")), true); // Sunday 22:00 UTC
+  assert.equal(isForexWeekendClosed(new Date("2026-10-05T00:00:00Z")), false); // Monday 00:00 UTC — open
   assert.equal(isForexWeekendClosed(new Date("2026-10-02T10:00:00Z")), false); // Friday midday — open
+});
+
+test("no new trades from 16:00 UTC on Friday; open trades are flattened from 20:30 until Deriv's 20:55 close", () => {
+  assert.equal(isFridayNewTradeCutoff(new Date("2026-10-02T15:59:00Z")), false);
+  assert.equal(isFridayNewTradeCutoff(new Date("2026-10-02T16:00:00Z")), true);
+  assert.equal(isFridayNewTradeCutoff(new Date("2026-10-01T18:00:00Z")), false); // Thursday
+  assert.equal(isFridayFlattenWindow(new Date("2026-10-02T20:29:00Z")), false);
+  assert.equal(isFridayFlattenWindow(new Date("2026-10-02T20:30:00Z")), true);
+  assert.equal(isFridayFlattenWindow(new Date("2026-10-02T20:54:00Z")), true);
+  assert.equal(isFridayFlattenWindow(new Date("2026-10-02T20:55:00Z")), false); // market shut: Deriv cannot buy back
+  assert.equal(isFridayFlattenWindow(new Date("2026-10-01T20:40:00Z")), false); // Thursday
+  // The pre-scan/dispatch gate refuses during the cutoff, inside the New York killzone.
+  const late = forexPreScanGate({ symbol: "frxEURUSD", now: new Date("2026-10-02T17:00:00Z"), killzones: "london,newyork", newsEvents: [], newsBlackoutBeforeMin: 30, newsBlackoutAfterMin: 30 });
+  assert.equal(late.ok, false);
+  assert.match(late.reason ?? "", /Friday/);
+  const early = forexPreScanGate({ symbol: "frxEURUSD", now: new Date("2026-10-02T13:00:00Z"), killzones: "london,newyork", newsEvents: [], newsBlackoutBeforeMin: 30, newsBlackoutAfterMin: 30 });
+  assert.equal(early.ok, true);
 });
 
 test("active sessions by UTC hour", () => {
@@ -105,16 +126,17 @@ test("calendar timestamps parse the same on every host, whatever TZ is set", asy
   assert.equal(parseEventDate(""), null);
 });
 
-test("the forex week opens and closes on the right UTC boundaries", () => {
+test("the forex week opens and closes on Deriv's UTC boundaries (trading_times)", () => {
   const at = (iso: string) => new Date(iso);
-  // Friday 21:00 UTC close.
-  assert.equal(isForexWeekendClosed(at("2026-09-25T20:59:00Z")), false, "Friday before 21:00 is open");
-  assert.equal(isForexWeekendClosed(at("2026-09-25T21:00:00Z")), true, "Friday from 21:00 is closed");
-  // All Saturday.
+  // Friday: Deriv "Closes early (at 20:55)".
+  assert.equal(isForexWeekendClosed(at("2026-09-25T20:54:00Z")), false, "Friday before 20:55 is open");
+  assert.equal(isForexWeekendClosed(at("2026-09-25T20:55:00Z")), true, "Friday from 20:55 is closed");
+  // All Saturday and all Sunday.
   assert.equal(isForexWeekendClosed(at("2026-09-26T12:00:00Z")), true);
-  // Sunday 21:00 UTC reopen.
-  assert.equal(isForexWeekendClosed(at("2026-09-27T20:59:00Z")), true, "Sunday before 21:00 is still closed");
-  assert.equal(isForexWeekendClosed(at("2026-09-27T21:00:00Z")), false, "Sunday from 21:00 is open");
+  assert.equal(isForexWeekendClosed(at("2026-09-27T21:00:00Z")), true, "Deriv does not open forex on Sunday evening");
+  assert.equal(isForexWeekendClosed(at("2026-09-27T23:59:00Z")), true);
+  // Monday 00:00 UTC open.
+  assert.equal(isForexWeekendClosed(at("2026-09-28T00:00:00Z")), false, "Monday from 00:00 is open");
   // Midweek.
   assert.equal(isForexWeekendClosed(at("2026-09-30T07:00:00Z")), false);
 });

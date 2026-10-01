@@ -14,6 +14,7 @@ import { rebuildMissingTradeReviews } from "./trade-review.js";
 import { decryptSecret } from "./crypto.js";
 import { settlementPnl } from "./execution-risk.js";
 import { fetchContractStatuses, sellDerivTrade } from "./deriv.js";
+import { isFridayFlattenWindow } from "./forex-readiness.js";
 
 const POLL_INTERVAL_MS = 30_000;
 
@@ -137,10 +138,13 @@ async function runCycle(): Promise<void> {
     const maxHoldHours = cfg?.maxPositionHoldHours ?? 36;
     const now = Date.now();
     const settledIds = new Set(settled.map((s) => s.contractId));
+    // Shortly before Deriv's Friday 20:55 UTC close every open position is
+    // bought back, whatever its age, so none is carried over the weekend gap.
+    const fridayFlatten = isFridayFlattenWindow(new Date(now));
     const staleTrades = tradesToCheck.filter((entry) => {
       if (settledIds.has(entry.contractId)) return false;
       const ageHours = (now - entry.trade.openedAt.getTime()) / 3_600_000;
-      return ageHours > maxHoldHours;
+      return fridayFlatten || ageHours > maxHoldHours;
     });
     for (const entry of staleTrades) {
       const conn = connections.find((c) => c.accountId === entry.trade.accountId);
@@ -174,7 +178,9 @@ async function runCycle(): Promise<void> {
             tradeId: entry.trade.id, contractId: entry.contractId, maxHoldHours, soldFor: result.soldFor,
             contractType: getContractType(entry.trade.annotations) ?? "unknown",
           },
-          "contract-monitor: force-closed stale position (max hold time exceeded)",
+          fridayFlatten
+            ? "contract-monitor: closed position before Deriv's Friday close (no weekend holding)"
+            : "contract-monitor: force-closed stale position (max hold time exceeded)",
         );
       } catch (err) {
         logger.error(

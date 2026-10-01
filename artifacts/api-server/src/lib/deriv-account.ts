@@ -41,6 +41,26 @@ function patHeaders(token: string): Record<string, string> {
   return { Authorization: `Bearer ${token.trim()}`, "Deriv-App-ID": appId };
 }
 
+/**
+ * A plain instruction for the two statuses that mean the token itself is the
+ * problem. Deriv's error docs: 401 is a missing or invalid token (or a missing
+ * Deriv-App-ID with a PAT, which this client always sends), 403 is a valid
+ * token without the scope the call needs. A PAT expires after at most 90 days;
+ * "HTTP 401" on its own read like a server fault, and the connection quietly
+ * stopped trading until someone worked out the token had run out.
+ */
+export function tokenProblem(status: number): string | null {
+  if (status === 401) {
+    return "Deriv rejected the API token (HTTP 401): it has expired or was deleted. " +
+      "Create a new token with the Trade scope on Deriv's API token page (Deriv allows up to 90 days) and replace this connection.";
+  }
+  if (status === 403) {
+    return "Deriv refused this API token (HTTP 403): it does not have the Trade scope. " +
+      "Create a token with Trade ticked and replace this connection.";
+  }
+  return null;
+}
+
 /** Never include bearer tokens, OTP URLs, or raw upstream responses in errors. */
 export async function inspectDerivAccount(
   token: string,
@@ -52,7 +72,7 @@ export async function inspectDerivAccount(
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     redirect: "error",
   });
-  if (!response.ok) throw new Error(`Deriv account lookup returned HTTP ${response.status}`);
+  if (!response.ok) throw new Error(tokenProblem(response.status) ?? `Deriv account lookup returned HTTP ${response.status}`);
   let body: { data?: unknown };
   try {
     body = await response.json() as { data?: unknown };
@@ -100,7 +120,7 @@ export async function accountWebSocketUrl(
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     redirect: "error",
   });
-  if (!response.ok) throw new Error(`Deriv OTP request returned HTTP ${response.status}`);
+  if (!response.ok) throw new Error(tokenProblem(response.status) ?? `Deriv OTP request returned HTTP ${response.status}`);
   let body: { data?: { url?: unknown } };
   try {
     body = await response.json() as { data?: { url?: unknown } };

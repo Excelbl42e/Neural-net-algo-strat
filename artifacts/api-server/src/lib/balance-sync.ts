@@ -32,6 +32,8 @@ const RECOVERY_INTERVAL_MS = 300_000;  // retry errored connections every 5 min
  * than ten minutes), so riding out two failed polls costs nothing.
  */
 const FAILURES_BEFORE_ERROR = 3;
+/** A rejected token (Deriv HTTP 401/403) does not recover on retry, so it is reported at once. */
+const isTokenRejection = (message: string | null | undefined) => /\(HTTP 40[13]\)/.test(message ?? "");
 
 interface SyncEntry {
   connId: number;
@@ -115,7 +117,7 @@ async function syncOne(
       );
       await db
         .update(brokerConnectionsTable)
-        .set(entry.consecutiveFailures >= FAILURES_BEFORE_ERROR || conn.status !== "connected"
+        .set(entry.consecutiveFailures >= FAILURES_BEFORE_ERROR || conn.status !== "connected" || isTokenRejection(entry.lastError)
           ? { status: "error", lastError: entry.lastError }
           : { lastError: entry.lastError })
         .where(eq(brokerConnectionsTable.id, conn.id));
@@ -172,7 +174,7 @@ async function syncOne(
     logger.error({ connId: conn.id, err }, "balance-sync: unexpected error — will auto-retry");
     await db
       .update(brokerConnectionsTable)
-      .set(entry.consecutiveFailures >= FAILURES_BEFORE_ERROR || conn.status !== "connected"
+      .set(entry.consecutiveFailures >= FAILURES_BEFORE_ERROR || conn.status !== "connected" || isTokenRejection(entry.lastError)
         ? { status: "error", lastError: entry.lastError }
         : { lastError: entry.lastError })
       .where(eq(brokerConnectionsTable.id, conn.id))
