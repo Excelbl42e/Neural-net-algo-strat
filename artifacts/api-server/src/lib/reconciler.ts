@@ -70,6 +70,9 @@ async function createTradeFor(signal: SignalRow, contractId: number, info: Deriv
     openPrice: String(buy), lotSize: String(stake ?? buy),
     stopLoss: signal.stopLevel, takeProfit: signal.target1Level,
     status: "open", strategy: signal.strategy,
+    // The hold limit and the free-balance arithmetic both count from the
+    // purchase, not from when the reconciler found it.
+    ...(info?.purchaseTime != null ? { openedAt: new Date(info.purchaseTime * 1000) } : {}),
     reasonChain: signal.reasoning ?? "Recovered by reconciler",
     annotations: JSON.stringify({
       contractId, recoveredByReconciler: true, confidence: signal.confidence,

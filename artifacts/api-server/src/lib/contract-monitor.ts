@@ -92,10 +92,14 @@ async function runCycle(): Promise<void> {
 
     // Only use enabled connections, and only for the account that owns each
     // trade. A missing match is not evidence that a contract settled.
+    // Deliberately not filtered on status: balance-sync marks a connection
+    // "error" after a few failed balance reads, and that must not stop the
+    // 4-day close or the Friday flatten from being attempted. A connection
+    // that really is broken fails here harmlessly and is retried next cycle.
     const connections = await db
       .select()
       .from(brokerConnectionsTable)
-      .where(and(eq(brokerConnectionsTable.enabled, true), eq(brokerConnectionsTable.status, "connected")));
+      .where(eq(brokerConnectionsTable.enabled, true));
 
     const settled: SettledContract[] = [];
     const byConn = new Map<number, number[]>();

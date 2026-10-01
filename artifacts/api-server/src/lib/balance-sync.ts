@@ -105,6 +105,11 @@ async function syncOne(
   entry.lastAttemptAt = new Date();
   activeSyncs++;
 
+  // The sync time is the moment the request starts, not when it returns: the
+  // dispatcher takes every stake opened since lastSyncAt off this balance, and
+  // a trade opened while the request was in flight may be missing from it.
+  // Counting such a trade twice is safe; not counting it is not.
+  const requestedAt = new Date();
   try {
     const result = await syncDerivAccount(await decryptSecret(conn.credential), conn.environment);
 
@@ -125,7 +130,7 @@ async function syncOne(
       // Success — reset failure state and restore "connected"
       entry.consecutiveFailures = 0;
       entry.lastError = null;
-      entry.lastSyncAt = new Date();
+      entry.lastSyncAt = requestedAt;
 
       await db
         .update(brokerConnectionsTable)
