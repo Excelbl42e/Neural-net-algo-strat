@@ -38,7 +38,7 @@ import { decryptSecret } from "./crypto.js";
 import { getSecret } from "./secrets.js";
 import { recordRejection } from "./rejections.js";
 import {
-  atrPercentile, conceptKey, geometryGate, portfolioGate, preTradeGate, premiumDiscount, runExpertJudge,
+  atrPercentile, conceptKey, geometryGate, portfolioGate, preTradeGate, runExpertJudge,
   verifyClaims, DEFAULT_THRESHOLDS,
   type AnalysisLevel, type AnalysisResult, type OHLC, type QuantThresholds,
   isClosedCandle, nextAlignedScanAt,
@@ -99,7 +99,7 @@ let activeMode: "auto_demo" | "auto_live" | null = null;
 const BINARY_CONFIDENCE_PREMIUM = 0.08;
 
 let activeConfig: { smallAccountMaxRiskPct: number; minConfidence: number; minRiskReward: number; maxPerAssetClass: number } = {
-  smallAccountMaxRiskPct: 10, minConfidence: 0.7, minRiskReward: 2, maxPerAssetClass: 2,
+  smallAccountMaxRiskPct: 10, minConfidence: 0.7, minRiskReward: 1.5, maxPerAssetClass: 2,
 };
 
 /** An order is never placed against a quote older than this. Ticks arrive every second or two on the majors. */
@@ -1373,7 +1373,7 @@ function applyConfig(config: BotConfigRow): void {
     smallAccountMaxRiskPct: parseFloat(config.smallAccountMaxRiskPct),
     minConfidence: Number.isFinite(parsedMinConfidence) ? parsedMinConfidence : 0.7,
     // Same reasoning: an unreadable floor must not quietly become "no floor".
-    minRiskReward: Number.isFinite(parsedMinRr) && parsedMinRr > 0 ? parsedMinRr : 2,
+    minRiskReward: Number.isFinite(parsedMinRr) && parsedMinRr > 0 ? parsedMinRr : 1.5,
     maxPerAssetClass: Number.isFinite(config.maxPerAssetClass) && config.maxPerAssetClass > 0 ? config.maxPerAssetClass : 2,
   };
 }
@@ -1842,10 +1842,23 @@ async function runWorkerTick(): Promise<void> {
         recordRejection({ symbol, stage: "post_gpt", reason: "Missing entry, stop or target level" });
         continue;
       }
-      const pd = premiumDiscount(h1Long, entryMid, 2, result.direction);
+      // Level consistency and the minimum stop distance (1 H1 ATR) are checked
+      // here. Two checks deliberately are not, on the 2026-10-01 backtest
+      // (three months of Deriv candles, all 14 pairs, 622 setups):
+      //  - reward:risk measured from the FVG midpoint. The real fill is
+      //    somewhere in the zone, and planEntry enforces the floor at that
+      //    price, after Deriv's minimums and commission — the reward:risk the
+      //    trade actually has. Demanding it again from the midpoint removed
+      //    most setups that would have qualified at the fill.
+      //  - buying only in the H1 discount / selling only in premium. After a
+      //    sweep and a structure break the FVG usually sits in the half of
+      //    the H1 range the move came from; this rule removed 86% of setups.
+      // Together they left 2 trades in three months; without them, 22 (50%
+      // winners, +$0.71 on $1 x100 after commission). Taking every setup
+      // instead lost money, so the remaining filters stay.
       const geo = geometryGate(
         { direction: result.direction, entry: entryMid, stop: result.stopLevel, target: result.target1Level },
-        h1Atr.atr, pd, thresholds,
+        h1Atr.atr, null, { ...thresholds, minRiskReward: 0 },
       );
       if (!geo.ok) {
         logger.info({ symbol, reason: geo.reason }, "Signal rejected by geometry gate");

@@ -24,7 +24,7 @@ export async function ensureSchema(): Promise<void> {
     // hour it runs. This is the index it actually needs.
     sql`CREATE INDEX IF NOT EXISTS candles_tf_time_idx ON candles (timeframe, open_time)`,
     sql`ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS small_account_max_risk_pct numeric(5,2) NOT NULL DEFAULT 10.00`,
-    sql`ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS min_risk_reward numeric(5,2) NOT NULL DEFAULT 2.00`,
+    sql`ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS min_risk_reward numeric(5,2) NOT NULL DEFAULT 1.50`,
     sql`ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS atr_percentile_min numeric(5,2) NOT NULL DEFAULT 15.00`,
     sql`ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS atr_percentile_max numeric(5,2) NOT NULL DEFAULT 90.00`,
     sql`ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS efficiency_ratio_min numeric(5,3) NOT NULL DEFAULT 0.150`,
@@ -33,7 +33,7 @@ export async function ensureSchema(): Promise<void> {
     sql`ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS news_blackout_before_min integer NOT NULL DEFAULT 30`,
     sql`ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS news_blackout_after_min integer NOT NULL DEFAULT 30`,
     sql`ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS max_spread_cost_pct numeric(5,2) NOT NULL DEFAULT 0.50`,
-    sql`ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS max_position_hold_hours integer NOT NULL DEFAULT 36`,
+    sql`ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS max_position_hold_hours integer NOT NULL DEFAULT 24`,
     // Autotrade modes are now off | auto_demo | auto_live. The removed
     // manual_approval mode could never execute; autonomous maps to demo only.
     sql`UPDATE bot_config SET autotrade_mode = 'off' WHERE autotrade_mode NOT IN ('off','auto_demo','auto_live') AND autotrade_mode <> 'autonomous'`,
@@ -54,6 +54,22 @@ export async function ensureSchema(): Promise<void> {
         )
         UPDATE bot_config SET min_confidence = 0.70
         WHERE min_confidence = 0.78 AND EXISTS (SELECT 1 FROM once)`,
+    // One-time move to the settings chosen from the 2026-10-01 backtest
+    // (three months of Deriv candles, all 14 pairs): reward:risk 1.5 judged at
+    // the actual fill, and a 24-hour hold. The old 2.0 floor measured from the
+    // FVG midpoint left the bot with 2 trades in three months. Runs at most
+    // once, and only rewrites values still at the old defaults, so a figure
+    // the operator chose afterwards is never overwritten.
+    sql`WITH once AS (
+          INSERT INTO app_secrets (key, value)
+          VALUES ('migration:backtest_settings_v1', now()::text)
+          ON CONFLICT (key) DO NOTHING
+          RETURNING key
+        )
+        UPDATE bot_config SET
+          min_risk_reward = CASE WHEN min_risk_reward = 2.00 THEN 1.50 ELSE min_risk_reward END,
+          max_position_hold_hours = CASE WHEN max_position_hold_hours = 36 THEN 24 ELSE max_position_hold_hours END
+        WHERE EXISTS (SELECT 1 FROM once)`,
   ];
   for (const stmt of stmts) {
     try {

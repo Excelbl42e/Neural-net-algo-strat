@@ -16,7 +16,7 @@ export interface QuantThresholds {
 
 export const DEFAULT_THRESHOLDS: QuantThresholds = {
   atrPercentileMin: 15, atrPercentileMax: 90, efficiencyRatioMin: 0.15,
-  minRiskReward: 2.0, minStopAtr: 1.0, maxPerAssetClass: 2,
+  minRiskReward: 1.5, minStopAtr: 1.0, maxPerAssetClass: 2,
 };
 
 // ── Indicators ──────────────────────────────────────────────────────────────
