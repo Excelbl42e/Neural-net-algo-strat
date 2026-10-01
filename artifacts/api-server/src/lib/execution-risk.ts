@@ -19,8 +19,8 @@ export const TYPICAL_COMMISSION_PER_STAKE = 0.02;
  * runs from every Monday): 5% risk never fell under $5 on Nov-Jun starts,
  * where a stake of 20% of the balance did in 9% of them. Roughly the Kelly
  * stake the backtest's per-trade mean and spread imply. There is no
- * daily-loss stop: the bot trades every majority vote until the free balance
- * cannot pay for the next stake.
+ * daily-loss stop: the bot trades every majority vote until only one stake
+ * of free balance is left (the operator's rule).
  */
 export function pollStake(input: { equity: number; freeBalance: number; riskPerTradePct: number }): PollStakeResult {
   const { equity, freeBalance, riskPerTradePct } = input;
@@ -34,9 +34,9 @@ export function pollStake(input: { equity: number; freeBalance: number; riskPerT
   const lossPerStakeDollar = TYPICAL_STOP_FRACTION_OF_PRICE * 100 + TYPICAL_COMMISSION_PER_STAKE;
   const sized = Math.floor((equity * eff.riskPct / 100 / lossPerStakeDollar + Number.EPSILON) * 100) / 100;
   let stake = Math.max(MULTIPLIER_MIN_STAKE, sized);
-  if (stake > freeBalance) stake = Math.max(MULTIPLIER_MIN_STAKE, Math.floor((freeBalance + Number.EPSILON) * 100) / 100);
-  if (freeBalance < MULTIPLIER_MIN_STAKE) {
-    return { ok: false, reason: `free balance $${Math.max(0, freeBalance).toFixed(2)} is under Deriv's $1.00 multiplier minimum; trading resumes when open trades close` };
+  // One stake is always kept back: positions open until only that is left.
+  if (freeBalance - stake < stake) {
+    return { ok: false, reason: `free balance $${Math.max(0, freeBalance).toFixed(2)} is down to the one $${stake.toFixed(2)} stake kept in reserve; trading resumes when open trades close` };
   }
   return { ok: true, stake, band: eff.band, riskPct: eff.riskPct, riskCappedByBand: eff.riskCappedByBand };
 }
@@ -75,7 +75,8 @@ export function describeStakePlan(input: { equity: number; riskPerTradePct: numb
       fundable: 0, limitedBy: "equity", blocked: plan.reason,
     };
   }
-  const affordable = Math.floor((input.equity + 1e-9) / plan.stake);
+  // One stake stays in reserve.
+  const affordable = Math.max(0, Math.floor((input.equity + 1e-9) / plan.stake) - 1);
   const worst = worstCaseLoss(plan.stake);
   return {
     equity: input.equity, band: plan.band, riskPct: plan.riskPct, riskCappedByBand: plan.riskCappedByBand,

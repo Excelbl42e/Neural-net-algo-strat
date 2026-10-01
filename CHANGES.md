@@ -1,5 +1,21 @@
 # Changes in this build (vs. your Replit export)
 
+## Every vote opens a position until one stake is left
+
+As the operator asked: positions keep opening from the votes, one per pair, until only one stake of free balance is left.
+
+- The position ceilings are set to 14 (one per pair) once on upgrade; lower "Max positions" to cap it again.
+- One stake is kept in reserve: a trade opens only if the free balance after it still covers another stake. At $10 with $1.00 stakes that is up to 9 open.
+- The currency-exposure cap (no third position on the same side of one currency) is removed.
+- Unchanged: the 5% risk sizing, the 0.6% stop, the 4-day hold, the Friday close, sessions, news blackout and the live quote.
+
+Backtest on $10 (live rules, runs starting every Monday):
+
+| | Up after 12 days | $15+ | Under $5 | Typical (26 days) | Worst | Best |
+|---|---|---|---|---|---|---|
+| At most 2 open (previous) | 51% | 0% | 0% | $10.20 | $5.44 | $13.67 |
+| **Every vote until 1 stake left** | 49% | 7% | 2–4% | $8.82 | $3.72 | $23.77 |
+
 ## Stakes sized by risk (Kelly-style), tested against volatility stops
 
 Tested on $10 with the live rules (every majority vote, at most 2 open), 26-day runs starting every Monday; chosen on Nov–Jun starts:

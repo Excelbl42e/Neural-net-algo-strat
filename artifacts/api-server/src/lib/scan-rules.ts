@@ -12,19 +12,7 @@ export function assetClass(symbol: string, group?: string): string {
   return "Synthetic";
 }
 
-/** Signed currency exposure: long EURUSD => +EUR -USD. */
-export function currencyLegs(symbol: string, direction: "buy" | "sell"): Record<string, number> {
-  const m = symbol.match(/^frx([A-Z]{3})([A-Z]{3})$/);
-  if (!m) return {};
-  const s = direction === "buy" ? 1 : -1;
-  return { [m[1]!]: s, [m[2]!]: -s };
-}
-
-/**
- * At most `maxPerAssetClass` open positions per class (forex is one class), and
- * never a third position on the same side of one currency — three USD shorts
- * are one bet on the dollar, not three trades.
- */
+/** At most `maxPerAssetClass` open positions per class (forex is one class here). */
 export function portfolioGate(
   open: Array<{ symbol: string; direction: "buy" | "sell"; group?: string }>,
   next: { symbol: string; direction: "buy" | "sell"; group?: string },
@@ -34,11 +22,6 @@ export function portfolioGate(
   const sameClass = open.filter((o) => assetClass(o.symbol, o.group) === cls).length;
   const metrics = { assetClass: cls, sameClass };
   if (sameClass >= maxPerAssetClass) return { ok: false, reason: `Asset class cap: ${sameClass}/${maxPerAssetClass} open in ${cls}`, metrics };
-  const legs = currencyLegs(next.symbol, next.direction);
-  for (const [ccy, sign] of Object.entries(legs)) {
-    const same = open.filter((o) => (currencyLegs(o.symbol, o.direction)[ccy] ?? 0) === sign).length;
-    if (same >= 2) return { ok: false, reason: `Currency leg cap: ${same} open positions already ${sign > 0 ? "long" : "short"} ${ccy}`, metrics };
-  }
   return { ok: true, metrics };
 }
 

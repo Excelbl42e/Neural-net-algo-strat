@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { STRATEGIES, type Bars, type Vote } from "../src/lib/poll-strategies.ts";
 import { tallyPoll, runPoll, pollLevels, pollBars, POLL_QUORUM, POLL_MIN_BARS, POLL_TIMEFRAME, POLL_STOP_FRACTION, type PollInput } from "../src/lib/poll-engine.ts";
 
-import { portfolioGate, currencyLegs, historyPageEnds } from "../src/lib/scan-rules.ts";
+import { portfolioGate, historyPageEnds } from "../src/lib/scan-rules.ts";
 import { planEntry } from "../src/lib/execution-risk.ts";
 
 /** Deterministic random walk with trends and quiet spells, on the real M30 grid (weekdays only). */
@@ -142,10 +142,8 @@ test("stored candles: off-grid partial candles are dropped, strings become numbe
   assert.equal(b.c[0], 1.155);
 });
 
-test("portfolio caps: class cap and no third position on the same side of one currency", () => {
+test("portfolio cap: only the class ceiling — no currency-exposure cap (positions fill until the reserve)", () => {
   const open = [{ symbol: "frxEURUSD", direction: "buy" as const }, { symbol: "frxGBPUSD", direction: "buy" as const }];
-  assert.equal(portfolioGate(open, { symbol: "frxAUDUSD", direction: "buy" }, 5).ok, false); // third short-USD
-  assert.equal(portfolioGate(open, { symbol: "frxUSDJPY", direction: "buy" }, 2).ok, false); // class cap 2
-  assert.equal(portfolioGate([], { symbol: "frxUSDJPY", direction: "buy" }, 2).ok, true);
-  assert.deepEqual(currencyLegs("frxEURUSD", "sell"), { EUR: -1, USD: 1 });
+  assert.equal(portfolioGate(open, { symbol: "frxAUDUSD", direction: "buy" }, 14).ok, true); // a third short-USD is allowed now
+  assert.equal(portfolioGate(open, { symbol: "frxUSDJPY", direction: "buy" }, 2).ok, false); // class ceiling still applies
 });
