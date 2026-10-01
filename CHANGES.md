@@ -1,5 +1,20 @@
 # Changes in this build (vs. your Replit export)
 
+## Stakes sized by risk (Kelly-style), tested against volatility stops
+
+Tested on $10 with the live rules (every majority vote, at most 2 open), 26-day runs starting every Monday; chosen on Nov–Jun starts:
+
+| | Ended up | Fell under $5 | Typical end | Worst | Best |
+|---|---|---|---|---|---|
+| Before: stake 20% of balance ($2 at $10) | 41% | 9% | $9.30 | $3.21 | $17.50 |
+| **Now: stake sized so a stopped-out trade loses 5% of the balance** | **47%** | **0%** | **$9.90** | **$5.44** | $13.61 |
+| Volatility-forecast (EWMA/GARCH-style) stop, 0.75 sigma of the 4-day move | 38% | 9% | $9.36 | $4.46 | $19.52 |
+
+- **"Risk per trade %" now means what a stopped-out trade loses**, and the stake is sized from it: stake = balance × risk% ÷ $0.62 (what a $1 stake loses at the 0.6% stop, with commission), never under Deriv's $1.00 minimum. Set to 5% once on upgrade; a later change is kept. At $10 that is $1.00 a trade, at $20 $1.61, at $100 $8.06. The balance ladder still lowers it on large balances (2% from $200, 1% from $1,000).
+- Why: the backtest's per-trade mean and spread put the Kelly stake near 8% of the balance; $2 on $10 was about 2.5 times that, which is where the wipe-outs came from.
+- **Volatility-forecast stops were not adopted**: they did no better than the fixed 0.6% stop.
+- Over all start dates (both periods) on $10: 26-day runs ended up 53% of the time, never under $5, typical $10.20, range $5.44 to $13.67. The old sizing had more upside (best $17.50) and more wipe-outs (7% under $5).
+
 ## Trade every majority vote until the balance runs out
 
 Asked for by the operator, funding $5: every majority vote is now traded, and nothing stops trading except money.

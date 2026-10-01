@@ -4,14 +4,23 @@ export type PollStakeResult =
   | { ok: true; stake: number; band: RiskBand; riskPct: number; riskCappedByBand: boolean }
   | { ok: false; reason: string };
 
+/** Deriv's commission per $1.00 of stake at x100 in the London/New York sessions (measured: $0.02). */
+export const TYPICAL_COMMISSION_PER_STAKE = 0.02;
+
 /**
- * The stake for one poll trade: the balance band's risk percentage of the
- * balance, never less than Deriv's $1.00 multiplier minimum, and only while
- * that much is actually free. There is no daily-loss stop and no balance
- * floor above $1.00: the bot trades every majority vote until the free
- * balance cannot pay for the next stake, which is how the $5 backtest that
- * chose these rules was run. How many trades are open at once is capped
- * separately (the position ceiling), and each trade's loss by its stop.
+ * The stake for one poll trade, sized so that a trade stopped out loses the
+ * risk percentage of the balance (the configured "risk per trade", capped by
+ * the balance band): stake = balance x risk% / (loss per $1 of stake), where
+ * a $1.00 stake at x100 loses about $0.62 at the 0.6% stop (0.60 + $0.02
+ * commission). Never less than Deriv's $1.00 multiplier minimum, and only
+ * while that much is free.
+ *
+ * Chosen on the 2026-10-02 sizing backtest ($10, every majority vote, 26-day
+ * runs from every Monday): 5% risk never fell under $5 on Nov-Jun starts,
+ * where a stake of 20% of the balance did in 9% of them. Roughly the Kelly
+ * stake the backtest's per-trade mean and spread imply. There is no
+ * daily-loss stop: the bot trades every majority vote until the free balance
+ * cannot pay for the next stake.
  */
 export function pollStake(input: { equity: number; freeBalance: number; riskPerTradePct: number }): PollStakeResult {
   const { equity, freeBalance, riskPerTradePct } = input;
@@ -22,7 +31,8 @@ export function pollStake(input: { equity: number; freeBalance: number; riskPerT
     return { ok: false, reason: "risk-per-trade setting unavailable or invalid" };
   }
   const eff = effectiveRiskPcts(equity, riskPerTradePct);
-  const sized = Math.floor((equity * eff.riskPct / 100 + Number.EPSILON) * 100) / 100;
+  const lossPerStakeDollar = TYPICAL_STOP_FRACTION_OF_PRICE * 100 + TYPICAL_COMMISSION_PER_STAKE;
+  const sized = Math.floor((equity * eff.riskPct / 100 / lossPerStakeDollar + Number.EPSILON) * 100) / 100;
   let stake = Math.max(MULTIPLIER_MIN_STAKE, sized);
   if (stake > freeBalance) stake = Math.max(MULTIPLIER_MIN_STAKE, Math.floor((freeBalance + Number.EPSILON) * 100) / 100);
   if (freeBalance < MULTIPLIER_MIN_STAKE) {
