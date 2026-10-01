@@ -49,7 +49,7 @@ type FormValues = z.infer<typeof formSchema>;
 interface StakeRow {
   equity: number; ok: boolean; stake?: number | null; riskPct?: number; reason?: string;
   band?: "floor" | "build" | "grow" | "steady" | "mature";
-  dailyLossPct?: number; riskCappedByBand?: boolean; lifted?: boolean;
+  riskCappedByBand?: boolean;
   contract?: "multiplier" | "binary" | null;
   typicalLoss?: number | null; worstCaseLoss?: number | null; worstCasePctOfEquity?: number | null;
   fundablePositions?: number; configuredPositions?: number;
@@ -57,8 +57,8 @@ interface StakeRow {
 }
 
 interface RiskBandRow {
-  band: string; from: number; to: number | null; riskPct: number; dailyLossPct: number; why: string;
-  appliedRiskPct: number; appliedDailyLossPct: number;
+  band: string; from: number; to: number | null; riskPct: number; why: string;
+  appliedRiskPct: number;
 }
 interface RiskBandsResponse { configuredRiskPct: number; configuredDailyLossPct: number; bands: RiskBandRow[] }
 
@@ -183,13 +183,9 @@ export default function ConfigurationPage() {
   const enabled = form.watch("enabled");
   const mode = form.watch("autotradeMode");
   const riskPerTradePctValue = form.watch("riskPerTradePct");
-  const maxDailyLossPctValue = form.watch("maxDailyLossPct");
   // First preview row is the synced balance when there is one (see the query's
   // equity list below), so it reflects this account rather than a sample rung.
   const yourRow = equity > 0 ? stakeQuery.data?.[0] : undefined;
-  // Losing trades of headroom above the ~$4.00 balance where the $1.00 floor lift stops.
-  const headroomLoss = yourRow?.typicalLoss != null && yourRow.typicalLoss > 0 ? yourRow.typicalLoss : 0.5;
-  const headroomTrades = Math.max(0, Math.floor((equity - 4) / headroomLoss));
 
   return (
     <div className="space-y-6 max-w-4xl">
@@ -231,7 +227,7 @@ export default function ConfigurationPage() {
                     </td>
                     <td className="pr-3">{r.ok && r.stake != null ? `$${r.stake.toFixed(2)}` : "skip"}</td>
                     <td className={`pr-3 ${r.contract === "binary" ? "text-amber-400" : ""}`}>
-                      {r.contract ?? "-"}{r.lifted ? " \u2191" : ""}
+                      {r.contract ?? "-"}
                     </td>
                     <td className="pr-3">{r.typicalLoss != null ? `$${r.typicalLoss.toFixed(2)}` : "-"}</td>
                     <td className={`pr-3 ${r.worstCasePctOfEquity != null && r.worstCasePctOfEquity > 15 ? "text-amber-400" : ""}`}>
@@ -253,41 +249,18 @@ export default function ConfigurationPage() {
               <strong className="text-foreground">Typical loss</strong> is the stop the order actually carries: 0.6% of price from
               entry, which at x100 is $0.60 plus Deriv's commission (about $0.02) on a $1.00 stake. If Deriv's minimum
               stop-loss is higher, the stop is widened to it, and a trade whose reward:risk then no longer clears your floor
-              is not sent. Each stop is also capped at what is left of the day's loss budget.
-              <strong className="text-foreground"> Worst case</strong> is a stop that gaps — capped at 80% of stake, where
-              Deriv's own stop-out would otherwise take the whole stake. A <span className="text-amber-400">↑</span> marks a
-              stake raised to $1.00, Deriv's multiplier minimum; a <span className="text-primary">↓</span> marks risk tapered
-              below your saved setting by the balance band. Where $1.00 would be over 20% of the balance the bot does not
-              trade at all: the strategy poll was tested on multipliers only, so it never falls back to binaries.
+              is not sent. <strong className="text-foreground">Worst case</strong> is a stop that gaps — capped at 80% of
+              stake, where Deriv's own stop-out would otherwise take the whole stake. Every majority vote is traded at this
+              stake while the free balance can pay for it, up to the position ceiling below; there is no daily-loss stop.
+              The bot trades multipliers only, never binaries.
             </span>
           </div>
-          {yourRow?.lifted && (
-            <div className="flex items-start gap-2 rounded-lg border border-primary/40 bg-primary/10 p-3 text-[11px] text-primary" data-testid="note-floor-lift">
-              <AlertCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
-              <span>
-                Your risk setting sizes this trade under $1.00, the smallest multiplier Deriv will open, so the stake is
-                raised to exactly $1.00. Its loss is bounded by its stop — about $0.62 normally, $0.80 at most — and the
-                lift only happens while that worst case stays within 20% of the balance.
-              </span>
-            </div>
-          )}
-          {yourRow?.ok && yourRow.contract === "multiplier" && equity > 0 && equity < 5.5 && (
-            <div className="flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-[11px] text-amber-400" data-testid="warn-multiplier-boundary">
-              <AlertCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
-              <span>
-                The $1.00 floor keeps you trading down to a balance of about <strong>$4.00</strong>. Below that, a $1.00
-                stake would put more than 20% of the account at risk in one trade, so the bot stops trading until the
-                balance is back (it never falls back to binaries). At a ${headroomLoss.toFixed(2)} typical loss per trade
-                you have roughly {headroomTrades} losing trade{headroomTrades === 1 ? "" : "s"} of headroom before that happens.
-              </span>
-            </div>
-          )}
           {yourRow && !yourRow.ok && (
             <div className="flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-[11px] text-amber-400" data-testid="warn-no-trade">
               <AlertCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
               <span>
                 At ${equity.toFixed(2)} the bot does not trade: {yourRow.reason ?? "no stake survives the risk caps"}.
-                A balance of about <strong>$4.00</strong> or more lets it trade again.
+                It trades again as soon as an open trade closes and frees the stake.
               </span>
             </div>
           )}
@@ -312,7 +285,7 @@ export default function ConfigurationPage() {
             </p>
             <div className="overflow-x-auto">
               <table className="w-full text-xs font-mono-numbers">
-                <thead><tr className="text-left text-muted-foreground uppercase tracking-wider"><th className="py-1 pr-4">Balance</th><th className="pr-3">Band</th><th className="pr-3">Risk / trade</th><th className="pr-3">Daily loss</th><th>Why</th></tr></thead>
+                <thead><tr className="text-left text-muted-foreground uppercase tracking-wider"><th className="py-1 pr-4">Balance</th><th className="pr-3">Band</th><th className="pr-3">Risk / trade</th><th>Why</th></tr></thead>
                 <tbody>
                   {bandsQuery.data.bands.map((b) => {
                     const active = equity > 0 && equity >= b.from && (b.to == null || equity < b.to);
@@ -324,9 +297,6 @@ export default function ConfigurationPage() {
                         <td className="pr-3">{BAND_LABEL[b.band] ?? b.band}</td>
                         <td className="pr-3">
                           {b.appliedRiskPct}%{b.appliedRiskPct < b.riskPct ? ` (yours, band allows ${b.riskPct}%)` : ""}
-                        </td>
-                        <td className="pr-3">
-                          {b.appliedDailyLossPct}%{b.appliedDailyLossPct < b.dailyLossPct ? ` (yours, band allows ${b.dailyLossPct}%)` : ""}
                         </td>
                         <td className="text-muted-foreground font-sans">{b.why}</td>
                       </tr>
@@ -422,34 +392,7 @@ export default function ConfigurationPage() {
                       <span>
                         At your current ${equity.toFixed(2)} balance only <strong>{yourRow.fundablePositions}</strong> of
                         these {yourRow.configuredPositions} can actually open
-                        {yourRow.positionsLimitedBy === "daily_loss_budget"
-                          ? " — the daily-loss budget reserves each open stake, so the first trade uses up the day's allowance."
-                          : yourRow.positionsLimitedBy === "risk_sizing"
-                            ? " — risk sizing refuses the next one at this balance."
-                            : yourRow.positionsLimitedBy === "asset_class_cap"
-                              ? " — \u201cMax open positions per asset class\u201d below is the binding limit. This bot trades forex only and every pair counts as one asset class, so that setting, not this one, is your real ceiling."
-                              : "."}
-                        {" "}Raising this number will not change that. Each trade is also capped at balance ÷ this
-                        number, so a higher ceiling shrinks every stake — that used to push it under Deriv's $1.00
-                        multiplier minimum and turn trades into binaries, which the $1.00 floor now prevents, but the
-                        shrinking is still real. A larger balance is what actually unlocks more positions; a wider
-                        daily-loss budget only helps above the Floor band, which caps it at 20% whatever you set.
-                      </span>
-                    </div>
-                  )}
-                  <FormMessage />
-                </FormItem>
-              )} />
-              <FormField control={form.control} name="maxDailyLossPct" render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Max daily loss (% of equity)</FormLabel>
-                  <FormControl><Input type="number" step="0.1" min="0" max="100" {...field} data-testid="input-max-daily-loss" /></FormControl>
-                  <FormDescription className="text-[11px]">New orders are refused when today's realized losses plus open-stake reservations exhaust this UTC-day budget.</FormDescription>
-                  {Number(maxDailyLossPctValue) < Number(riskPerTradePctValue) && (
-                    <div className="flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 p-2 text-[11px] text-amber-400">
-                      <AlertCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
-                      <span>
-                        This is lower than "Risk per trade %" ({Number(riskPerTradePctValue)}%) above. This budget is checked after per-trade sizing and can only shrink the stake further — so on a small account it can silently refuse every trade even though risk-per-trade alone would allow a bigger one. A stake it shrinks under $1.00 is caught by the multiplier floor rather than falling through to a binary, but a stake it refuses outright is simply no trade. If you need the full {Number(riskPerTradePctValue)}% to go through, raise this to at least {Number(riskPerTradePctValue)}% too.
+                        — each open trade holds its stake until it closes, and the balance pays for that many.
                       </span>
                     </div>
                   )}
@@ -496,7 +439,6 @@ export default function ConfigurationPage() {
             </CardHeader>
             <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {([
-                ["smallAccountMaxRiskPct", "Small account: max % of equity for a minimum-stake trade", "0.1"],
                 ["minRiskReward", "Reward:risk — the take-profit is this many times the stop (checked again at the fill, after commission)", "0.1"],
                 ["maxPerAssetClass", "Max open positions per asset class — forex is a single class here, so this is usually your real ceiling on concurrent trades, not \u201cMax positions\u201d above", "1"],
                 ["newsBlackoutBeforeMin", "News blackout: minutes before a high-impact release", "1"],

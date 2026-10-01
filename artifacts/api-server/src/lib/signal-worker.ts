@@ -24,7 +24,7 @@ import { placeDerivTrade, getContractQuote } from "./deriv.js";
 import { getLastTick, getOpenBucketRange } from "./candle-feeder.js";
 import { ALL_FOREX_INSTRUMENTS, getSyntheticSymbol, isForexCode } from "./synthetic-catalog.js";
 import {
-  calculateCappedStake, calculateDailyLossCappedStake, applyMultiplierFloor, effectiveRiskPcts, worstCaseLoss,
+  pollStake, worstCaseLoss,
   planEntry, entryZoneState, MULTIPLIER_MIN_STAKE, MULTIPLIER_STOP_CAP_PCT, DEFAULT_MIN_LIMIT_ORDER_USD,
   parseDerivLimitRejection, setupInvalidation,
 } from "./execution-risk.js";
@@ -257,7 +257,6 @@ async function dispatchTrade(
   signal: SignalRow,
   riskPerTradePct: number,
   maxConcurrentPositions: number,
-  maxDailyLossPct: number,
   forex: ForexDispatchParams,
 ): Promise<void> {
   const previous = dispatchQueue;
@@ -271,7 +270,7 @@ async function dispatchTrade(
       if (signal.id != null) await recordGeneratedReason(signal.id, lock.reason ?? LOCK_MSG);
       return;
     }
-    await dispatchTradeUnlocked(signal, riskPerTradePct, maxConcurrentPositions, maxDailyLossPct, forex);
+    await dispatchTradeUnlocked(signal, riskPerTradePct, maxConcurrentPositions, forex);
   } catch (err) {
     // A claim already written as awaiting_broker is intentionally left
     // untouched; if its state cannot be verified, fail closed globally.
@@ -303,7 +302,6 @@ async function dispatchTradeUnlocked(
   signal: SignalRow,
   riskPerTradePct: number,
   maxConcurrentPositions: number,
-  maxDailyLossPct: number,
   forex: ForexDispatchParams,
 ): Promise<void> {
   if (signal.id == null) {
@@ -459,154 +457,40 @@ async function dispatchTradeUnlocked(
       return;
     }
   }
-  // Balance-adaptive ceiling. The configured percentages are what the operator
-  // is willing to risk; the band is what the balance can survive. The lower of
-  // the two applies, so a setting that made sense at $5 tapers on its own as
-  // the account grows instead of waiting to be remembered.
-  const eff = effectiveRiskPcts(equity, riskPerTradePct, maxDailyLossPct);
-  if (eff.riskCappedByBand || eff.dailyCappedByBand) {
-    logger.info(
-      { symbol: signal.symbol, equity, band: eff.band, configuredRiskPct: riskPerTradePct, appliedRiskPct: eff.riskPct,
-        configuredDailyLossPct: maxDailyLossPct, appliedDailyLossPct: eff.dailyLossPct, why: eff.why },
-      "Balance band tightened the configured risk settings",
-    );
-  }
-  const sizing = calculateCappedStake({
-    equity,
-    riskPerTradePct: eff.riskPct,
-    maxConcurrentPositions,
-    openPositions: openRow?.count ?? Number.NaN,
-    smallAccountMaxRiskPct: activeConfig.smallAccountMaxRiskPct,
-  });
-  if (!sizing.ok) {
-    await recordGeneratedReason(signal.id, `Risk sizing refused trade: ${sizing.reason}`);
-    recordRejection({ symbol: signal.symbol, stage: "sizing", reason: sizing.reason, metrics: { equity } });
-    logger.warn({ symbol: signal.symbol, equity, reason: sizing.reason }, "Risk sizing refused trade");
-    return;
-  }
-  if (!Number.isFinite(maxDailyLossPct) || maxDailyLossPct <= 0 || maxDailyLossPct > 100) {
-    const reason = "Maximum daily loss percentage is missing or invalid; refusing execution";
-    await recordGeneratedReason(signal.id, reason);
-    logger.warn({ symbol: signal.symbol, maxDailyLossPct }, reason);
-    return;
-  }
-
-  const now = new Date();
-  const utcDayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-  const utcNextDay = new Date(utcDayStart.getTime() + 24 * 60 * 60 * 1000);
-  let closedToday: Array<{ pnl: string | null; closedAt: Date | null; lotSize: string | null }>;
-  let openTrades: Array<{ lotSize: string }>;
+  // Stake: the balance band's share of the balance, at least Deriv's $1.00
+  // multiplier minimum, while that much is free. The synced equity is Deriv's
+  // cash balance (stakes leave it when a contract opens), but it is synced
+  // once a minute, so stakes opened since the last sync are taken off here.
+  // No daily-loss stop: every majority vote trades until the free balance
+  // runs out — the rule the $5 backtest was run with (CHANGES.md).
+  let openedSinceSync = 0;
   try {
-    closedToday = await db
-      .select({ pnl: tradesTable.pnl, closedAt: tradesTable.closedAt, lotSize: tradesTable.lotSize })
-      .from(tradesTable)
-      .where(and(
-        eq(tradesTable.accountId, conn.accountId),
-        eq(tradesTable.status, "closed"),
-        or(
-          isNull(tradesTable.closedAt),
-          and(gte(tradesTable.closedAt, utcDayStart), lt(tradesTable.closedAt, utcNextDay)),
-        ),
-      ));
-    openTrades = await db
-      .select({ lotSize: tradesTable.lotSize })
-      .from(tradesTable)
-      .where(and(eq(tradesTable.accountId, conn.accountId), eq(tradesTable.status, "open")));
+    const recent = await db.select({ lotSize: tradesTable.lotSize }).from(tradesTable).where(and(
+      eq(tradesTable.accountId, conn.accountId),
+      eq(tradesTable.status, "open"),
+      conn.lastSyncAt ? gte(tradesTable.openedAt, conn.lastSyncAt) : sql`true`,
+    ));
+    for (const r of recent) { const v = Number(r.lotSize); if (Number.isFinite(v) && v > 0) openedSinceSync += v; }
   } catch (err) {
-    const reason = "Daily loss guard could not load today's closed P&L and open-trade exposure; refusing execution";
+    const reason = "Could not read open trades to work out the free balance; refusing execution";
     await recordGeneratedReason(signal.id, reason);
     logger.error({ symbol: signal.symbol, accountId: conn.accountId, err }, reason);
     return;
   }
-
-  // A settled trade whose P&L could not be determined (Deriv returned no
-  // profit and no sell price, or the stored stake is unusable) used to refuse
-  // every subsequent trade until the next UTC midnight. That is the wrong
-  // trade-off: the guard exists to bound losses, and halting the account for
-  // the rest of the day is a far bigger cost than the gap it is reacting to.
-  // Count it at its true worst case instead — a full loss of the stake — which
-  // is conservative for the budget and keeps the system running. Same for a
-  // closed row with no timestamp, which used to block trading permanently
-  // rather than only for the day, since such a row is never aged out.
-  let realizedPnlToday = 0;
-  let unknownSettlements = 0;
-  for (const trade of closedToday) {
-    const pnl = trade.pnl == null ? Number.NaN : Number(trade.pnl);
-    if (Number.isFinite(pnl) && trade.closedAt != null) {
-      realizedPnlToday += pnl;
-      continue;
-    }
-    unknownSettlements++;
-    const stake = Number(trade.lotSize);
-    // No usable stake either: charge the largest stake this balance could have
-    // funded, so an unreadable row can never understate the day's damage.
-    const assumedLoss = Number.isFinite(stake) && stake > 0 ? stake : equity * eff.riskPct / 100;
-    realizedPnlToday -= assumedLoss;
-  }
-  if (unknownSettlements > 0) {
-    logger.warn(
-      { symbol: signal.symbol, accountId: conn.accountId, unknownSettlements, realizedPnlToday },
-      "Daily loss guard counted settlements with unknown P&L as full-stake losses; check the trade ledger",
-    );
-  }
-  const openWorstCaseStake = openTrades.reduce((total, trade) => {
-    const stake = Number(trade.lotSize);
-    return Number.isFinite(stake) && stake >= 0 ? total + stake : Number.NaN;
-  }, 0);
-  const dailyLossSizing = calculateDailyLossCappedStake({
-    equity,
-    maxDailyLossPct: eff.dailyLossPct,
-    realizedPnlToday,
-    openWorstCaseStake,
-    currentStakeCap: sizing.stake,
-  });
-  if (!dailyLossSizing.ok) {
-    await recordGeneratedReason(signal.id, `Daily loss guard refused trade: ${dailyLossSizing.reason}`);
-    logger.warn(
-      { symbol: signal.symbol, equity, maxDailyLossPct, realizedPnlToday, openWorstCaseStake, reason: dailyLossSizing.reason },
-      "Daily loss budget refused trade",
-    );
+  const freeBalance = equity - openedSinceSync;
+  const sized = pollStake({ equity, freeBalance, riskPerTradePct });
+  if (!sized.ok) {
+    await recordGeneratedReason(signal.id, `No trade: ${sized.reason}`);
+    recordRejection({ symbol: signal.symbol, stage: "sizing", reason: sized.reason, metrics: { equity, freeBalance } });
+    logger.info({ symbol: signal.symbol, equity, freeBalance, reason: sized.reason }, "Stake refused");
     return;
   }
-
-  // Last step, after both caps, because the daily-loss guard can shrink a stake
-  // back under $1.00 and undo the lift otherwise. Under $1.00 Deriv opens a
-  // binary, which has no stop-loss — so the smaller stake is the riskier order,
-  // and lifting to $1.00 lowers money at risk rather than raising it.
-  const floored = applyMultiplierFloor({ stake: dailyLossSizing.stake, equity });
-  const stakeAmount = floored.stake;
-  const forceBinary = stakeAmount < MULTIPLIER_MIN_STAKE;
-  if (floored.lifted) {
-    logger.info({ symbol: signal.symbol, equity, from: dailyLossSizing.stake, to: stakeAmount, reason: floored.reason }, "Stake lifted to the multiplier floor");
-  }
+  const stakeAmount = sized.stake;
+  const forceBinary = false;
   logger.info(
-    {
-      symbol: signal.symbol,
-      equity,
-      stakeAmount,
-      band: eff.band,
-      contract: forceBinary ? "binary" : "multiplier",
-      worstCaseLoss: worstCaseLoss(stakeAmount, forceBinary ? "binary" : "multiplier"),
-      riskCap: sizing.cap,
-      dailyLossRemaining: dailyLossSizing.remainingBudget,
-      slots: sizing.slots,
-      confidence: signal.confidence,
-    },
-    "Strict trade and daily-loss caps computed; confidence does not increase stake",
+    { symbol: signal.symbol, equity, freeBalance, stakeAmount, band: sized.band, riskPct: sized.riskPct, worstCaseLoss: worstCaseLoss(stakeAmount) },
+    "Stake computed",
   );
-
-  // The poll was chosen and tested as a multiplier trade held up to four days
-  // with a stop. Deriv's shortest forex Rise/Fall binary is a different bet —
-  // one day, no stop, the whole stake lost on a wrong call — that was never
-  // tested, so when the balance cannot carry the $1.00 multiplier minimum the
-  // bot does not fall back to binaries: it waits for the balance instead.
-  if (forceBinary) {
-    const reason = `Balance $${equity.toFixed(2)} cannot carry Deriv's $1.00 multiplier minimum within the risk limits (${floored.reason}); the strategy poll trades multipliers only, so no trade`;
-    await recordGeneratedReason(signal.id, reason);
-    recordRejection({ symbol: signal.symbol, stage: "sizing", reason, metrics: { equity, stake: stakeAmount } });
-    logger.info({ symbol: signal.symbol, equity, stakeAmount }, "No trade: balance below the multiplier floor and binaries are not used by the poll");
-    return;
-  }
 
   // ── Entry: only at a price close to the one the poll voted on ──
   //
@@ -682,15 +566,11 @@ async function dispatchTradeUnlocked(
   // earlier refusal can only raise them.
   const minStopUsd = Math.max(quote?.limits.stopLossMin ?? DEFAULT_MIN_LIMIT_ORDER_USD, learnedLimitMins.stopLossMin);
   const minTakeProfitUsd = Math.max(quote?.limits.takeProfitMin ?? DEFAULT_MIN_LIMIT_ORDER_USD, learnedLimitMins.takeProfitMin);
-  // The stop is capped three ways: 80% of stake (exit before Deriv's stop-out),
-  // Deriv's own maximum, and what is left of today's loss budget. The last one
-  // matters after a loss on a small account: the guard shrinks the stake under
-  // $1.00, the floor lifts it back, and without this the lifted trade could
-  // carry a stop larger than the budget it was sized against.
+  // The stop is capped two ways: 80% of stake (exit before Deriv's stop-out)
+  // and Deriv's own maximum.
   const capFraction = Math.min(
     MULTIPLIER_STOP_CAP_PCT,
     quote?.limits.stopLossMax != null ? quote.limits.stopLossMax / stakeAmount : Number.POSITIVE_INFINITY,
-    dailyLossSizing.remainingBudget / stakeAmount,
   );
   const plan = planEntry(forceBinary ? levels : {
     ...levels,
@@ -1040,7 +920,6 @@ async function runEntryWatch(): Promise<void> {
         row,
         parseFloat(config.riskPerTradePct),
         config.maxConcurrentPositions,
-        parseFloat(config.maxDailyLossPct),
         forexParams,
       ).catch((err) => {
         logger.error({ symbol: p.symbol, signalId: p.id, err: err instanceof Error ? err.message : String(err) }, "Entry watcher dispatch failed");
@@ -1183,7 +1062,6 @@ async function runWorkerTick(): Promise<void> {
           signalRowFrom(p),
           parseFloat(config.riskPerTradePct),
           config.maxConcurrentPositions,
-          parseFloat(config.maxDailyLossPct),
           forexParams,
         ).catch((err) => {
           logger.error({ symbol: p.symbol, err }, "Replay dispatch error");
@@ -1404,7 +1282,6 @@ async function runWorkerTick(): Promise<void> {
           signalRow,
           parseFloat(config.riskPerTradePct),
           config.maxConcurrentPositions,
-          parseFloat(config.maxDailyLossPct),
           forexParams,
         ).catch((err) => {
           logger.error({ symbol, err }, "Trade dispatch error");

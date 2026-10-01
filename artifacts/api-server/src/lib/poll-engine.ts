@@ -141,9 +141,10 @@ export function alignCloses(bars: Bars, all: Map<string, Bars>): Record<string, 
  * Deriv's commission as a fraction of price, allowed for in the target. It is
  * charged on stake x multiplier, so per unit of price it is a fixed share of
  * price: measured at 2 bps in the London and New York sessions (the $0.02 on
- * $1 x100 the self-test reports). 3 bps leaves room for a dearer quote.
+ * $1 x100 the self-test reports) and 6 bps late in the day. 6 bps covers both,
+ * so a vote in the last session hour is traded rather than held back.
  */
-export const POLL_COST_ALLOWANCE = 0.0003;
+export const POLL_COST_ALLOWANCE = 0.0006;
 
 /**
  * Levels for a poll trade. The order path (planEntry) books Deriv's
