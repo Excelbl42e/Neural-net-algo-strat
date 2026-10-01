@@ -85,6 +85,17 @@ export async function ensureSchema(): Promise<void> {
         )
         UPDATE bot_config SET min_confidence = 0.50, max_position_hold_hours = 96
         WHERE EXISTS (SELECT 1 FROM once)`,
+    // One-time: "risk per trade" now means the share of the balance a
+    // stopped-out trade loses (the stake is sized from it), set to the 5%
+    // chosen by the 2026-10-02 sizing backtest. A later choice is kept.
+    sql`WITH once AS (
+          INSERT INTO app_secrets (key, value)
+          VALUES ('migration:risk_per_trade_loss_v1', now()::text)
+          ON CONFLICT (key) DO NOTHING
+          RETURNING key
+        )
+        UPDATE bot_config SET risk_per_trade_pct = 5.00
+        WHERE EXISTS (SELECT 1 FROM once)`,
     // Same upgrade: ICT signals still waiting for their entry when the poll
     // took over must not be traded by the replay pass afterwards.
     sql`WITH once AS (

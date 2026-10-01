@@ -5,7 +5,7 @@ import {
   riskBandFor, typicalLoss, worstCaseLoss, RISK_BANDS, MULTIPLIER_MIN_STAKE,
 } from "../src/lib/execution-risk.ts";
 
-const plan = (equity: number, riskPct = 20, maxPositions = 3, perClass = 2) =>
+const plan = (equity: number, riskPct = 5, maxPositions = 3, perClass = 2) =>
   describeStakePlan({ equity, riskPerTradePct: riskPct, maxConcurrentPositions: maxPositions, maxPerAssetClass: perClass });
 
 test("no band boundary pushes the stake back under the $1.00 multiplier minimum", () => {
@@ -42,21 +42,24 @@ test("riskBandFor lands on the right band at each boundary", () => {
   assert.equal(riskBandFor(1_000_000).band, "mature");
 });
 
-test("every vote trades $1.00 while $1.00 is free — no daily-loss stop, no $4 floor", () => {
-  assert.deepEqual(pollStake({ equity: 5, freeBalance: 5, riskPerTradePct: 20 }), { ok: true, stake: 1, band: "floor", riskPct: 20, riskCappedByBand: false });
-  // After losses the bot keeps trading at the $1.00 minimum...
-  assert.equal((pollStake({ equity: 2.4, freeBalance: 2.4, riskPerTradePct: 20 }) as { stake: number }).stake, 1);
-  assert.equal((pollStake({ equity: 1, freeBalance: 1, riskPerTradePct: 20 }) as { stake: number }).stake, 1);
-  // ...until the free balance cannot pay for the next stake.
-  const out = pollStake({ equity: 0.95, freeBalance: 0.95, riskPerTradePct: 20 });
-  assert.equal(out.ok, false);
-  // Money held by open trades is not free.
-  assert.equal(pollStake({ equity: 5, freeBalance: 0.5, riskPerTradePct: 20 }).ok, false);
+test("the stake is sized so a stopped-out trade loses the risk percentage, never under $1.00", () => {
+  // $1.00 at x100 loses ~$0.62 at the 0.6% stop. 5% of $20 = $1.00 of loss -> $1.61 stake.
+  assert.deepEqual(pollStake({ equity: 20, freeBalance: 20, riskPerTradePct: 5 }), { ok: true, stake: 1.61, band: "build", riskPct: 5, riskCappedByBand: false });
+  assert.equal((pollStake({ equity: 100, freeBalance: 100, riskPerTradePct: 5 }) as { stake: number }).stake, 8.06);
+  // Small balances are held at Deriv's $1.00 minimum rather than refused...
+  assert.equal((pollStake({ equity: 10, freeBalance: 10, riskPerTradePct: 5 }) as { stake: number }).stake, 1);
+  assert.equal((pollStake({ equity: 1, freeBalance: 1, riskPerTradePct: 5 }) as { stake: number }).stake, 1);
+  // ...until the free balance cannot pay for it. Money held by open trades is not free.
+  assert.equal(pollStake({ equity: 0.95, freeBalance: 0.95, riskPerTradePct: 5 }).ok, false);
+  assert.equal(pollStake({ equity: 5, freeBalance: 0.5, riskPerTradePct: 5 }).ok, false);
+  // Never more than is free.
+  assert.equal((pollStake({ equity: 20, freeBalance: 1.5, riskPerTradePct: 5 }) as { stake: number }).stake, 1.5);
 });
 
-test("larger balances stake the band's percentage, never more than is free", () => {
-  assert.equal((pollStake({ equity: 20, freeBalance: 20, riskPerTradePct: 20 }) as { stake: number }).stake, 2);   // build band 10%
-  assert.equal((pollStake({ equity: 20, freeBalance: 1.5, riskPerTradePct: 20 }) as { stake: number }).stake, 1.5);
+test("the ladder caps the risk lower as the balance grows", () => {
+  const big = pollStake({ equity: 2000, freeBalance: 2000, riskPerTradePct: 5 }) as { stake: number; riskPct: number };
+  assert.equal(big.riskPct, 1);
+  assert.equal(big.stake, 32.25);
 });
 
 test("a losing trade costs its 0.6% stop; never over the 80% cap", () => {
@@ -87,7 +90,7 @@ test("$1.50 still trades one; under $1.00 is blocked with the reason", () => {
 test("the stake ladder keeps worst case shrinking as a share of equity", () => {
   const shares = [5, 20, 100, 500, 2000].map((e) => plan(e).worstCasePctOfEquity!);
   for (let i = 1; i < shares.length; i++) assert.ok(shares[i]! <= shares[i - 1]!, `share rose from ${shares[i - 1]} to ${shares[i]}`);
-  assert.ok(shares.at(-1)! <= 1, `a mature account should risk <=1% per trade, got ${shares.at(-1)}`);
+  assert.ok(shares.at(-1)! <= 1.5, `a mature account's worst case (a gap to the 80% cap) should stay near 1%, got ${shares.at(-1)}`);
 });
 
 // ── Settlement accounting ────────────────────────────────────────────────────

@@ -24,7 +24,7 @@ const DEFAULTS = {
   newsBlackoutAfterMin: 30,
   maxSpreadCostPct: 0.5,
   maxPositionHoldHours: 96,
-  riskPerTradePct: 1,
+  riskPerTradePct: 5,
   maxConcurrentPositions: 3,
   maxDailyLossPct: 5,
   minConfidence: 0.5,

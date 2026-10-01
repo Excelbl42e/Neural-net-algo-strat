@@ -95,7 +95,7 @@ export default function ConfigurationPage() {
     defaultValues: {
       enabled: false,
       autotradeMode: "off",
-      riskPerTradePct: 1,
+      riskPerTradePct: 5,
       maxConcurrentPositions: 3,
       smallAccountMaxRiskPct: 10,
       minRiskReward: 1.5,
@@ -277,11 +277,8 @@ export default function ConfigurationPage() {
           </CardHeader>
           <CardContent className="space-y-3">
             <p className="text-xs text-muted-foreground">
-              A single risk percentage cannot serve both ends of an account's life. At $5, 20% is not aggression — it is
-              the smallest number that reaches Deriv's $1.00 multiplier stake, and anything less cannot open a multiplier
-              at all. At $500 that same 20% is a $100 swing per trade. So your saved settings are a <em>ceiling</em>, and
-              the balance applies a second one; the lower of the two is what trades. The ladder only ever tightens, never
-              loosens, and the bands are cut so that no step ever pushes the stake back under $1.00.
+              The most a stopped-out trade may lose, by balance. Your "Risk per trade" setting applies, and as the balance
+              grows the ladder caps it lower; the lower of the two is what trades. It only ever tightens.
             </p>
             <div className="overflow-x-auto">
               <table className="w-full text-xs font-mono-numbers">
@@ -414,16 +411,16 @@ export default function ConfigurationPage() {
               )} />
               <FormField control={form.control} name="riskPerTradePct" render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Risk per trade % (hard ceiling)</FormLabel>
+                  <FormLabel>Risk per trade % (loss if stopped out)</FormLabel>
                   <FormControl><Input type="number" step="0.1" min="0" max="100" {...field} data-testid="input-risk-per-trade" /></FormControl>
-                  <FormDescription className="text-[11px]">A ceiling on the share of verified USD equity one trade may stake, and the balance band applies a second ceiling on top — the lower of the two is what trades. The single exception is the $1.00 multiplier floor, which may round a stake up because doing so lowers money at risk. Trades below the broker minimum are refused.</FormDescription>
-                  {Number(riskPerTradePctValue) >= 10 && (
+                  <FormDescription className="text-[11px]">The share of your balance one trade loses if it hits its stop. The stake is sized from it: a $1.00 stake loses about $0.62 at the 0.6% stop, so 5% of a $20 balance ($1.00) gives a $1.61 stake. Never below Deriv's $1.00 multiplier minimum, so on a small balance the real loss can be higher than this. 5% was chosen by backtest: higher settings (bigger stakes) wiped out more small accounts.</FormDescription>
+                  {Number(riskPerTradePctValue) > 8 && (
                     <div className="flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 p-2 text-[11px] text-amber-400">
                       <AlertCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
                       <span>
-                        At {Number(riskPerTradePctValue)}%, one losing multiplier trade can cost up to about {(Number(riskPerTradePctValue) * 0.8).toFixed(0)}% of your equity — its stop is capped at 80% of stake
-                        {equity > 0 ? `, so roughly $${(equity * Number(riskPerTradePctValue) / 100 * 0.8).toFixed(2)} on your current $${equity.toFixed(2)} balance` : ""}.
-                        This is well above the 1% fixed-fractional default. It is a deliberate way to clear Deriv's $1 multiplier minimum on a very small account. You no longer have to remember to lower it: the risk ladder above tapers it to 10%, 5%, 2% and finally 1% as the balance grows, and this setting stays as the ceiling it never rises above.
+                        At {Number(riskPerTradePctValue)}% a single stopped-out trade loses that much of the balance, and two can be
+                        open at once. Above about 8% the stakes pass what the backtest's own edge can carry (the Kelly stake), and
+                        small accounts were wiped out far more often.
                       </span>
                     </div>
                   )}

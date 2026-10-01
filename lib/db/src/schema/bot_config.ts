@@ -6,7 +6,7 @@ export const botConfigTable = pgTable("bot_config", {
   id: serial("id").primaryKey(),
   enabled: boolean("enabled").notNull().default(false),
   autotradeMode: text("autotrade_mode").notNull().default("off"),
-  riskPerTradePct: numeric("risk_per_trade_pct", { precision: 5, scale: 2 }).notNull().default("1.00"),
+  riskPerTradePct: numeric("risk_per_trade_pct", { precision: 5, scale: 2 }).notNull().default("5.00"),
   maxConcurrentPositions: integer("max_concurrent_positions").notNull().default(3),
   maxDailyLossPct: numeric("max_daily_loss_pct", { precision: 5, scale: 2 }).notNull().default("5.00"),
   minConfidence: numeric("min_confidence", { precision: 4, scale: 3 }).notNull().default("0.500"),
