@@ -77,16 +77,13 @@ router.get("/config/risk-bands", async (_req, res): Promise<void> => {
   const cfg = row ? serialize(row) : { ...DEFAULTS, updatedAt: "" };
   res.json({
     configuredRiskPct: cfg.riskPerTradePct,
-    configuredDailyLossPct: cfg.maxDailyLossPct,
     bands: RISK_BANDS.map((b, i) => ({
       band: b.band,
       from: b.from,
       to: RISK_BANDS[i + 1]?.from ?? null,
       riskPct: b.riskPct,
-      dailyLossPct: b.dailyLossPct,
       why: b.why,
       appliedRiskPct: Math.min(cfg.riskPerTradePct, b.riskPct),
-      appliedDailyLossPct: Math.min(cfg.maxDailyLossPct, b.dailyLossPct),
     })),
   });
 });
@@ -96,15 +93,13 @@ router.get("/config/stake-preview", async (req, res): Promise<void> => {
   const [row] = await db.select().from(botConfigTable).where(eq(botConfigTable.id, 1));
   const cfg = row ? serialize(row) : { ...DEFAULTS, updatedAt: "" };
   const equities = String(req.query.equity ?? "").split(",").map(Number).filter((n) => Number.isFinite(n) && n > 0).slice(0, 8);
-  // describeStakePlan walks the real sizing path — balance band, both caps and
-  // the multiplier floor — so this table cannot drift from what the worker does.
+  // describeStakePlan uses pollStake, the dispatcher's own sizing, so this
+  // table cannot drift from what the worker does.
   const rows = equities.map((equity) => {
     const plan = describeStakePlan({
       equity,
       riskPerTradePct: cfg.riskPerTradePct,
       maxConcurrentPositions: cfg.maxConcurrentPositions,
-      maxDailyLossPct: cfg.maxDailyLossPct,
-      smallAccountMaxRiskPct: (cfg as { smallAccountMaxRiskPct: number }).smallAccountMaxRiskPct,
       maxPerAssetClass: (cfg as { maxPerAssetClass: number }).maxPerAssetClass,
     });
     return {
@@ -114,9 +109,7 @@ router.get("/config/stake-preview", async (req, res): Promise<void> => {
       stake: plan.stake,
       band: plan.band,
       riskPct: plan.riskPct,
-      dailyLossPct: plan.dailyLossPct,
       riskCappedByBand: plan.riskCappedByBand,
-      lifted: plan.lifted,
       contract: plan.contract,
       typicalLoss: plan.typicalLoss,
       worstCaseLoss: plan.worstCaseLoss,

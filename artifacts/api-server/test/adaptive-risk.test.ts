@@ -1,44 +1,33 @@
 import { strict as assert } from "node:assert";
 import test from "node:test";
 import {
-  applyMultiplierFloor, describeStakePlan, effectiveRiskPcts, maxFundablePositions,
+  describeStakePlan, effectiveRiskPcts, pollStake,
   riskBandFor, typicalLoss, worstCaseLoss, RISK_BANDS, MULTIPLIER_MIN_STAKE,
 } from "../src/lib/execution-risk.ts";
 
-const plan = (equity: number, riskPct = 20, dailyLossPct = 20, maxPositions = 3) =>
-  describeStakePlan({ equity, riskPerTradePct: riskPct, maxConcurrentPositions: maxPositions, maxDailyLossPct: dailyLossPct });
+const plan = (equity: number, riskPct = 20, maxPositions = 3, perClass = 2) =>
+  describeStakePlan({ equity, riskPerTradePct: riskPct, maxConcurrentPositions: maxPositions, maxPerAssetClass: perClass });
 
-test("no band boundary pushes the stake back under the $1.00 multiplier floor", () => {
-  // The whole point of where the bands are cut: stepping risk down at the
-  // boundary must not drop the account onto the stop-less binary path.
+test("no band boundary pushes the stake back under the $1.00 multiplier minimum", () => {
   for (const rule of RISK_BANDS) {
     if (rule.from === 0) continue;
     const stake = rule.from * rule.riskPct / 100;
-    assert.ok(stake >= MULTIPLIER_MIN_STAKE, `band ${rule.band} at $${rule.from} gives $${stake.toFixed(2)}, under the floor`);
+    assert.ok(stake >= MULTIPLIER_MIN_STAKE, `band ${rule.band} at $${rule.from} gives $${stake.toFixed(2)}, under the minimum`);
   }
 });
 
 test("the band ladder tightens as the balance grows and never loosens", () => {
-  let lastRisk = Infinity, lastDaily = Infinity;
-  for (const rule of RISK_BANDS) {
-    assert.ok(rule.riskPct <= lastRisk, `${rule.band} risk went up`);
-    assert.ok(rule.dailyLossPct <= lastDaily, `${rule.band} daily loss went up`);
-    lastRisk = rule.riskPct; lastDaily = rule.dailyLossPct;
-  }
+  let lastRisk = Infinity;
+  for (const rule of RISK_BANDS) { assert.ok(rule.riskPct <= lastRisk, `${rule.band} risk went up`); lastRisk = rule.riskPct; }
 });
 
 test("the band can only tighten a configured setting, never widen it", () => {
-  // A deliberately cautious operator is not talked up to the band ceiling.
-  const cautious = effectiveRiskPcts(5, 1, 2);
+  const cautious = effectiveRiskPcts(5, 1);
   assert.equal(cautious.riskPct, 1);
-  assert.equal(cautious.dailyLossPct, 2);
   assert.equal(cautious.riskCappedByBand, false);
-
-  // But 20% saved at $5 does not survive to $500.
-  const grown = effectiveRiskPcts(500, 20, 20);
+  const grown = effectiveRiskPcts(500, 20);
   assert.equal(grown.band, "steady");
   assert.equal(grown.riskPct, 2);
-  assert.equal(grown.dailyLossPct, 6);
   assert.equal(grown.riskCappedByBand, true);
 });
 
@@ -53,85 +42,52 @@ test("riskBandFor lands on the right band at each boundary", () => {
   assert.equal(riskBandFor(1_000_000).band, "mature");
 });
 
-test("a $0.99 stake is lifted to $1.00 because the binary it would become risks more", () => {
-  const r = applyMultiplierFloor({ stake: 0.99, equity: 4.99 });
-  assert.equal(r.lifted, true);
-  assert.equal(r.stake, 1);
-  // The justification has to hold numerically, not just in prose.
-  assert.ok(worstCaseLoss(1, "multiplier") < worstCaseLoss(0.99, "binary"));
+test("every vote trades $1.00 while $1.00 is free — no daily-loss stop, no $4 floor", () => {
+  assert.deepEqual(pollStake({ equity: 5, freeBalance: 5, riskPerTradePct: 20 }), { ok: true, stake: 1, band: "floor", riskPct: 20, riskCappedByBand: false });
+  // After losses the bot keeps trading at the $1.00 minimum...
+  assert.equal((pollStake({ equity: 2.4, freeBalance: 2.4, riskPerTradePct: 20 }) as { stake: number }).stake, 1);
+  assert.equal((pollStake({ equity: 1, freeBalance: 1, riskPerTradePct: 20 }) as { stake: number }).stake, 1);
+  // ...until the free balance cannot pay for the next stake.
+  const out = pollStake({ equity: 0.95, freeBalance: 0.95, riskPerTradePct: 20 });
+  assert.equal(out.ok, false);
+  // Money held by open trades is not free.
+  assert.equal(pollStake({ equity: 5, freeBalance: 0.5, riskPerTradePct: 20 }).ok, false);
 });
 
-test("the lift is refused when the balance cannot carry the floor", () => {
-  // $0.80 worst case on a $3 balance is 26.7%, past the 20% limit.
-  const r = applyMultiplierFloor({ stake: 0.6, equity: 3 });
-  assert.equal(r.lifted, false);
-  assert.equal(r.stake, 0.6);
-  assert.match(r.reason, /too small/);
+test("larger balances stake the band's percentage, never more than is free", () => {
+  assert.equal((pollStake({ equity: 20, freeBalance: 20, riskPerTradePct: 20 }) as { stake: number }).stake, 2);   // build band 10%
+  assert.equal((pollStake({ equity: 20, freeBalance: 1.5, riskPerTradePct: 20 }) as { stake: number }).stake, 1.5);
 });
 
-test("an already-multiplier stake is left exactly alone", () => {
-  const r = applyMultiplierFloor({ stake: 4, equity: 20 });
-  assert.equal(r.lifted, false);
-  assert.equal(r.stake, 4);
+test("a losing trade costs its 0.6% stop; never over the 80% cap", () => {
+  assert.equal(typicalLoss(1), 0.6);
+  assert.equal(typicalLoss(40), 24);
+  assert.equal(typicalLoss(1, 100, 0.02), 0.8);
+  assert.equal(worstCaseLoss(1), 0.8);
 });
 
-test("a losing trade at the $1.00 floor costs its 1-ATR stop, not a guessed $0.50 floor", () => {
-  // 1 ATR (~0.1% of price) on $1 x 100 is ~$0.10. The old model clamped this to
-  // an unverified $0.50 Deriv minimum, which the dispatcher no longer assumes.
-  assert.equal(typicalLoss(1, "multiplier"), 0.6);    // the poll's 0.6% stop at x100
-  assert.equal(typicalLoss(40, "multiplier"), 24);
-  assert.equal(typicalLoss(0.99, "binary"), 0.99);     // a binary always costs everything
-  // Never over the 80% stop cap, however wide the modelled stop.
-  assert.equal(typicalLoss(1, "multiplier", 100, 0.02), 0.8);
-});
-
-test("$5.00 funds one $1.00 multiplier trade, and the day's budget stops there", () => {
+test("$5.00: $1.00 per trade, two open at once (the position ceiling)", () => {
   const p = plan(5);
   assert.equal(p.stake, 1);
   assert.equal(p.contract, "multiplier");
-  assert.equal(p.band, "floor");
-  assert.equal(p.fundable, 1);
-  assert.equal(p.limitedBy, "daily_loss_budget");
+  assert.equal(p.fundable, 2);
+  assert.equal(p.limitedBy, "configured");
   assert.equal(p.worstCaseLoss, 0.8);
 });
 
-test("$4.99 no longer falls onto the binary path — the regression that motivated the floor", () => {
-  const p = plan(4.99);
-  assert.equal(p.contract, "multiplier");
-  assert.equal(p.stake, 1);
-  assert.equal(p.lifted, true);
-  // 20% of $4.99 is $0.99; without the lift this row was a full-stake binary.
-  assert.ok(p.worstCaseLoss! < 0.99);
-});
-
-test("below the floor's reach the account does not trade, and says why (no binary fallback)", () => {
-  const p = plan(3);
-  assert.equal(p.contract, null);
+test("$1.50 still trades one; under $1.00 is blocked with the reason", () => {
+  assert.equal(plan(1.5).fundable, 1);
+  assert.equal(plan(1.5).limitedBy, "equity");
+  const p = plan(0.6);
   assert.equal(p.stake, null);
-  assert.match(p.blocked ?? "", /multipliers only/);
+  assert.equal(p.fundable, 0);
+  assert.match(p.blocked!, /\$1\.00 multiplier minimum/);
 });
 
 test("the stake ladder keeps worst case shrinking as a share of equity", () => {
-  // The property that actually prevents blowing up: bigger balance, smaller bite.
   const shares = [5, 20, 100, 500, 2000].map((e) => plan(e).worstCasePctOfEquity!);
-  for (let i = 1; i < shares.length; i++) {
-    assert.ok(shares[i]! <= shares[i - 1]!, `share rose from ${shares[i - 1]} to ${shares[i]}`);
-  }
+  for (let i = 1; i < shares.length; i++) assert.ok(shares[i]! <= shares[i - 1]!, `share rose from ${shares[i - 1]} to ${shares[i]}`);
   assert.ok(shares.at(-1)! <= 1, `a mature account should risk <=1% per trade, got ${shares.at(-1)}`);
-});
-
-test("the preview walks the same path as the dispatcher, lift included", () => {
-  // describeStakePlan must not restate the arithmetic — it must call the sizer.
-  const fit = maxFundablePositions({ equity: 4.99, riskPerTradePct: 20, maxConcurrentPositions: 3, maxDailyLossPct: 20 });
-  assert.deepEqual(fit.stakes, [plan(4.99).stake]);
-  assert.deepEqual(fit.lifted, [true]);
-});
-
-test("an account under the Deriv minimum is reported as blocked, not as a zero stake", () => {
-  const p = plan(0.2);
-  assert.equal(p.stake, null);
-  assert.equal(p.fundable, 0);
-  assert.match(p.blocked!, /minimum stake/);
 });
 
 // ── Settlement accounting ────────────────────────────────────────────────────
@@ -157,22 +113,11 @@ test("settlement P&L is proceeds minus stake, to the cent", async () => {
   assert.equal(settlementPnl(2, "1.005"), 1);      // rounds, never drifts
 });
 
-test("the asset-class cap is honoured, because every forex pair is one class", async () => {
-  const { maxFundablePositions } = await import("../src/lib/execution-risk.ts");
+test("the asset-class cap is honoured, because every forex pair is one class", () => {
   // This bot trades forex only, so maxPerAssetClass is a second and lower
-  // ceiling than maxConcurrentPositions at their defaults. Reporting "3 of 3"
-  // promised a third position the portfolio gate always refuses.
-  const capped = maxFundablePositions({
-    equity: 1000, riskPerTradePct: 1, maxConcurrentPositions: 3, maxDailyLossPct: 4, maxPerAssetClass: 2,
-  });
-  assert.equal(capped.configured, 2, "the lower of the two caps is what is promised");
-  assert.equal(capped.fundable, 2);
-  assert.equal(capped.limitedBy, "asset_class_cap");
-
-  // A wider asset-class cap hands the ceiling back to maxConcurrentPositions.
-  const uncapped = maxFundablePositions({
-    equity: 1000, riskPerTradePct: 1, maxConcurrentPositions: 3, maxDailyLossPct: 4, maxPerAssetClass: 9,
-  });
-  assert.equal(uncapped.configured, 3);
-  assert.equal(uncapped.limitedBy, "configured");
+  // ceiling than maxConcurrentPositions at their defaults.
+  const capped = describeStakePlan({ equity: 1000, riskPerTradePct: 1, maxConcurrentPositions: 3, maxPerAssetClass: 2 });
+  assert.equal(capped.fundable, 2, "the lower of the two caps is what is promised");
+  const uncapped = describeStakePlan({ equity: 1000, riskPerTradePct: 1, maxConcurrentPositions: 3, maxPerAssetClass: 9 });
+  assert.equal(uncapped.fundable, 3);
 });

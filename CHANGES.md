@@ -1,5 +1,25 @@
 # Changes in this build (vs. your Replit export)
 
+## Trade every majority vote until the balance runs out
+
+Asked for by the operator, funding $5: every majority vote is now traded, and nothing stops trading except money.
+
+- **Stake:** the balance band's risk percentage, never under Deriv's $1.00 multiplier minimum. At $5 that is $1.00 a trade.
+- **Trades while $1.00 is free.** The synced balance is Deriv's cash (an open contract's stake has already left it); stakes opened since the last sync are taken off too. When less than $1.00 is free the bot waits, and trades again as soon as a closing trade returns its stake.
+- **Removed:** the daily-loss stop, the $4.00 balance floor and the small-account risk cap (and their settings on the Configuration page). Kept: at most 2 trades open at once (the position ceiling — the lower of "Max positions" and "Max open positions per asset class"), one per pair, Deriv's market hours, the sessions you configure, no new trades after Friday 16:00 UTC, the news blackout, the stale-price check, Deriv's live quote and limits, and the stop on every trade.
+- The commission allowance in the target is 6 bps (Deriv charges 2 bps in London/New York and about 6 bps late), so a vote in the last session hour is traded rather than held back.
+
+### What to expect on $5 (backtest, every Deriv forex pair, live rules)
+34 three-month runs, one starting each week from Nov 2025 to Jun 2026:
+
+| Trades open at most | Ended above $5 | Ended below $2 | Median end | Best | Worst |
+|---|---|---|---|---|---|
+| 1 | 24% | 26% | $3.40 | $6.57 | $0.45 |
+| **2 (default)** | **38%** | **41%** | **$3.12** | **$10.24** | **$0.58** |
+| 3 | 41% | 47% | $3.67 | $15.30 | $0.58 |
+
+On $5 the result is mostly which few trades happen to come first: a small change to the target moved one whole-year run from $11.13 to $0.61. Over many runs it is close to a coin flip, slightly more often down than up.
+
 ## The poll, tuned: each strategy on its best timeframe, majority rules, four-day hold
 
 The first poll used every strategy on 30-minute candles, a fixed 70% threshold and a 24-hour hold, and lost money after commission. This version was chosen properly:

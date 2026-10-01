@@ -1,200 +1,34 @@
 export const DERIV_MIN_STAKE = 0.35;
 
-export interface StakeSizingInput {
-  equity: number;
-  riskPerTradePct: number;
-  maxConcurrentPositions: number;
-  openPositions: number;
-  minStake?: number;
-  /** Allow a minimum-stake trade when minStake/equity (%) is at most this. Default 10. */
-  smallAccountMaxRiskPct?: number;
-}
-
-export type StakeSizingResult =
-  | { ok: true; stake: number; slots: number; cap: number }
-  | { ok: false; reason: string };
-
-export interface DailyLossStakeInput {
-  equity: number;
-  maxDailyLossPct: number;
-  realizedPnlToday: number;
-  openWorstCaseStake: number;
-  currentStakeCap: number;
-  minStake?: number;
-}
-
-export type DailyLossStakeResult =
-  | { ok: true; stake: number; remainingBudget: number }
+export type PollStakeResult =
+  | { ok: true; stake: number; band: RiskBand; riskPct: number; riskCappedByBand: boolean }
   | { ok: false; reason: string };
 
 /**
- * Applies the daily loss budget to an already risk-capped stake. This helper
- * can only reduce the existing cap; it never enlarges it.
+ * The stake for one poll trade: the balance band's risk percentage of the
+ * balance, never less than Deriv's $1.00 multiplier minimum, and only while
+ * that much is actually free. There is no daily-loss stop and no balance
+ * floor above $1.00: the bot trades every majority vote until the free
+ * balance cannot pay for the next stake, which is how the $5 backtest that
+ * chose these rules was run. How many trades are open at once is capped
+ * separately (the position ceiling), and each trade's loss by its stop.
  */
-export function calculateDailyLossCappedStake(input: DailyLossStakeInput): DailyLossStakeResult {
-  const minStake = input.minStake ?? DERIV_MIN_STAKE;
-  const { equity, maxDailyLossPct, realizedPnlToday, openWorstCaseStake, currentStakeCap } = input;
-  if (!Number.isFinite(equity) || equity <= 0) return { ok: false, reason: "account equity unavailable or invalid for daily loss budget" };
-  if (!Number.isFinite(maxDailyLossPct) || maxDailyLossPct <= 0 || maxDailyLossPct > 100) {
-    return { ok: false, reason: "maximum daily loss percentage is missing or invalid" };
+export function pollStake(input: { equity: number; freeBalance: number; riskPerTradePct: number }): PollStakeResult {
+  const { equity, freeBalance, riskPerTradePct } = input;
+  if (!Number.isFinite(equity) || equity <= 0 || !Number.isFinite(freeBalance)) {
+    return { ok: false, reason: "account balance unavailable or invalid" };
   }
-  if (!Number.isFinite(realizedPnlToday)) return { ok: false, reason: "today's realized P&L is unavailable or invalid" };
-  if (!Number.isFinite(openWorstCaseStake) || openWorstCaseStake < 0) {
-    return { ok: false, reason: "open-trade worst-case stake is unavailable or invalid" };
-  }
-  if (!Number.isFinite(currentStakeCap) || currentStakeCap < minStake) {
-    return { ok: false, reason: "existing risk-capped stake is invalid or below the Deriv minimum" };
-  }
-
-  const dailyBudget = equity * maxDailyLossPct / 100;
-  const realizedLoss = Math.max(0, -realizedPnlToday);
-  const remainingBudget = dailyBudget - realizedLoss - openWorstCaseStake;
-  if (!Number.isFinite(remainingBudget) || remainingBudget < minStake) {
-    return { ok: false, reason: "remaining daily loss budget is below the Deriv minimum stake" };
-  }
-
-  const stake = Math.floor((Math.min(currentStakeCap, remainingBudget) + Number.EPSILON) * 100) / 100;
-  if (!Number.isFinite(stake) || stake < minStake) {
-    return { ok: false, reason: "daily-loss-capped stake is below the Deriv minimum stake" };
-  }
-  return { ok: true, stake, remainingBudget };
-}
-
-/**
- * Computes a conservative stake with every cap enforced. Confidence is
- * deliberately not an input: an LLM-reported score cannot enlarge exposure.
- */
-export function calculateCappedStake(input: StakeSizingInput): StakeSizingResult {
-  const minStake = input.minStake ?? DERIV_MIN_STAKE;
-  const { equity, riskPerTradePct, maxConcurrentPositions, openPositions } = input;
-  if (!Number.isFinite(equity) || equity <= 0) return { ok: false, reason: "account equity unavailable or invalid" };
   if (!Number.isFinite(riskPerTradePct) || riskPerTradePct <= 0 || riskPerTradePct > 100) {
     return { ok: false, reason: "risk-per-trade setting unavailable or invalid" };
   }
-  if (!Number.isFinite(maxConcurrentPositions) || maxConcurrentPositions < 1) {
-    return { ok: false, reason: "maximum concurrent positions unavailable or invalid" };
+  const eff = effectiveRiskPcts(equity, riskPerTradePct);
+  const sized = Math.floor((equity * eff.riskPct / 100 + Number.EPSILON) * 100) / 100;
+  let stake = Math.max(MULTIPLIER_MIN_STAKE, sized);
+  if (stake > freeBalance) stake = Math.max(MULTIPLIER_MIN_STAKE, Math.floor((freeBalance + Number.EPSILON) * 100) / 100);
+  if (freeBalance < MULTIPLIER_MIN_STAKE) {
+    return { ok: false, reason: `free balance $${Math.max(0, freeBalance).toFixed(2)} is under Deriv's $1.00 multiplier minimum; trading resumes when open trades close` };
   }
-  if (!Number.isFinite(openPositions) || openPositions < 0) {
-    return { ok: false, reason: "open position count unavailable or invalid" };
-  }
-  if (equity < minStake) return { ok: false, reason: "equity is below the Deriv minimum stake" };
-
-  const slots = Math.min(Math.floor(maxConcurrentPositions), Math.floor(equity / minStake));
-  if (slots < 1 || openPositions >= slots) {
-    return { ok: false, reason: "no funded concurrent position slot is available" };
-  }
-
-  const remainingSlots = Math.max(0, slots - Math.floor(openPositions) - 1);
-  const riskCap = equity * riskPerTradePct / 100;
-  const absoluteCap = equity * 0.4;
-  const reserveCap = equity - remainingSlots * minStake;
-  const cap = Math.min(equity / slots, riskCap, absoluteCap, reserveCap);
-  // Round down, never up through a configured risk cap.
-  let stake = Math.floor((cap + Number.EPSILON) * 100) / 100;
-  if (!Number.isFinite(stake) || stake < minStake) {
-    // Small-account rule: a minimum-stake trade is allowed only if its share of
-    // equity stays under smallAccountMaxRiskPct (multiplier max loss == stake).
-    const maxSmall = input.smallAccountMaxRiskPct ?? 10;
-    const minShare = (minStake / equity) * 100;
-    if (reserveCap >= minStake && absoluteCap >= minStake && minShare <= maxSmall) {
-      stake = minStake;
-    } else {
-      return { ok: false, reason: `account too small for configured risk (min stake $${minStake.toFixed(2)} is ${minShare.toFixed(1)}% of equity; small-account cap ${maxSmall}%)` };
-    }
-  }
-  return { ok: true, stake, slots, cap };
-}
-export interface FundablePositionsInput {
-  equity: number;
-  riskPerTradePct: number;
-  maxConcurrentPositions: number;
-  maxDailyLossPct: number;
-  smallAccountMaxRiskPct?: number;
-  minStake?: number;
-  /**
-   * Per-asset-class cap. This bot trades forex only, and every forex pair is
-   * the same asset class, so in practice this is a second ceiling on total
-   * concurrent positions — and a lower one than `maxConcurrentPositions` at
-   * its defaults. Omitting it makes this function claim a position count the
-   * portfolio gate will refuse.
-   */
-  maxPerAssetClass?: number;
-}
-
-export interface FundablePositionsResult {
-  /** How many positions can actually be opened together at this equity. */
-  fundable: number;
-  /** What the account is configured to allow. */
-  configured: number;
-  /** Stake of each position that would actually fit, in order. */
-  stakes: number[];
-  /** Per stake, whether it was raised to $1.00 to keep the order off the binary path. */
-  lifted: boolean[];
-  /** Why the count stopped where it did, when it is short of `configured`. */
-  limitedBy: "configured" | "daily_loss_budget" | "risk_sizing" | "equity" | "asset_class_cap";
-}
-
-/**
- * How many concurrent positions this account can genuinely fund right now.
- *
- * `maxConcurrentPositions` alone is aspirational: the daily-loss budget is
- * checked *after* per-trade sizing and reserves the stake of every open
- * position, so on a small account the first trade can consume the entire
- * day's budget and a second one is refused however high the configured cap
- * is. Rather than duplicating that interaction, this walks the real sizing
- * functions one position at a time, exactly as the dispatcher does, so the
- * number shown to a human is the number the trading path will actually
- * honour.
- */
-export function maxFundablePositions(input: FundablePositionsInput): FundablePositionsResult {
-  // The binding ceiling is whichever of the two caps is lower. Reporting
-  // `maxConcurrentPositions` alone promised trades the portfolio gate blocks.
-  const assetClassCap = input.maxPerAssetClass != null && Number.isFinite(input.maxPerAssetClass)
-    ? Math.max(0, Math.floor(input.maxPerAssetClass))
-    : Number.POSITIVE_INFINITY;
-  const configured = Math.min(Math.max(0, Math.floor(input.maxConcurrentPositions)), assetClassCap);
-  const stakes: number[] = [];
-  const lifted: boolean[] = [];
-  let reserved = 0;
-  let limitedBy: FundablePositionsResult["limitedBy"] = "configured";
-  // The band tapers both percentages before anything else sees them, exactly as
-  // the dispatcher does, so the preview cannot claim a stake the worker refuses.
-  const eff = effectiveRiskPcts(input.equity, input.riskPerTradePct, input.maxDailyLossPct);
-
-  while (stakes.length < configured) {
-    const sizing = calculateCappedStake({
-      equity: input.equity,
-      riskPerTradePct: eff.riskPct,
-      maxConcurrentPositions: input.maxConcurrentPositions,
-      openPositions: stakes.length,
-      smallAccountMaxRiskPct: input.smallAccountMaxRiskPct,
-      minStake: input.minStake,
-    });
-    if (!sizing.ok) {
-      limitedBy = stakes.length === 0 && input.equity < (input.minStake ?? DERIV_MIN_STAKE) ? "equity" : "risk_sizing";
-      break;
-    }
-    const daily = calculateDailyLossCappedStake({
-      equity: input.equity,
-      maxDailyLossPct: eff.dailyLossPct,
-      realizedPnlToday: 0,
-      openWorstCaseStake: reserved,
-      currentStakeCap: sizing.stake,
-      minStake: input.minStake,
-    });
-    if (!daily.ok) { limitedBy = "daily_loss_budget"; break; }
-    // The floor lift comes last, after both caps, because the daily-loss guard
-    // can shrink a stake back under $1.00 and undo it otherwise.
-    const floored = applyMultiplierFloor({ stake: daily.stake, equity: input.equity });
-    stakes.push(floored.stake);
-    lifted.push(floored.lifted);
-    reserved += floored.stake;
-  }
-
-  if (limitedBy === "configured" && assetClassCap < Math.floor(input.maxConcurrentPositions)) {
-    limitedBy = "asset_class_cap";
-  }
-  return { fundable: stakes.length, configured, stakes, lifted, limitedBy };
+  return { ok: true, stake, band: eff.band, riskPct: eff.riskPct, riskCappedByBand: eff.riskCappedByBand };
 }
 
 export interface StakePlanRow {
@@ -202,65 +36,42 @@ export interface StakePlanRow {
   band: RiskBand;
   /** Risk-per-trade actually applied here, after the band ceiling. */
   riskPct: number;
-  dailyLossPct: number;
   riskCappedByBand: boolean;
   stake: number | null;
-  contract: "multiplier" | "binary" | null;
-  /** True when the stake was raised to $1.00 to keep the order off the binary path. */
-  lifted: boolean;
+  contract: "multiplier" | null;
   typicalLoss: number | null;
   worstCaseLoss: number | null;
-  /** Worst case as a share of the balance — the number that decides whether a losing run ends the account. */
+  /** Worst case as a share of the balance. */
   worstCasePctOfEquity: number | null;
+  /** Trades that can be open together at this balance: the position ceiling, or what the balance pays for. */
   fundable: number;
-  limitedBy: FundablePositionsResult["limitedBy"];
+  limitedBy: "configured" | "equity";
   /** Set when no trade is possible at this balance at all. */
   blocked: string | null;
 }
 
 /**
- * One row of the stake ladder: everything that follows from a balance.
- *
- * This exists so the number a person reads and the number the worker sends are
- * produced by the same code. It calls the real sizing functions rather than
- * restating their arithmetic, so the two cannot drift apart when one is edited.
+ * One row of the stake ladder, from the same pollStake the dispatcher uses,
+ * so the number a person reads is the number the worker sends.
  */
-export function describeStakePlan(input: FundablePositionsInput): StakePlanRow {
-  const eff = effectiveRiskPcts(input.equity, input.riskPerTradePct, input.maxDailyLossPct);
-  const fit = maxFundablePositions(input);
-  const stake = fit.stakes[0] ?? null;
-  if (stake == null) {
+export function describeStakePlan(input: { equity: number; riskPerTradePct: number; maxConcurrentPositions: number; maxPerAssetClass?: number }): StakePlanRow {
+  const eff = effectiveRiskPcts(input.equity, input.riskPerTradePct);
+  const ceiling = Math.max(0, Math.min(Math.floor(input.maxConcurrentPositions), Math.floor(input.maxPerAssetClass ?? Number.POSITIVE_INFINITY)));
+  const plan = pollStake({ equity: input.equity, freeBalance: input.equity, riskPerTradePct: input.riskPerTradePct });
+  if (!plan.ok) {
     return {
-      equity: input.equity, band: eff.band, riskPct: eff.riskPct, dailyLossPct: eff.dailyLossPct,
-      riskCappedByBand: eff.riskCappedByBand, stake: null, contract: null, lifted: false,
-      typicalLoss: null, worstCaseLoss: null, worstCasePctOfEquity: null,
-      fundable: 0, limitedBy: fit.limitedBy,
-      blocked: fit.limitedBy === "equity"
-        ? `balance is under Deriv's $${(input.minStake ?? DERIV_MIN_STAKE).toFixed(2)} minimum stake`
-        : "no stake survives the risk and daily-loss caps at this balance",
+      equity: input.equity, band: eff.band, riskPct: eff.riskPct, riskCappedByBand: eff.riskCappedByBand,
+      stake: null, contract: null, typicalLoss: null, worstCaseLoss: null, worstCasePctOfEquity: null,
+      fundable: 0, limitedBy: "equity", blocked: plan.reason,
     };
   }
-  // The strategy poll trades multipliers only (see the dispatcher): a stake
-  // the floor could not lift to $1.00 is no trade, not a binary.
-  if (stake < MULTIPLIER_MIN_STAKE) {
-    return {
-      equity: input.equity, band: eff.band, riskPct: eff.riskPct, dailyLossPct: eff.dailyLossPct,
-      riskCappedByBand: eff.riskCappedByBand, stake: null, contract: null, lifted: false,
-      typicalLoss: null, worstCaseLoss: null, worstCasePctOfEquity: null,
-      fundable: 0, limitedBy: fit.limitedBy,
-      blocked: "the $1.00 multiplier minimum is over 20% of this balance; the strategy poll trades multipliers only, so it waits",
-    };
-  }
-  const contract = "multiplier" as const;
-  const worst = worstCaseLoss(stake, contract);
+  const affordable = Math.floor((input.equity + 1e-9) / plan.stake);
+  const worst = worstCaseLoss(plan.stake);
   return {
-    equity: input.equity, band: eff.band, riskPct: eff.riskPct, dailyLossPct: eff.dailyLossPct,
-    riskCappedByBand: eff.riskCappedByBand, stake, contract,
-    lifted: fit.lifted[0] ?? false,
-    typicalLoss: typicalLoss(stake, contract),
-    worstCaseLoss: worst,
+    equity: input.equity, band: plan.band, riskPct: plan.riskPct, riskCappedByBand: plan.riskCappedByBand,
+    stake: plan.stake, contract: "multiplier", typicalLoss: typicalLoss(plan.stake), worstCaseLoss: worst,
     worstCasePctOfEquity: Number(((worst / input.equity) * 100).toFixed(1)),
-    fundable: fit.fundable, limitedBy: fit.limitedBy, blocked: null,
+    fundable: Math.min(ceiling, affordable), limitedBy: affordable < ceiling ? "equity" : "configured", blocked: null,
   };
 }
 
@@ -281,8 +92,6 @@ export interface RiskBandRule {
   from: number;
   /** Ceiling on risk-per-trade in this band. The configured setting still applies; the lower of the two wins. */
   riskPct: number;
-  /** Ceiling on the daily-loss budget in this band, same rule. */
-  dailyLossPct: number;
   why: string;
 }
 
@@ -303,11 +112,11 @@ export interface RiskBandRule {
  * account grows, made automatic so forgetting is not possible.
  */
 export const RISK_BANDS: readonly RiskBandRule[] = [
-  { band: "floor",  from: 0,    riskPct: 20, dailyLossPct: 20, why: "clearing Deriv's $1.00 multiplier minimum is the binding constraint, not risk appetite" },
-  { band: "build",  from: 12,   riskPct: 10, dailyLossPct: 15, why: "the $1.00 floor is comfortably cleared, so risk starts coming down" },
-  { band: "grow",   from: 50,   riskPct: 5,  dailyLossPct: 10, why: "large enough that a losing run, not a single trade, is the real threat" },
-  { band: "steady", from: 200,  riskPct: 2,  dailyLossPct: 6,  why: "conventional fixed-fractional territory" },
-  { band: "mature", from: 1000, riskPct: 1,  dailyLossPct: 4,  why: "capital preservation outranks growth rate" },
+  { band: "floor",  from: 0,    riskPct: 20, why: "clearing Deriv's $1.00 multiplier minimum is the binding constraint, not risk appetite" },
+  { band: "build",  from: 12,   riskPct: 10, why: "the $1.00 floor is comfortably cleared, so risk starts coming down" },
+  { band: "grow",   from: 50,   riskPct: 5, why: "large enough that a losing run, not a single trade, is the real threat" },
+  { band: "steady", from: 200,  riskPct: 2,  why: "conventional fixed-fractional territory" },
+  { band: "mature", from: 1000, riskPct: 1,  why: "capital preservation outranks growth rate" },
 ] as const;
 
 /** The band a balance falls into. Always returns a rule; the first band starts at 0. */
@@ -319,26 +128,20 @@ export function riskBandFor(equity: number): RiskBandRule {
 }
 
 /**
- * The risk and daily-loss percentages actually used at this balance: the
- * configured setting, or the band's ceiling, whichever is lower. A deliberately
- * conservative setting is never overridden upward — the ladder can only tighten.
+ * The risk percentage actually used at this balance: the configured setting,
+ * or the band's ceiling, whichever is lower. A deliberately conservative
+ * setting is never overridden upward — the ladder can only tighten.
  */
 export function effectiveRiskPcts(
-  equity: number, configuredRiskPct: number, configuredDailyLossPct: number,
-): { band: RiskBand; riskPct: number; dailyLossPct: number; riskCappedByBand: boolean; dailyCappedByBand: boolean; why: string } {
+  equity: number, configuredRiskPct: number,
+): { band: RiskBand; riskPct: number; riskCappedByBand: boolean; why: string } {
   const rule = riskBandFor(equity);
-  const riskPct = Math.min(configuredRiskPct, rule.riskPct);
-  const dailyLossPct = Math.min(configuredDailyLossPct, rule.dailyLossPct);
-  return {
-    band: rule.band, riskPct, dailyLossPct, why: rule.why,
-    riskCappedByBand: rule.riskPct < configuredRiskPct,
-    dailyCappedByBand: rule.dailyLossPct < configuredDailyLossPct,
-  };
+  return { band: rule.band, riskPct: Math.min(configuredRiskPct, rule.riskPct), why: rule.why, riskCappedByBand: rule.riskPct < configuredRiskPct };
 }
 
-/** The most one trade can lose, by contract type. A binary has no stop, so the answer is the whole stake. */
-export function worstCaseLoss(stake: number, contract: "multiplier" | "binary"): number {
-  return contract === "binary" ? stake : Number((stake * MULTIPLIER_STOP_CAP_PCT).toFixed(2));
+/** The most one trade can lose: its stop is capped at 80% of stake (a gap can reach that cap). */
+export function worstCaseLoss(stake: number): number {
+  return Number((stake * MULTIPLIER_STOP_CAP_PCT).toFixed(2));
 }
 
 /** The strategy poll's stop distance as a fraction of price (POLL_STOP_FRACTION). Used to model a typical loss for display. */
@@ -356,65 +159,12 @@ export const TYPICAL_STOP_FRACTION_OF_PRICE = 0.006;
  */
 export function typicalLoss(
   stake: number,
-  contract: "multiplier" | "binary",
   multiplier = 100,
   stopFractionOfPrice = TYPICAL_STOP_FRACTION_OF_PRICE,
 ): number {
-  if (contract === "binary") return stake;
   const modelled = stake * multiplier * stopFractionOfPrice;
   const clamped = Math.min(stake * MULTIPLIER_STOP_CAP_PCT, Math.max(DEFAULT_MIN_LIMIT_ORDER_USD, modelled));
   return Number(clamped.toFixed(2));
-}
-
-export interface MultiplierFloorResult {
-  stake: number;
-  /** True when the stake was raised to $1.00 to keep the order on a multiplier. */
-  lifted: boolean;
-  reason: string;
-}
-
-/**
- * Raise a sub-$1.00 stake to exactly $1.00 when doing so keeps the order on a
- * multiplier, because on this broker the smaller stake is the more dangerous one.
- *
- * Under $1.00 Deriv will not open a multiplier, so the order falls through to a
- * binary — and a binary carries no stop-loss, no take-profit and no early exit
- * worth the name: a loser costs the entire stake. A $1.00 multiplier's loss is
- * bounded by its attached stop, capped at 80% of stake. So $1.00 as a multiplier
- * risks at most $0.80, while $0.99 as a binary risks a certain $0.99. Shrinking
- * the stake here *increases* money at risk, which is the opposite of what a risk
- * cap is for.
- *
- * The lift is therefore allowed only while the lifted worst case stays within
- * `maxWorstCasePctOfEquity` of the balance — at the default 20% that means
- * roughly $4.00 and up. Below that the account genuinely cannot afford a
- * multiplier and the binary path stands, with the tighter strategy gate that
- * goes with it.
- */
-export function applyMultiplierFloor(input: {
-  stake: number;
-  equity: number;
-  maxWorstCasePctOfEquity?: number;
-}): MultiplierFloorResult {
-  const { stake, equity } = input;
-  const maxPct = input.maxWorstCasePctOfEquity ?? 20;
-  if (!Number.isFinite(stake) || !Number.isFinite(equity) || equity <= 0) {
-    return { stake, lifted: false, reason: "equity or stake unavailable" };
-  }
-  if (stake >= MULTIPLIER_MIN_STAKE) return { stake, lifted: false, reason: "already a multiplier stake" };
-
-  const liftedWorstCase = worstCaseLoss(MULTIPLIER_MIN_STAKE, "multiplier");
-  const sharePct = (liftedWorstCase / equity) * 100;
-  if (MULTIPLIER_MIN_STAKE > equity || sharePct > maxPct) {
-    return {
-      stake, lifted: false,
-      reason: `balance too small to hold the multiplier floor ($1.00 risks $${liftedWorstCase.toFixed(2)} = ${sharePct.toFixed(1)}% of equity, over the ${maxPct}% limit); trading as a binary`,
-    };
-  }
-  return {
-    stake: MULTIPLIER_MIN_STAKE, lifted: true,
-    reason: `raised $${stake.toFixed(2)} to $1.00 to stay on a multiplier: $1.00 risks at most $${liftedWorstCase.toFixed(2)}, the binary it would otherwise become risks the full $${stake.toFixed(2)}`,
-  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
