@@ -49,12 +49,20 @@ const TIMEFRAMES: Record<string, number> = {
  * across the catalogue even without M1 — until the database filled and every
  * write started failing, which would read as the bot mysteriously dying weeks
  * later. Each window is comfortably more than anything that reads it needs:
- * the judge's deepest look-back is 250 H1 bars (~10 days) and 150 M30 bars
- * (~3 days); the rest is chart history.
+ * the strategy poll reads 4,200 M30 bars (about 87 trading days, for the
+ * weekday-hour seasonality strategy's 84-day look-back); the rest is chart
+ * history.
  */
 const CANDLE_RETENTION_DAYS: Record<string, number> = {
-  M5: 7, M15: 14, M30: 30, H1: 90, H4: 180, D1: 730,
+  M5: 7, M15: 14, M30: 130, H1: 90, H4: 180, D1: 730,
 };
+/**
+ * Deriv returns at most ~1,000 time slots per ticks_history request (about
+ * 695 M30 candles once weekends are skipped, measured), so the M30 history
+ * the poll needs is fetched in pages, each ending 20 days before the last.
+ */
+const M30_HISTORY_PAGES = 6;
+const M30_PAGE_SPAN_S = 20 * 24 * 60 * 60;
 const CANDLE_PRUNE_EVERY_MS = 60 * 60 * 1000;
 /** Gap between history requests. ~6 per second stays well inside Deriv's limits. */
 const HISTORY_REQUEST_SPACING_MS = 150;
@@ -238,6 +246,23 @@ class CandleFeeder {
         await new Promise((r) => setTimeout(r, HISTORY_REQUEST_SPACING_MS));
       }
     }
+    // Older M30 pages after every symbol's recent history, so the live feed
+    // is complete first. Rows already stored are skipped by the insert.
+    const nowS = Math.floor(Date.now() / 1000);
+    for (let page = 1; page < M30_HISTORY_PAGES; page++) {
+      for (const symbol of Array.from(this.subscribedSymbols)) {
+        if (this.ws !== socket || socket?.readyState !== WebSocket.OPEN) return;
+        socket.send(JSON.stringify({
+          ticks_history: symbol,
+          granularity: TIMEFRAMES.M30,
+          count: 1000,
+          end: String(nowS - page * M30_PAGE_SPAN_S),
+          style: "candles",
+          req_id: TIMEFRAMES.M30,
+        }));
+        await new Promise((r) => setTimeout(r, HISTORY_REQUEST_SPACING_MS));
+      }
+    }
   }
 
   private connect(): void {
@@ -402,7 +427,10 @@ class CandleFeeder {
       // — leave it null (unknown) rather than a false "0", which would read
       // as "confirmed zero trading activity" to any future consumer. Only
       // the live-built M1 candles below have a real value (actual tick count).
-      const inserts = msg.candles.map((c) => ({
+      // The first candle of a page can start mid-bucket (its epoch is the
+      // window's start, e.g. 11:20:58 for a 30-minute bar): a partial candle
+      // stored under an off-grid time would be read as a real bar.
+      const inserts = msg.candles.filter((c) => c.epoch % granularity === 0).map((c) => ({
         symbol,
         timeframe: tf,
         openTime: new Date(c.epoch * 1000),

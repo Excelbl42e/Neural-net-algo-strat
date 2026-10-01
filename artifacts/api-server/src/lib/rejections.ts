@@ -17,16 +17,16 @@ export interface RejectionEntry {
   at: string;
   symbol: string;
   /**
-   * Where in the pipeline the symbol was dropped. `pre_gpt`/`post_gpt` keep
-   * their old wire names so previously-recorded entries still render, but
-   * there is no GPT anymore: they are the quant pre-filter and the
-   * post-judge geometry/claim checks respectively.
+   * Where in the pipeline the symbol was dropped. `pre_gpt`, `expert_judge`
+   * and `post_gpt` belong to the retired ICT pipeline; they stay in the type
+   * only so entries stored before the strategy poll replaced it still render.
    */
   stage:
-    | "pre_gpt"          // quant pre-filter: ATR percentile / efficiency ratio
+    | "poll"             // the strategy poll did not reach agreement
+    | "pre_gpt"          // retired: quant pre-filter
     | "no_tick"          // no fresh price tick for the symbol
-    | "expert_judge"     // the deterministic judge found no qualifying setup
-    | "post_gpt"         // geometry gate / cited-structure verification
+    | "expert_judge"     // retired: ICT judge
+    | "post_gpt"         // retired: geometry / cited-structure checks
     | "portfolio"
     | "sizing"
     | "entry"            // waiting for price to reach the approved zone, or setup over

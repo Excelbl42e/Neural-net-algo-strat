@@ -10,23 +10,22 @@ export default function StrategyPage() {
   const { data: strategies, isLoading, isError } = useListStrategies();
   const [expandedId, setExpandedId] = useState<number | null>(null);
 
-  const ict = useMemo(() => (strategies ?? []).filter((s) => s.type === "ict").sort((a, b) => a.name.localeCompare(b.name)), [strategies]);
-  const quant = useMemo(() => (strategies ?? []).filter((s) => s.type === "quant").sort((a, b) => a.name.localeCompare(b.name)), [strategies]);
-  const other = useMemo(() => (strategies ?? []).filter((s) => s.type !== "ict" && s.type !== "quant"), [strategies]);
+  // Retired rows (the old ICT concepts) stay in the table for their trade
+  // history but are inactive, so only the 60 voters are listed.
+  const quant = useMemo(() => (strategies ?? []).filter((s) => s.active && s.type === "quant").sort((a, b) => a.name.localeCompare(b.name)), [strategies]);
+  const ta = useMemo(() => (strategies ?? []).filter((s) => s.active && s.type === "ta").sort((a, b) => a.name.localeCompare(b.name)), [strategies]);
 
   return (
     <div className="max-w-5xl space-y-6 pb-8">
       <header className="border-b border-border pb-5">
         <div className="text-primary text-[10px] uppercase tracking-[.24em] font-mono-numbers mb-2">Strategy Library</div>
-        <h1 className="text-2xl font-bold">Hardcoded ICT + quant/TA strategies</h1>
+        <h1 className="text-2xl font-bold">The strategy poll: {quant.length} quantitative + {ta.length} technical</h1>
         <p className="text-sm text-muted-foreground mt-2 max-w-2xl">
-          Curated once in code, not scanned from uploaded books. Every concept below is individually gated by real closed-trade
-          performance — a concept with a poor historical win rate is automatically suppressed from future signals until its
-          sample-adjusted score recovers. Signals are decided by a deterministic expert-system judge running entirely in this
-          codebase — there is no language model in the path, no API key and no per-signal cost, and that is the design rather
-          than a budget stopgap. A liquidity-sweep + FVG setup sets the actual entry/stop/target, and whether it fires is a live
-          confluence vote across most of the entries below, computed on real candles. Four are listed and scored but not yet
-          independently computed: Parabolic SAR, Pivot Point Confluence, SMT Divergence and Inducement.
+          Every strategy below is code that runs on every closed M30 candle of every pair and votes buy, sell or abstain,
+          using only candles that have already closed. When at least 70% of the strategies with an opinion agree — and at
+          least 30 of the 60 have one — the bot buys or sells at market, with a stop of 8 M30 ATRs and a target 1.5 times
+          the stop, closed after the hold limit if neither is reached. No language model, no API cost. The same code runs
+          in the backtest, so what was tested is exactly what trades.
         </p>
       </header>
 
@@ -43,28 +42,19 @@ export default function StrategyPage() {
       ) : (
         <div className="space-y-8">
           <StrategyGroup
-            label="ICT / Smart Money Concepts"
+            label="Quantitative"
             badgeClass="text-violet-300 border-violet-400/30 bg-violet-400/5"
-            items={ict}
-            expandedId={expandedId}
-            setExpandedId={setExpandedId}
-          />
-          <StrategyGroup
-            label="Technical Analysis / Quant"
-            badgeClass="text-primary border-primary/30 bg-primary/5"
             items={quant}
             expandedId={expandedId}
             setExpandedId={setExpandedId}
           />
-          {other.length > 0 && (
-            <StrategyGroup
-              label="Other"
-              badgeClass="text-muted-foreground border-border bg-muted/20"
-              items={other}
-              expandedId={expandedId}
-              setExpandedId={setExpandedId}
-            />
-          )}
+          <StrategyGroup
+            label="Technical analysis"
+            badgeClass="text-primary border-primary/30 bg-primary/5"
+            items={ta}
+            expandedId={expandedId}
+            setExpandedId={setExpandedId}
+          />
         </div>
       )}
     </div>

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { isClosedCandle, nextAlignedScanAt } from "../src/lib/quant-filters.ts";
+import { isClosedCandle, nextAlignedScanAt } from "../src/lib/scan-rules.ts";
 
 const HALF_HOUR = 30 * 60_000;
 const OFFSET = 20_000;

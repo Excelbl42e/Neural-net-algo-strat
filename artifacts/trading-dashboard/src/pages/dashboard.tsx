@@ -73,7 +73,7 @@ export default function Dashboard() {
       failed ? <div className="border border-amber-500/30 rounded-lg p-6 text-sm text-amber-200">Some operational data is unavailable. Do not infer system readiness from partial status. <button className="underline ml-2" onClick={() => { worker.refetch(); feeder.refetch(); strategies.refetch(); signals.refetch(); brokers.refetch(); }}>Retry</button></div> :
       <>
         <section className="grid gap-3 md:grid-cols-[1.1fr_1fr_1fr]">
-          <StatusPanel icon={<Crosshair className="w-5 h-5" />} label="Strategy library" value={`${activeStrategies ?? 0} active`} detail="Hardcoded ICT + quant/TA strategies, seeded on boot" href="/strategy" />
+          <StatusPanel icon={<Crosshair className="w-5 h-5" />} label="Strategy library" value={`${activeStrategies ?? 0} active`} detail="40 quantitative + 20 technical voters, seeded on boot" href="/strategy" />
           <StatusPanel icon={<Activity className="w-5 h-5" />} label="Signal worker" value={workerState} detail={workerDetail} href="/analysis" />
           <StatusPanel icon={<Radio className="w-5 h-5" />} label="Deriv connectivity" value={`${connectedBrokers ?? 0} broker connections`} detail={`Candle feeder: ${feeder.data?.connected ? "connected" : "disconnected"} · ${feeder.data?.symbols.length ?? 0} subscribed symbols`} href="/brokers" />
         </section>
@@ -130,8 +130,8 @@ export default function Dashboard() {
             <div className="flex items-center gap-2 text-violet-300 font-mono-numbers text-[11px] tracking-widest uppercase"><Workflow className="w-4 h-4" /> What happens next</div>
             <div className="mt-5 space-y-0">
               {[
-                ["01", "Strategy library", "The hardcoded ICT + quant/TA list is what the expert judge votes across — no upload, no processing step, no language model.", "/strategy"],
-                ["02", "Analyze", "The worker generates signal records from market data and the strategy library, and records the gate that refused every symbol it dropped.", "/analysis"],
+                ["01", "Strategy poll", "60 strategies — 40 quantitative, 20 technical — vote buy, sell or abstain on every closed M30 candle. 70% agreement trades. No language model.", "/strategy"],
+                ["02", "Analyze", "Each scan records the poll result for every pair, including the vote count on pairs it did not trade, and the rule that refused anything it dropped.", "/analysis"],
                 ["03", "Review", "A generated signal is not proof that an order was sent or filled. Verify trades and broker state independently.", "/signals"],
               ].map(([n, title, body, href]) => <Link key={n} href={href} className="group flex gap-5 border-t border-border/70 py-4" data-testid={`link-stage-${n}`}>
                 <span className="font-mono-numbers text-primary text-xs">{n}</span>

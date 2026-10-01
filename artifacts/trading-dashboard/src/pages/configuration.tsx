@@ -463,14 +463,12 @@ export default function ConfigurationPage() {
               )} />
               <FormField control={form.control} name="minConfidence" render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Minimum signal confidence (0–1)</FormLabel>
-                  <FormControl><Input type="number" step="0.01" min="0" max="1" {...field} data-testid="input-min-confidence" /></FormControl>
+                  <FormLabel>Poll agreement needed (0–1)</FormLabel>
+                  <FormControl><Input type="number" step="0.01" min="0.5" max="1" {...field} data-testid="input-min-confidence" /></FormControl>
                   <FormDescription className="text-[11px]">
-                    Signals below this are dropped before reaching execution. This is evidence strength, not a win
-                    probability. A setup starts at 0.35 for clearing the structural trigger on its own, earns up to
-                    +0.40 from how much of the strategy library agrees with it, and up to +0.25 from the five
-                    structural confirmations — so 0.35 is a bare setup nothing else supports, ~0.70 means the
-                    evidence clearly leans this way, and 0.98 is the ceiling. 0.70 is the default.
+                    Each M30 close, 60 strategies (40 quantitative, 20 technical) vote buy, sell or abstain. The bot
+                    trades when at least this share of the strategies that voted agree, and at least 30 of the 60
+                    voted at all. 0.70 means 70% — the default. It is a vote count, not a win probability.
                   </FormDescription>
                   <FormMessage />
                 </FormItem>
@@ -498,16 +496,12 @@ export default function ConfigurationPage() {
 
           <Card className="border-border">
             <CardHeader className="pb-3">
-              <CardTitle className="uppercase tracking-wider text-sm">Quant filters and small-account rule</CardTitle>
+              <CardTitle className="uppercase tracking-wider text-sm">Trade rules</CardTitle>
             </CardHeader>
             <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {([
                 ["smallAccountMaxRiskPct", "Small account: max % of equity for a minimum-stake trade", "0.1"],
-                ["minRiskReward", "Minimum reward:risk (judged at the actual entry price, after commission)", "0.1"],
-                ["atrPercentileMin", "Skip if H1 ATR percentile below", "1"],
-                ["atrPercentileMax", "Skip if H1 ATR percentile above", "1"],
-                ["efficiencyRatioMin", "Efficiency ratio floor (0 chop, 1 trend)", "0.01"],
-                ["minStopAtr", "Minimum stop distance (ATRs)", "0.1"],
+                ["minRiskReward", "Reward:risk — the take-profit is this many times the stop (checked again at the fill, after commission)", "0.1"],
                 ["maxPerAssetClass", "Max open positions per asset class — forex is a single class here, so this is usually your real ceiling on concurrent trades, not \u201cMax positions\u201d above", "1"],
                 ["newsBlackoutBeforeMin", "News blackout: minutes before a high-impact release", "1"],
                 ["newsBlackoutAfterMin", "News blackout: minutes after a high-impact release", "1"],
@@ -534,7 +528,7 @@ export default function ConfigurationPage() {
                 <FormItem>
                   <FormLabel>Allowed instruments</FormLabel>
                   <FormControl><Input placeholder="frxEURUSD,frxGBPUSD,frxUSDJPY" {...field} data-testid="input-instruments" /></FormControl>
-                  <FormDescription className="text-[11px]">Forex only. Blank scans all forex majors (EURUSD, GBPUSD, USDJPY, AUDUSD, USDCAD, GBPJPY); synthetics, crypto and commodities are not traded or analyzed. Enter comma-separated forex symbols to narrow the scan.</FormDescription>
+                  <FormDescription className="text-[11px]">Forex only. Blank scans all 14 pairs Deriv offers multipliers on; synthetics, crypto and commodities are not traded or analyzed. Enter comma-separated forex symbols to narrow the scan.</FormDescription>
                   <FormMessage />
                 </FormItem>
               )} />

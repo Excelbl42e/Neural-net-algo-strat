@@ -73,8 +73,8 @@ router.get("/dashboard/workflow", async (_req, res): Promise<void> => {
   };
   const stages = [
     stage(1, "data", "Market data", "Deriv candle feed into the candles table", ["candle_feed"]),
-    stage(2, "filters", "Quant filters", "ATR percentile, efficiency ratio, geometry, premium/discount, portfolio caps (code, not AI)", ["database"]),
-    stage(3, "judge", "Signal judge", "Deterministic expert system (no LLM): liquidity sweep -> structure break -> FVG entry, gated by a confluence vote across the strategy library", ["signal_judge", "signal_worker"]),
+    stage(2, "rules", "Market rules", "Deriv trading hours, Friday cutoff, sessions, news blackout, one position per pair, portfolio caps", ["database"]),
+    stage(3, "judge", "Strategy poll", "60 strategies (40 quantitative, 20 technical) vote on each closed M30 candle; 70% agreement trades at market", ["signal_judge", "signal_worker"]),
     stage(4, "execution", "Order execution", "Deriv order path, reconciler, contract monitor", ["broker", "reconciler", "contract_monitor"]),
     stage(5, "accounts", "Balance sync", "Deriv balance polling", ["balance_sync"]),
   ];

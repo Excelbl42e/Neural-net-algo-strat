@@ -30,15 +30,13 @@ export async function getSystemStatus() {
     connected.length ? `${connected.length} connected (${connected.map((c) => c.environment).join(", ")})`
       : conns.length ? `no connected broker; last errors: ${conns.map((c) => c.lastError).filter(Boolean).join(" | ") || "none"}` : "no broker connection added yet");
 
-  // The signal worker's active judge is hardcoded to runExpertJudge() (deterministic,
-  // no LLM) regardless of this — see the "signal_judge" component below for what's
-  // actually driving signals. This just reports whether GPT credentials exist to swap
-  // back to later; their absence is not a problem today, so it's never "degraded".
-  push("ai", isAIConfigured() ? "ok" : "idle", isAIConfigured() ? "AI client configured (unused — see signal_judge)" : "Not configured — has no effect while the deterministic judge is active (see signal_judge)");
+  // Signals come from the deterministic strategy poll (see "signal_judge"); no
+  // language model is in the trading path. This only reports whether AI
+  // credentials exist; their absence is not a problem, so it is never "degraded".
+  push("ai", isAIConfigured() ? "ok" : "idle", isAIConfigured() ? "AI client configured (unused — see signal_judge)" : "Not configured — not used by the strategy poll (see signal_judge)");
   // Kept short: this string is rendered in the dashboard's System health panel,
-  // so it reads as operator status rather than a code pointer. The swap-back
-  // instructions live next to runExpertJudge()'s call site in signal-worker.ts.
-  push("signal_judge", "ok", "Deterministic expert-system judge active — no LLM, no API cost");
+  // so it reads as operator status rather than a code pointer.
+  push("signal_judge", "ok", "Strategy poll active: 60 deterministic strategies vote — no LLM, no API cost");
 
   const news = getNewsCalendarStatus();
   // Reported as "down", not "degraded": while this feed is untrusted every
