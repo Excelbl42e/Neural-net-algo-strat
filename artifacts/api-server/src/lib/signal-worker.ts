@@ -457,6 +457,23 @@ async function dispatchTradeUnlocked(
       return;
     }
   }
+  // One position per pair, checked again here: the scan checks it when the
+  // signal is created, but a held-back signal is retried for up to 30 minutes
+  // and the replay pass can dispatch an older one, so the order itself must
+  // not stack a second position on a pair that already has one.
+  {
+    const [samePair] = await db.select({ id: tradesTable.id }).from(tradesTable).where(and(
+      eq(tradesTable.accountId, conn.accountId),
+      eq(tradesTable.symbol, signal.symbol),
+      eq(tradesTable.status, "open"),
+    )).limit(1);
+    if (samePair) {
+      const reason = "A position on this pair is already open on this account; not stacking a second one";
+      await transitionSignalExecution(signal.id, "generated", "rejected", reason, { signalStatus: "cancelled" });
+      recordRejection({ symbol: signal.symbol, stage: "portfolio", reason });
+      return;
+    }
+  }
   // Stake: the balance band's share of the balance, at least Deriv's $1.00
   // multiplier minimum, while that much is free. The synced equity is Deriv's
   // cash balance (stakes leave it when a contract opens), but it is synced

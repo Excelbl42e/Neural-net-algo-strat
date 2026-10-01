@@ -1,5 +1,16 @@
 # Changes in this build (vs. your Replit export)
 
+## Real-money audit fixes
+
+Checked before connecting the real account: the order path, the Deriv buy/sell/status calls, the balance sync, the contract monitor and the reconciler. Four fixes:
+
+- **No second position on a pair, enforced at the order itself.** The one-per-pair check ran only when a signal was created; a signal retried for its 30 minutes, or replayed, could have opened a second position on a pair that already had one. The dispatcher now refuses it.
+- **Free balance cannot be overstated by a trade opened during a balance read.** The sync time is now taken when the balance request starts, not when it returns, so a stake spent while the request was in flight is still taken off the free balance.
+- **The 4-day close and the Friday 20:30 UTC flatten run even when a connection is flagged "error".** The contract monitor used only "connected" connections, so a few failed balance reads could have left positions open into the weekend. It now tries every enabled connection.
+- **A trade the reconciler recovers keeps its real purchase time**, so its 4-day limit counts from when it was bought.
+
+Checked and unchanged: the buy refuses a virtual account when real is requested (and the reverse); an unanswered buy is never replayed, and new orders wait until the reconciler resolves it; the stop is capped at 80% of the stake and at Deriv's own maximum; the stake and the one-stake reserve.
+
 ## Every vote opens a position until one stake is left
 
 As the operator asked: positions keep opening from the votes, one per pair, until only one stake of free balance is left.
