@@ -107,9 +107,9 @@ export default function ConfigurationPage() {
       newsBlackoutBeforeMin: 30,
       newsBlackoutAfterMin: 30,
       maxSpreadCostPct: 0.5,
-      maxPositionHoldHours: 24,
+      maxPositionHoldHours: 96,
       maxDailyLossPct: 5,
-      minConfidence: 0.7,
+      minConfidence: 0.5,
       allowedInstruments: "",
       killzones: "",
       notes: "",
@@ -133,7 +133,7 @@ export default function ConfigurationPage() {
         newsBlackoutBeforeMin: config.newsBlackoutBeforeMin ?? 30,
         newsBlackoutAfterMin: config.newsBlackoutAfterMin ?? 30,
         maxSpreadCostPct: Number(config.maxSpreadCostPct ?? 0.5),
-        maxPositionHoldHours: config.maxPositionHoldHours ?? 24,
+        maxPositionHoldHours: config.maxPositionHoldHours ?? 96,
         maxDailyLossPct: Number(config.maxDailyLossPct),
         minConfidence: Number(config.minConfidence),
         allowedInstruments: config.allowedInstruments,
@@ -466,9 +466,10 @@ export default function ConfigurationPage() {
                   <FormLabel>Poll agreement needed (0–1)</FormLabel>
                   <FormControl><Input type="number" step="0.01" min="0.5" max="1" {...field} data-testid="input-min-confidence" /></FormControl>
                   <FormDescription className="text-[11px]">
-                    Each M30 close, 60 strategies (40 quantitative, 20 technical) vote buy, sell or abstain. The bot
-                    trades when at least this share of the strategies that voted agree, and at least 30 of the 60
-                    voted at all. 0.70 means 70% — the default. It is a vote count, not a win probability.
+                    Each M30 close, 60 strategies (40 quantitative, 20 technical, each on its own timeframe) vote buy,
+                    sell or abstain. The bot trades when at least this share of the strategies that voted agree, and at
+                    least 30 of the 60 voted at all. 0.50 is simple majority — the tested default (a tie never trades);
+                    0.70 would need 70%. It is a vote count, not a win probability.
                   </FormDescription>
                   <FormMessage />
                 </FormItem>
@@ -506,7 +507,7 @@ export default function ConfigurationPage() {
                 ["newsBlackoutBeforeMin", "News blackout: minutes before a high-impact release", "1"],
                 ["newsBlackoutAfterMin", "News blackout: minutes after a high-impact release", "1"],
                 ["maxSpreadCostPct", "Max trading cost (% of position size, i.e. stake × multiplier) — Deriv's commission from a live quote of the exact order", "0.01"],
-                ["maxPositionHoldHours", "Buy back any open position after this many hours — a multiplier that has hit neither SL nor TP, or a binary still short of its expiry", "1"],
+                ["maxPositionHoldHours", "Buy back any open position after this many hours if it has hit neither stop nor target (the poll was tested at 96 — four days; positions are also always closed before Deriv's Friday close)", "1"],
               ] as const).map(([name, label, step]) => (
                 <FormField key={name} control={form.control} name={name} render={({ field }) => (
                   <FormItem>

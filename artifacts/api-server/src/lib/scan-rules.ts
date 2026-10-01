@@ -73,3 +73,22 @@ export function nextAlignedScanAt(nowMs: number, intervalMs: number, offsetMs: n
   return thisSlot > nowMs ? thisSlot : thisSlot + intervalMs;
 }
 
+
+// ── Candle history paging ───────────────────────────────────────────────────
+
+/** Slots in the first (latest) ticks_history request per timeframe. */
+export const FIRST_REQUEST_SLOTS = 500;
+/** Slots per older page: Deriv returns at most 1,000 per request. */
+export const PAGE_SLOTS = 1000;
+
+/**
+ * End times of the older history pages for one timeframe. The first request
+ * covers the latest 500 slots; each page ends where the previous one began,
+ * so the stored history has no hole (an earlier version left one 500 slots
+ * wide between the first request and the first page).
+ */
+export function historyPageEnds(nowS: number, granularity: number, pages: number): number[] {
+  const ends: number[] = [];
+  for (let page = 1; page < pages; page++) ends.push(nowS - (FIRST_REQUEST_SLOTS + (page - 1) * PAGE_SLOTS) * granularity);
+  return ends;
+}

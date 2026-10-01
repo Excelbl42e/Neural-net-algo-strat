@@ -9,7 +9,7 @@ export const botConfigTable = pgTable("bot_config", {
   riskPerTradePct: numeric("risk_per_trade_pct", { precision: 5, scale: 2 }).notNull().default("1.00"),
   maxConcurrentPositions: integer("max_concurrent_positions").notNull().default(3),
   maxDailyLossPct: numeric("max_daily_loss_pct", { precision: 5, scale: 2 }).notNull().default("5.00"),
-  minConfidence: numeric("min_confidence", { precision: 4, scale: 3 }).notNull().default("0.700"),
+  minConfidence: numeric("min_confidence", { precision: 4, scale: 3 }).notNull().default("0.500"),
   allowedInstruments: text("allowed_instruments").notNull().default(""),
   killzones: text("killzones").notNull().default(""),
   smallAccountMaxRiskPct: numeric("small_account_max_risk_pct", { precision: 5, scale: 2 }).notNull().default("10.00"),
@@ -27,7 +27,7 @@ export const botConfigTable = pgTable("bot_config", {
   // contract-monitor force-closes one at market, in case price never
   // reaches either level. Binary contracts already expire on their own via
   // their configured duration and are unaffected by this.
-  maxPositionHoldHours: integer("max_position_hold_hours").notNull().default(24),
+  maxPositionHoldHours: integer("max_position_hold_hours").notNull().default(96),
   notes: text("notes"),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
 });

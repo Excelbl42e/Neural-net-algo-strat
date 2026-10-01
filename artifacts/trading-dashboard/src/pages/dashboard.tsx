@@ -130,7 +130,7 @@ export default function Dashboard() {
             <div className="flex items-center gap-2 text-violet-300 font-mono-numbers text-[11px] tracking-widest uppercase"><Workflow className="w-4 h-4" /> What happens next</div>
             <div className="mt-5 space-y-0">
               {[
-                ["01", "Strategy poll", "60 strategies — 40 quantitative, 20 technical — vote buy, sell or abstain on every closed M30 candle. 70% agreement trades. No language model.", "/strategy"],
+                ["01", "Strategy poll", "60 strategies — 40 quantitative, 20 technical — each vote buy, sell or abstain on its own timeframe after every 30-minute close. Majority rules; trades are held up to four days. No language model.", "/strategy"],
                 ["02", "Analyze", "Each scan records the poll result for every pair, including the vote count on pairs it did not trade, and the rule that refused anything it dropped.", "/analysis"],
                 ["03", "Review", "A generated signal is not proof that an order was sent or filled. Verify trades and broker state independently.", "/signals"],
               ].map(([n, title, body, href]) => <Link key={n} href={href} className="group flex gap-5 border-t border-border/70 py-4" data-testid={`link-stage-${n}`}>
