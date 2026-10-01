@@ -23,17 +23,55 @@ const SESSION_WINDOWS: Record<Session, { startHour: number; endHour: number }> =
 const ALL_SESSIONS: Session[] = ["asian", "london", "newyork"];
 
 /**
- * Forex/commodities close Fri 21:00 UTC and reopen Sun 21:00 UTC (Deriv's
- * real-market hours track the interbank week). This is a broadly correct
- * approximation, not exchange-holiday-aware.
+ * Deriv's own forex hours, from its `trading_times` endpoint (checked
+ * 2026-10-01 for every Friday from October 2026 to April 2027, i.e. across
+ * both sides of the clock change, and for all 14 traded pairs): open
+ * Monday-Friday from 00:00 UTC, "Closes early (at 20:55)" on Fridays, closed
+ * Saturday and Sunday.
+ *
+ * This used to reopen the market at Sunday 21:00 UTC and close it at Friday
+ * 21:00 — the interbank week, not Deriv's. Deriv does not trade forex on
+ * Sunday evening at all, and stops five minutes before 21:00 on Friday.
  */
+export const DERIV_FX_FRIDAY_CLOSE_UTC_MIN = 20 * 60 + 55;
+
 export function isForexWeekendClosed(now: Date): boolean {
   const day = now.getUTCDay(); // 0=Sun .. 6=Sat
-  const hour = now.getUTCHours();
-  if (day === 6) return true; // all Saturday
-  if (day === 0 && hour < 21) return true; // Sunday before reopen
-  if (day === 5 && hour >= 21) return true; // Friday after close
+  const minute = now.getUTCHours() * 60 + now.getUTCMinutes();
+  if (day === 6 || day === 0) return true; // Saturday and Sunday
+  if (day === 5 && minute >= DERIV_FX_FRIDAY_CLOSE_UTC_MIN) return true; // Friday after Deriv's close
   return false;
+}
+
+/**
+ * No new positions late on a Friday. A trade opened in the last hours before
+ * Deriv's 20:55 UTC close may not reach its stop or target before the market
+ * shuts, and then sits through the weekend: Monday can open far from Friday's
+ * close, straight past the stop, and a multiplier then loses up to its whole
+ * stake. From 16:00 UTC the bot neither looks for new setups nor enters
+ * pending ones.
+ */
+export const FRIDAY_NO_NEW_TRADES_UTC_MIN = 16 * 60;
+
+export function isFridayNewTradeCutoff(now: Date): boolean {
+  if (now.getUTCDay() !== 5) return false;
+  const minute = now.getUTCHours() * 60 + now.getUTCMinutes();
+  return minute >= FRIDAY_NO_NEW_TRADES_UTC_MIN;
+}
+
+/**
+ * Anything still open this close to Deriv's Friday close is bought back, so
+ * no position is carried over the weekend gap. Deriv only buys a contract
+ * back while its market is open, which is why this starts 25 minutes before
+ * 20:55 rather than at the close itself: the contract monitor retries every
+ * 30 seconds until it succeeds.
+ */
+export const FRIDAY_FLATTEN_UTC_MIN = 20 * 60 + 30;
+
+export function isFridayFlattenWindow(now: Date): boolean {
+  if (now.getUTCDay() !== 5) return false;
+  const minute = now.getUTCHours() * 60 + now.getUTCMinutes();
+  return minute >= FRIDAY_FLATTEN_UTC_MIN && minute < DERIV_FX_FRIDAY_CLOSE_UTC_MIN;
 }
 
 export function activeSessions(now: Date): Session[] {
@@ -126,7 +164,10 @@ export interface ForexGateResult {
 /** Gate applied before any GPT call: hours + session + news. No cost data needed yet. */
 export function forexPreScanGate(input: ForexPreScanInput): ForexGateResult {
   if (isForexWeekendClosed(input.now)) {
-    return { ok: false, reason: "Forex market is closed for the weekend" };
+    return { ok: false, reason: "Forex market is closed for the weekend (Deriv: Friday 20:55 to Monday 00:00 UTC)" };
+  }
+  if (isFridayNewTradeCutoff(input.now)) {
+    return { ok: false, reason: "No new trades after 16:00 UTC on Friday, so nothing is left open over the weekend" };
   }
   if (!sessionAllowed(input.now, input.killzones)) {
     return { ok: false, reason: `Outside configured killzone session(s): ${input.killzones}` };

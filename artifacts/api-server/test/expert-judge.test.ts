@@ -288,3 +288,34 @@ test("every signal the judge emits targets a pool at least 1 ATR beyond entry", 
     if (r) checkTargetDistance(r, m30, `seed ${seed}`);
   }
 });
+
+test("a setup is never emitted with its entry zone overlapping the stop or the target", async () => {
+  // Property over the judge's own output on randomised markets: whatever it
+  // approves, the order planner must be able to enter.
+  const { runExpertJudge } = await import("../src/lib/quant-filters.ts");
+  let seed = 11;
+  const rnd = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; };
+  const bars = (n: number, start: number, vol: number, t0: number, step: number) => {
+    const out = []; let p = start;
+    for (let i = 0; i < n; i++) {
+      const o = p, c = p + (rnd() - 0.5) * vol;
+      out.push({ open: o, high: Math.max(o, c) + rnd() * vol * 0.4, low: Math.min(o, c) - rnd() * vol * 0.4, close: c, t: t0 + i * step });
+      p = c;
+    }
+    return out;
+  };
+  let emitted = 0;
+  for (let k = 0; k < 400; k++) {
+    const t0 = Date.UTC(2026, 6, 1);
+    const h1 = bars(250, 1.1, 0.002, t0, 3_600_000);
+    const m30 = bars(150, h1.at(-1)!.close, 0.0012, t0 + 100 * 3_600_000, 1_800_000);
+    const h4 = bars(30, 1.1, 0.004, t0, 14_400_000);
+    const r = runExpertJudge(h1, m30, h4, 0, new Set());
+    if (!r) continue;
+    emitted++;
+    const buy = r.direction === "buy";
+    assert.ok(buy ? r.stopLevel! < r.entryLow! && r.target1Level! > r.entryHigh! : r.stopLevel! > r.entryHigh! && r.target1Level! < r.entryLow!,
+      `zone ${r.entryLow}-${r.entryHigh} not strictly between stop ${r.stopLevel} and target ${r.target1Level}`);
+  }
+  assert.ok(emitted > 0, "the property must actually be exercised");
+});

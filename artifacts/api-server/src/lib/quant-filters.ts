@@ -809,6 +809,16 @@ export function runExpertJudge(
   const target = bias === "buy"
     ? Math.min(...opposingSwings.map((s) => s.price))
     : Math.max(...opposingSwings.map((s) => s.price));
+  // The whole FVG is the entry zone, so it must lie strictly between the stop
+  // and the target. In a backtest over three months of Deriv candles, 16% of
+  // setups had an FVG reaching a fraction of a pip past the stop (the stop is
+  // the swept level less a 0.1 ATR buffer). The order planner refuses those
+  // levels, so each became a signal that could never be traded and was
+  // cancelled at entry. Declining here says why, at the scan.
+  const zoneClear = bias === "buy" ? stop < fvg.low && target > fvg.high : stop > fvg.high && target < fvg.low;
+  if (!zoneClear) {
+    return decline("Entry FVG overlaps the stop or the target; there is no clean entry between them");
+  }
 
   // 4) Confluence across the rest of the strategy library (no LLM judgment):
   // every voter in computeConfluence() gets a say, alongside the core
