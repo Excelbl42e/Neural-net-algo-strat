@@ -6,6 +6,9 @@
  */
 
 import { STRATEGIES } from "./poll-strategies.js";
+import { POLL_TIMEFRAME } from "./poll-engine.js";
+
+const TF_NAME = { M30: "30-minute", H1: "1-hour", H4: "4-hour" } as const;
 
 export type StrategyCategory = "quant" | "ta";
 
@@ -23,6 +26,7 @@ export const STRATEGY_LIBRARY: HardcodedStrategy[] = STRATEGIES.map((s, i) => ({
   category: s.family,
   rank: i + 1,
   summary: s.summary,
-  rules: `${s.summary} It votes buy, sell or abstain on every closed M30 candle, using only candles that have closed. `
-    + "Its vote is one of 60 in the poll: a trade needs 70% of the strategies with an opinion (and at least 30 of them) to agree.",
+  rules: `${s.summary} It votes on ${TF_NAME[POLL_TIMEFRAME[s.id] ?? "M30"]} candles (the timeframe it scored best on in the backtest's selection period; `
+    + "lookbacks are counted in that timeframe's candles), using only candles that have closed. "
+    + "Its vote is one of 60: majority rules — more buy than sell votes (a tie never trades), with at least 30 of the 60 holding an opinion.",
 }));

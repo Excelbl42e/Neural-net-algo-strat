@@ -240,7 +240,18 @@ export function describeStakePlan(input: FundablePositionsInput): StakePlanRow {
         : "no stake survives the risk and daily-loss caps at this balance",
     };
   }
-  const contract: "multiplier" | "binary" = stake >= MULTIPLIER_MIN_STAKE ? "multiplier" : "binary";
+  // The strategy poll trades multipliers only (see the dispatcher): a stake
+  // the floor could not lift to $1.00 is no trade, not a binary.
+  if (stake < MULTIPLIER_MIN_STAKE) {
+    return {
+      equity: input.equity, band: eff.band, riskPct: eff.riskPct, dailyLossPct: eff.dailyLossPct,
+      riskCappedByBand: eff.riskCappedByBand, stake: null, contract: null, lifted: false,
+      typicalLoss: null, worstCaseLoss: null, worstCasePctOfEquity: null,
+      fundable: 0, limitedBy: fit.limitedBy,
+      blocked: "the $1.00 multiplier minimum is over 20% of this balance; the strategy poll trades multipliers only, so it waits",
+    };
+  }
+  const contract = "multiplier" as const;
   const worst = worstCaseLoss(stake, contract);
   return {
     equity: input.equity, band: eff.band, riskPct: eff.riskPct, dailyLossPct: eff.dailyLossPct,
@@ -330,16 +341,16 @@ export function worstCaseLoss(stake: number, contract: "multiplier" | "binary"):
   return contract === "binary" ? stake : Number((stake * MULTIPLIER_STOP_CAP_PCT).toFixed(2));
 }
 
-/** Roughly one H1 ATR on the forex majors, as a fraction of price. Used only to model a typical stop for display. */
-export const TYPICAL_STOP_FRACTION_OF_PRICE = 0.001;
+/** The strategy poll's stop distance as a fraction of price (POLL_STOP_FRACTION). Used to model a typical loss for display. */
+export const TYPICAL_STOP_FRACTION_OF_PRICE = 0.006;
 
 /**
  * What a losing trade normally costs.
  *
  * A binary loses the whole stake, always. A multiplier loses its attached
- * stop: the structural stop, at least one H1 ATR from entry, never under
- * Deriv's minimum stop-loss and never over 80% of stake. On a $1.00 stake a
- * 1-ATR stop works out near $0.10. This models with the minimum assumed when
+ * stop: 0.6% of price from entry (the poll's stop), never under Deriv's
+ * minimum stop-loss and never over 80% of stake. On a $1.00 stake at x100
+ * that is $0.60, before Deriv's commission. This models with the minimum assumed when
  * Deriv reports none; where Deriv's real minimum is higher, the order is
  * widened to it or, if that ruins reward:risk, not sent at all.
  */
@@ -516,7 +527,7 @@ export interface EntryPlanInput {
   direction: "buy" | "sell";
   /** Live executable price — where a market order will actually fill. */
   price: number;
-  /** The entry zone the judge approved (the FVG). */
+  /** The entry band the signal allows (a quarter M30 ATR either side of the polled price). */
   entryLow: number;
   entryHigh: number;
   /** Structural invalidation and liquidity target, as approved. */

@@ -21,11 +21,12 @@ export default function StrategyPage() {
         <div className="text-primary text-[10px] uppercase tracking-[.24em] font-mono-numbers mb-2">Strategy Library</div>
         <h1 className="text-2xl font-bold">The strategy poll: {quant.length} quantitative + {ta.length} technical</h1>
         <p className="text-sm text-muted-foreground mt-2 max-w-2xl">
-          Every strategy below is code that runs on every closed M30 candle of every pair and votes buy, sell or abstain,
-          using only candles that have already closed. When at least 70% of the strategies with an opinion agree — and at
-          least 30 of the 60 have one — the bot buys or sells at market, with a stop of 8 M30 ATRs and a target 1.5 times
-          the stop, closed after the hold limit if neither is reached. No language model, no API cost. The same code runs
-          in the backtest, so what was tested is exactly what trades.
+          Every strategy below is code. After each 30-minute close it votes buy, sell or abstain on every pair, each on its
+          own timeframe (30-minute, 1-hour or 4-hour — open one to see which), using only candles that have closed.
+          Majority rules: when more strategies say buy than sell (or the reverse) and at least 30 of the 60 have an
+          opinion, the bot trades that direction at market — stop 0.6% from entry, target 1.5 times the stop after
+          commission, held up to four days and always closed before Deriv's Friday close. No language model, no API cost.
+          The same code runs in the backtest, so what was tested is exactly what trades.
         </p>
       </header>
 

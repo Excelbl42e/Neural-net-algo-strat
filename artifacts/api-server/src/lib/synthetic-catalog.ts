@@ -8,8 +8,8 @@
  *
  * `tradeType`:
  *   - "multiplier" — uses MULTUP/MULTDOWN contracts (CFD-like, has SL/TP, holds
- *     until target/stop or manual close). Preferred for ICT-style strategies on
- *     real markets and supported synthetics.
+ *     until target/stop or manual close). The only contract the strategy poll
+ *     trades.
  *   - "binary"     — uses CALL/PUT short-duration contracts. House edge applies.
  *     Used as fallback for synthetics where multipliers may be restricted.
  */
@@ -39,7 +39,7 @@ export interface SyntheticSymbol {
 }
 
 export const SYNTHETIC_CATALOG: SyntheticSymbol[] = [
-  // ── REAL MARKETS — preferred for ICT/SMC trading ──────────────────────────
+  // ── REAL MARKETS — the pairs the strategy poll trades ──────────────────────
   // Forex: exactly the 14 pairs Deriv lists under Multipliers → Forex for
   // this account (checked in the Deriv app, 2026-09-30). The catalogue used
   // to carry 28. Five of those Deriv does not recognise at all (NZD/CAD,
@@ -87,10 +87,7 @@ export const SYNTHETIC_CATALOG: SyntheticSymbol[] = [
   { code: "cryETHUSD", display: "ETH / USD", group: "Crypto", pipDecimals: 2, tradeType: "multiplier", multiplier: 100 },
 
   // ── SYNTHETIC INDICES (Volatility / Boom / Crash / Jump / Step) ─────────
-  // Primary trading instruments. ICT/CRT structure (liquidity sweeps, FVGs,
-  // order blocks, premium/discount) applies cleanly because Deriv synthetics
-  // are tick-uniform with no spread/news/session noise — making them well-
-  // suited to systematic structure-based execution.
+  // Listed for the chart only: the bot trades and analyses forex alone.
   // Standard volatility indices
   { code: "R_10",   display: "Volatility 10",   group: "Volatility", pipDecimals: 3, tradeType: "multiplier", multiplier: 30 },
   { code: "R_25",   display: "Volatility 25",   group: "Volatility", pipDecimals: 3, tradeType: "multiplier", multiplier: 30 },

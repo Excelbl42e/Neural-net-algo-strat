@@ -1,8 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { STRATEGIES, type Bars, type Vote } from "../src/lib/poll-strategies.ts";
-import { tallyPoll, runPoll, pollLevels, pollBars, POLL_QUORUM, POLL_MIN_BARS } from "../src/lib/poll-engine.ts";
-import { portfolioGate, currencyLegs } from "../src/lib/scan-rules.ts";
+import { tallyPoll, runPoll, pollLevels, pollBars, POLL_QUORUM, POLL_MIN_BARS, POLL_TIMEFRAME, POLL_STOP_FRACTION, type PollInput } from "../src/lib/poll-engine.ts";
+
+import { portfolioGate, currencyLegs, historyPageEnds } from "../src/lib/scan-rules.ts";
 import { planEntry } from "../src/lib/execution-risk.ts";
 
 /** Deterministic random walk with trends and quiet spells, on the real M30 grid (weekdays only). */
@@ -35,7 +36,7 @@ test("the poll has exactly 60 strategies: 40 quantitative and 20 technical, all 
   for (const s of STRATEGIES) assert.ok(!s.name.includes(","), `${s.name} contains a comma`);
 });
 
-test("70% rule: trades only with agreement among the strategies that voted, and a quorum", () => {
+test("agreement rule: majority by default, a configurable share, a quorum, and never a tie", () => {
   const votes = (buy: number, sell: number, abstain: number): Vote[] => [
     ...Array<Vote>(buy).fill(1), ...Array<Vote>(sell).fill(-1), ...Array<Vote>(abstain).fill(0),
   ];
@@ -45,6 +46,10 @@ test("70% rule: trades only with agreement among the strategies that voted, and 
   assert.equal(tallyPoll(votes(29, 0, 31), 0.7).direction, null, "29 opinions is under the quorum of 30");
   assert.equal(tallyPoll(votes(POLL_QUORUM, 0, 60 - POLL_QUORUM), 0.7).direction, "buy");
   assert.match(tallyPoll(votes(27, 13, 20), 0.7).reason, /27 buy \/ 13 sell \/ 20 abstain: 68% buy, 70% needed/);
+  // Simple majority (the tested default): one vote more is enough, a tie never trades.
+  assert.equal(tallyPoll(votes(16, 15, 29), 0.5).direction, "buy");
+  assert.equal(tallyPoll(votes(15, 16, 29), 0.5).direction, "sell");
+  assert.equal(tallyPoll(votes(15, 15, 30), 0.5).direction, null);
 });
 
 test("an unreadable or nonsensical agreement setting can never mean 'trade anything'", () => {
@@ -70,6 +75,28 @@ test("the live scan (newest bar only) votes exactly as the full backtest computa
   for (const s of STRATEGIES) assert.equal(s.compute(b, x, last)[last], s.compute(b, x)[last], `${s.id} differs when computed from the last bar only`);
 });
 
+/** The same series on every timeframe: enough for the poll's mechanics, not a market. */
+function inputOf(m30: Bars, h1: Bars, h4: Bars): PollInput {
+  return { symbol: "frxEURUSD", bars: { M30: m30, H1: h1, H4: h4 }, closes: { M30: { frxEURUSD: m30.c }, H1: { frxEURUSD: h1.c }, H4: { frxEURUSD: h4.c } } };
+}
+
+test("every strategy has a tested timeframe, and the poll runs end to end on all three", () => {
+  for (const s of STRATEGIES) assert.ok(["M30", "H1", "H4"].includes(POLL_TIMEFRAME[s.id]!), `${s.id} has no timeframe`);
+  assert.equal(Object.keys(POLL_TIMEFRAME).length, 60);
+  const r = runPoll(inputOf(walk(2000, 5), walk(1500, 6), walk(1600, 7)), 0.5);
+  assert.equal(r.ballots.length, 60);
+  assert.ok(r.ballots.every((b) => b.timeframe === POLL_TIMEFRAME[b.id]));
+  assert.equal(r.buy + r.sell + r.abstain, 60);
+});
+
+test("history pages join up: no hole between the first request and the older pages", () => {
+  const now = 1_790_000_000, g = 3600;
+  const ends = historyPageEnds(now, g, 3);
+  assert.deepEqual(ends, [now - 500 * g, now - 1500 * g]);
+  // The first request covers (now-500g, now]; page k covers (end-1000g, end]: each starts where the next ends.
+  assert.equal(ends[1], ends[0]! - 1000 * g);
+});
+
 test("strategies survive flat and degenerate series without throwing or voting on nothing", () => {
   const flat: Bars = { t: [], o: [], h: [], l: [], c: [] };
   for (let i = 0; i < 1500; i++) { flat.t.push(i * 1_800_000); flat.o.push(1); flat.h.push(1); flat.l.push(1); flat.c.push(1); }
@@ -78,21 +105,21 @@ test("strategies survive flat and degenerate series without throwing or voting o
     assert.doesNotThrow(() => s.compute(empty), s.id);
     assert.doesNotThrow(() => s.compute(flat), s.id);
   }
-  const poll = runPoll(flat, { symbol: "frxEURUSD", closes: {} }, 0.7);
+  const poll = runPoll(inputOf(flat, flat, flat), 0.5);
   assert.equal(poll.direction, null, "a market that does not move gives no trade");
 });
 
 test("runPoll refuses without enough history instead of voting on a partial window", () => {
-  const short = walk(POLL_MIN_BARS - 1, 3);
-  const r = runPoll(short, { symbol: "frxEURUSD", closes: {} }, 0.7);
+  const ok = walk(2000, 3);
+  const r = runPoll(inputOf(ok, ok, walk(POLL_MIN_BARS.H4 - 1, 4)), 0.5);
   assert.equal(r.direction, null);
-  assert.match(r.reason, /Not enough M30 history/);
+  assert.match(r.reason, /Not enough H4 history/);
 });
 
 test("poll levels pass the order path: reward:risk holds after Deriv's commission anywhere in the band", () => {
   for (const [dir, price, atr] of [["buy", 1.1, 0.0008], ["sell", 1.1, 0.0008], ["buy", 160.5, 0.12], ["sell", 0.65, 0.0006]] as const) {
     const lv = pollLevels(dir, price, atr, 1.5);
-    assert.ok(Math.abs(Math.abs(price - lv.stop) - 8 * atr) < 1e-9);
+    assert.ok(Math.abs(Math.abs(price - lv.stop) - POLL_STOP_FRACTION * price) < 1e-9);
     for (const fill of [lv.entryLow, price, lv.entryHigh]) {
       // $1 x100 at the measured $0.02 commission: the real call the dispatcher makes.
       const plan = planEntry({
@@ -110,6 +137,7 @@ test("stored candles: off-grid partial candles are dropped, strings become numbe
     { t: new Date("2026-09-10T11:30:00Z"), o: "1.15", h: "1.16", l: "1.14", c: "1.155" },
   ];
   const b = pollBars(rows);
+  assert.equal(pollBars(rows, "H4").t.length, 0, "11:30 is not on the 4-hour grid");
   assert.deepEqual(b.t, [Date.parse("2026-09-10T11:30:00Z")]);
   assert.equal(b.c[0], 1.155);
 });

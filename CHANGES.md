@@ -1,5 +1,28 @@
 # Changes in this build (vs. your Replit export)
 
+## The poll, tuned: each strategy on its best timeframe, majority rules, four-day hold
+
+The first poll used every strategy on 30-minute candles, a fixed 70% threshold and a 24-hour hold, and lost money after commission. This version was chosen properly:
+
+- **Search.** 180 candidates (each of the 60 strategies on 30-minute, 1-hour and 4-hour candles — a 4-hour strategy looks back 8 times as long, so this also tunes each strategy's look-back), holding times of 12 hours to 4 days, majority thresholds of 50% to 80%, quorums of 10 to 40, and stop/target sizes. Every forex pair Deriv offers multipliers on (14), one year of Deriv candles (all Deriv serves). Everything was chosen on Nov 2025 – Jun 2026 only and tested once on Jul – Sep 2026.
+- **What won.** Each strategy on its best timeframe (28 on 30-minute, 14 on 1-hour, 18 on 4-hour), **simple majority** (more buy than sell votes; a tie never trades), at least 30 of the 60 holding an opinion, held **up to four days** and always closed before Deriv's Friday close. Short holds lose to commission (Deriv charges once, at the open, so a longer hold pays it once over a bigger move).
+- **Stop 0.6% from entry, target 1.5x the stop after commission.** At x100 a stop can be at most about 0.78% of price before it passes the 80%-of-stake cap; 0.6% was in the middle of the range that held up.
+- **No binary fallback.** Below about $4 the $1.00 multiplier minimum is over 20% of the balance; the poll was tested on multipliers only, so it now waits rather than buying 1-day Rise/Fall contracts.
+- On upgrade, the agreement setting is set once to 0.50 and the hold to 96 hours.
+- **History paging fix.** The previous build's history pages left a 500-candle hole between the first request and the older pages. Pages now join exactly (tested). H1 is kept 100 days and H4 400 days, since the poll reads up to 1,600 H4 candles.
+- ICT is not one of the voters: as a voter it would speak on 1.5% of candles, and its four-day value was +2.2 bps on Nov–Jun and +0.3 bps on Jul–Sep — weaker than the poll itself.
+
+### Backtest of exactly what ships
+| | Trades | Win % | Net ($1 x100 per trade) | Worst drawdown |
+|---|---|---|---|---|
+| Direction only (4-day or Friday exit, no stop), Nov–Jun | 575 | 56 | +5.5 bps per trade | |
+| Direction only, Jul–Sep (unseen) | 238 | 55 | +8.5 bps per trade | |
+| Live rules, $20 account, Nov–Jun | 152 | 52 | +$3.24 | $4.57 |
+| Live rules, $20 account, Jul–Sep (unseen) | 62 | 48 | +$0.64 | $3.81 |
+| Live rules, $5 account, whole year | 115 | 50 | −$1.35 (ends $3.65, then below the $4 floor) | $7.64 |
+
+The direction is right a little more often than not in every month of the year (11 of 11), for buys and sells alike. Deriv's stop limit and the account's risk rules cut that edge down to about one or two cents per $1 trade, and settings next to the chosen one swing between small gains and small losses. Treat the edge as small and unproven. On $5 a normal losing run takes the balance under the $4 needed to keep trading.
+
 ## ICT replaced by a 60-strategy poll
 
 ### Why ICT is gone

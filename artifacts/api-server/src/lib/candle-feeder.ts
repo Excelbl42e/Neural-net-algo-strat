@@ -14,6 +14,7 @@ import WebSocket from "ws";
 import { sql, and, eq, desc, lt, notInArray, inArray, type SQL } from "drizzle-orm";
 import { db, candlesTable, type Candle } from "@workspace/db";
 import { logger } from "./logger.js";
+import { historyPageEnds, FIRST_REQUEST_SLOTS, PAGE_SLOTS } from "./scan-rules.js";
 import { isSyntheticCode, getSyntheticSymbol, DEFAULT_FEED_SYMBOLS as CATALOG_DEFAULT_SYMBOLS } from "./synthetic-catalog.js";
 
 // Deriv is case-sensitive on live `ticks` subscriptions: forex/crypto codes
@@ -29,7 +30,7 @@ const normalizeSymbol = (s: string): string => {
  * Timeframes this feeder builds and stores.
  *
  * M1 was built and persisted here but read by nothing: the chart offers M5 and
- * up, and the judge uses H4/H1/M30. At 1,440 bars a day per symbol it was
+ * up, and the strategy poll uses M30/H1/H4. At 1,440 bars a day per symbol it was
  * roughly three quarters of all candle writes and re-fetched 500 rows per
  * symbol on every reconnect, for data no code path has ever queried. Removed.
  */
@@ -49,20 +50,19 @@ const TIMEFRAMES: Record<string, number> = {
  * across the catalogue even without M1 — until the database filled and every
  * write started failing, which would read as the bot mysteriously dying weeks
  * later. Each window is comfortably more than anything that reads it needs:
- * the strategy poll reads 4,200 M30 bars (about 87 trading days, for the
- * weekday-hour seasonality strategy's 84-day look-back); the rest is chart
- * history.
+ * the strategy poll reads 2,000 M30, 1,500 H1 and 1,600 H4 bars (see
+ * POLL_HISTORY_BARS); the rest is chart history.
  */
 const CANDLE_RETENTION_DAYS: Record<string, number> = {
-  M5: 7, M15: 14, M30: 130, H1: 90, H4: 180, D1: 730,
+  M5: 7, M15: 14, M30: 70, H1: 100, H4: 400, D1: 730,
 };
 /**
- * Deriv returns at most ~1,000 time slots per ticks_history request (about
- * 695 M30 candles once weekends are skipped, measured), so the M30 history
- * the poll needs is fetched in pages, each ending 20 days before the last.
+ * Deriv returns at most 1,000 time slots per ticks_history request (about 695
+ * M30 candles once weekends are skipped, measured) and serves one year of
+ * history, so the poll's timeframes are fetched in older pages too. See
+ * historyPageEnds: the pages join the first 500-slot request without a gap.
  */
-const M30_HISTORY_PAGES = 6;
-const M30_PAGE_SPAN_S = 20 * 24 * 60 * 60;
+const HISTORY_PAGES: Record<string, number> = { M30: 4, H1: 3, H4: 3 };
 const CANDLE_PRUNE_EVERY_MS = 60 * 60 * 1000;
 /** Gap between history requests. ~6 per second stays well inside Deriv's limits. */
 const HISTORY_REQUEST_SPACING_MS = 150;
@@ -238,7 +238,7 @@ class CandleFeeder {
         socket.send(JSON.stringify({
           ticks_history: symbol,
           granularity,
-          count: 500,
+          count: FIRST_REQUEST_SLOTS,
           end: "latest",
           style: "candles",
           req_id: granularity,
@@ -246,21 +246,24 @@ class CandleFeeder {
         await new Promise((r) => setTimeout(r, HISTORY_REQUEST_SPACING_MS));
       }
     }
-    // Older M30 pages after every symbol's recent history, so the live feed
-    // is complete first. Rows already stored are skipped by the insert.
+    // Older pages after every symbol's recent history, so the live feed is
+    // complete first. Rows already stored are skipped by the insert.
     const nowS = Math.floor(Date.now() / 1000);
-    for (let page = 1; page < M30_HISTORY_PAGES; page++) {
-      for (const symbol of Array.from(this.subscribedSymbols)) {
-        if (this.ws !== socket || socket?.readyState !== WebSocket.OPEN) return;
-        socket.send(JSON.stringify({
-          ticks_history: symbol,
-          granularity: TIMEFRAMES.M30,
-          count: 1000,
-          end: String(nowS - page * M30_PAGE_SPAN_S),
-          style: "candles",
-          req_id: TIMEFRAMES.M30,
-        }));
-        await new Promise((r) => setTimeout(r, HISTORY_REQUEST_SPACING_MS));
+    for (const [tf, pages] of Object.entries(HISTORY_PAGES)) {
+      const granularity = TIMEFRAMES[tf]!;
+      for (const end of historyPageEnds(nowS, granularity, pages)) {
+        for (const symbol of Array.from(this.subscribedSymbols)) {
+          if (this.ws !== socket || socket?.readyState !== WebSocket.OPEN) return;
+          socket.send(JSON.stringify({
+            ticks_history: symbol,
+            granularity,
+            count: PAGE_SLOTS,
+            end: String(end),
+            style: "candles",
+            req_id: granularity,
+          }));
+          await new Promise((r) => setTimeout(r, HISTORY_REQUEST_SPACING_MS));
+        }
       }
     }
   }

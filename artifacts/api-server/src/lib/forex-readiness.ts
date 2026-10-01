@@ -4,9 +4,9 @@
  * unit-tested functions — no I/O here (the news calendar fetch lives in
  * news-calendar.ts and is injected as data).
  *
- * These gates exist because generic ICT structure logic (quant-filters.ts)
- * has no notion of a market that closes or that reacts violently to a
- * scheduled release; forex has both, so it is refused unless these pass.
+ * These gates exist because the strategy poll, which only sees candles, has
+ * no notion of a market that closes or that reacts violently to a scheduled
+ * release; forex has both, so it is refused unless these pass.
  */
 import { getSyntheticSymbol } from "./synthetic-catalog.js";
 import type { NewsEvent } from "./news-calendar.js";

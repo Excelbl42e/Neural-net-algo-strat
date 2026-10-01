@@ -1,9 +1,10 @@
 /**
  * Signal worker.
  * Just after every M30 close, for each forex pair, the 60-strategy poll (see
- * poll-engine.ts) votes on the closed candle. When the agreeing share reaches
- * the configured threshold (70% by default) a signal is written and, in an
- * auto mode, traded at market on Deriv through the dispatcher below.
+ * poll-engine.ts) votes, each strategy on the latest closed candle of its own
+ * timeframe. When the majority side reaches the configured share (simple
+ * majority by default) a signal is written and, in an auto mode, traded at
+ * market on Deriv through the dispatcher below.
  */
 import { eq, ne, sql, and, or, gte, lt, lte, isNull, desc, inArray } from "drizzle-orm";
 import {
@@ -35,12 +36,17 @@ import { getSecret } from "./secrets.js";
 import { recordRejection } from "./rejections.js";
 import { portfolioGate, isClosedCandle, nextAlignedScanAt } from "./scan-rules.js";
 import { STRATEGIES, type Bars } from "./poll-strategies.js";
-import { runPoll, pollBars, pollLevels, POLL_HISTORY_BARS, POLL_STOP_ATR } from "./poll-engine.js";
+import {
+  runPoll, pollBars, pollLevels, alignCloses, POLL_HISTORY_BARS, POLL_STOP_FRACTION, POLL_TIMEFRAMES, POLL_TIMEFRAME_MS,
+  type PollInput, type PollTimeframe,
+} from "./poll-engine.js";
+
+const EMPTY_BARS: Bars = { t: [], o: [], h: [], l: [], c: [] };
 
 // The poll votes on closed M30 candles, so it runs once per M30 close. Feed
 // and open-contract monitors run on their own schedules.
 const SIGNAL_INTERVAL_MS = 30 * 60 * 1000;
-const POLL_STRATEGY_NAME = "Strategy poll (40 quant + 20 technical)";
+const POLL_STRATEGY_NAME = "Strategy poll (40 quant + 20 technical, majority)";
 /** A poll signal is a market order: if it cannot be placed before the next scan, the next poll decides afresh. */
 const POLL_SIGNAL_TTL_MS = SIGNAL_INTERVAL_MS;
 // Only forex is traded and analyzed. The bot scans every forex major in the
@@ -55,11 +61,9 @@ let signalsGeneratedTotal = 0;
 let cachedEnabled: boolean | null = null;
 let cachedAutotradeMode: string | null = null;
 let activeMode: "auto_demo" | "auto_live" | null = null;
-/** Extra confidence a setup must carry before it is worth taking on the stop-less binary path. */
-const BINARY_CONFIDENCE_PREMIUM = 0.08;
 
 let activeConfig: { smallAccountMaxRiskPct: number; minConfidence: number; minRiskReward: number; maxPerAssetClass: number } = {
-  smallAccountMaxRiskPct: 10, minConfidence: 0.7, minRiskReward: 1.5, maxPerAssetClass: 2,
+  smallAccountMaxRiskPct: 10, minConfidence: 0.5, minRiskReward: 1.5, maxPerAssetClass: 2,
 };
 
 /** An order is never placed against a quote older than this. Ticks arrive every second or two on the majors. */
@@ -396,7 +400,7 @@ async function dispatchTradeUnlocked(
   }
 
   if (conn.accountId == null) {
-    await recordGeneratedReason(signal.id, "Connected demo broker has no linked account");
+    await recordGeneratedReason(signal.id, `Connected ${wantEnv} broker has no linked account`);
     logger.warn({ symbol: signal.symbol, broker: conn.label }, "No linked account; refusing unvalidated execution");
     return;
   }
@@ -591,30 +595,25 @@ async function dispatchTradeUnlocked(
     "Strict trade and daily-loss caps computed; confidence does not increase stake",
   );
 
-  // A binary has no stop-loss, no take-profit and no partial exit: a loser
-  // costs the whole stake, where a multiplier of the same size costs its stop.
-  // Paying that much more for being wrong is only worth it on a stronger setup,
-  // so the binary path asks for more evidence than the multiplier path does.
+  // The poll was chosen and tested as a multiplier trade held up to four days
+  // with a stop. Deriv's shortest forex Rise/Fall binary is a different bet —
+  // one day, no stop, the whole stake lost on a wrong call — that was never
+  // tested, so when the balance cannot carry the $1.00 multiplier minimum the
+  // bot does not fall back to binaries: it waits for the balance instead.
   if (forceBinary) {
-    const confidence = parseFloat(signal.confidence);
-    const required = Math.min(0.98, activeConfig.minConfidence + BINARY_CONFIDENCE_PREMIUM);
-    if (!Number.isFinite(confidence) || confidence < required) {
-      const reason = `Binary fallback needs confidence >= ${required.toFixed(2)} (this setup: ${Number.isFinite(confidence) ? confidence.toFixed(2) : "unreadable"}); a binary risks the full $${stakeAmount.toFixed(2)} with no stop-loss`;
-      await recordGeneratedReason(signal.id, reason);
-      recordRejection({ symbol: signal.symbol, stage: "sizing", reason, metrics: { equity, stake: stakeAmount, confidence } });
-      logger.info({ symbol: signal.symbol, equity, stakeAmount, confidence, required }, "Binary fallback refused: confidence below the binary bar");
-      return;
-    }
+    const reason = `Balance $${equity.toFixed(2)} cannot carry Deriv's $1.00 multiplier minimum within the risk limits (${floored.reason}); the strategy poll trades multipliers only, so no trade`;
+    await recordGeneratedReason(signal.id, reason);
+    recordRejection({ symbol: signal.symbol, stage: "sizing", reason, metrics: { equity, stake: stakeAmount } });
+    logger.info({ symbol: signal.symbol, equity, stakeAmount }, "No trade: balance below the multiplier floor and binaries are not used by the poll");
+    return;
   }
 
-  // ── Entry timing: the order waits for price to come into the approved zone ──
+  // ── Entry: only at a price close to the one the poll voted on ──
   //
-  // A multiplier fills at market. Signals fire while price is still away from
-  // the FVG it has to retrace into, and the bracket used to be measured from
-  // the FVG midpoint while the order filled at market — shifting the stop up
-  // onto the FVG (where the retrace goes) and the target past the liquidity
-  // pool. planEntry measures everything from the live price instead, and
-  // holds the signal until that price is actually inside the zone.
+  // A multiplier fills at market. The signal's entry band is a quarter of an
+  // M30 ATR either side of the price at the scan; planEntry measures stop,
+  // target and reward:risk from the live price and only enters inside that
+  // band, so a price that has run away since the vote is not chased.
   const entryLowNum  = signal.entryLow  != null ? parseFloat(signal.entryLow)  : Number.NaN;
   const entryHighNum = signal.entryHigh != null ? parseFloat(signal.entryHigh) : Number.NaN;
   const stopNum      = signal.stopLevel    != null ? parseFloat(signal.stopLevel)    : Number.NaN;
@@ -933,13 +932,13 @@ function applyConfig(config: BotConfigRow): void {
   activeMode = config.enabled && (config.autotradeMode === "auto_demo" || config.autotradeMode === "auto_live")
     ? config.autotradeMode
     : null;
-  // An unreadable threshold must not silently disable the binary bar: NaN
-  // compares false against everything, which would wave every setup through.
+  // An unreadable agreement threshold falls back to simple majority (0.5);
+  // tallyPoll clamps it as well, so NaN can never mean "trade anything".
   const parsedMinConfidence = parseFloat(config.minConfidence);
   const parsedMinRr = parseFloat(config.minRiskReward);
   activeConfig = {
     smallAccountMaxRiskPct: parseFloat(config.smallAccountMaxRiskPct),
-    minConfidence: Number.isFinite(parsedMinConfidence) ? parsedMinConfidence : 0.7,
+    minConfidence: Number.isFinite(parsedMinConfidence) ? parsedMinConfidence : 0.5,
     // Same reasoning: an unreadable floor must not quietly become "no floor".
     minRiskReward: Number.isFinite(parsedMinRr) && parsedMinRr > 0 ? parsedMinRr : 1.5,
     maxPerAssetClass: Number.isFinite(config.maxPerAssetClass) && config.maxPerAssetClass > 0 ? config.maxPerAssetClass : 2,
@@ -976,12 +975,12 @@ function signalRowFrom(p: typeof signalsTable.$inferSelect): SignalRow {
 
 // ── Entry watcher ────────────────────────────────────────────────────────────
 //
-// Signals now wait for price to retrace into their zone, and a thirty-minute
-// scan would mostly miss that retrace: an FVG is a narrow range and price
-// can pass through it between two scans. The live tick is already in memory,
-// so checking pending signals against it every few seconds is nearly free.
-// Only a signal whose price is in its zone, or whose setup is over, is handed
-// to the dispatcher, which re-runs every check before anything is sent.
+// A poll signal is normally traded right after the scan. When its order is
+// held back (no fresh tick yet, a quote refused, the dispatch queue busy) it
+// stays valid until the next scan, and this watcher retries it against the
+// live tick every few seconds. Only a signal whose price is in its entry band,
+// or whose levels are already broken, is handed to the dispatcher, which
+// re-runs every check before anything is sent.
 
 const ENTRY_WATCH_MS = 15_000;
 let entryWatchHandle: ReturnType<typeof setInterval> | null = null;
@@ -1138,18 +1137,21 @@ async function runWorkerTick(): Promise<void> {
       "Signal worker tick"
     );
 
-    // M30 history for every pair, read once: the poll's cross-pair strategies
-    // (currency strength, cross-sectional momentum) need all of them.
+    // Closed candles of every timeframe the poll uses, for every pair, read
+    // once: the cross-pair strategies (currency strength, cross-sectional
+    // momentum) need all pairs.
     const scanNow = Date.now();
-    const history = new Map<string, Bars>();
-    for (const sym of ALL_FOREX_INSTRUMENTS) {
-      const rows = await db
-        .select({ t: candlesTable.openTime, o: candlesTable.open, h: candlesTable.high, l: candlesTable.low, c: candlesTable.close })
-        .from(candlesTable)
-        .where(and(eq(candlesTable.symbol, sym), eq(candlesTable.timeframe, "M30")))
-        .orderBy(desc(candlesTable.openTime))
-        .limit(POLL_HISTORY_BARS);
-      history.set(sym, pollBars(rows.filter((r) => isClosedCandle(r.t.getTime(), "M30", scanNow)).reverse()));
+    const history: Record<PollTimeframe, Map<string, Bars>> = { M30: new Map(), H1: new Map(), H4: new Map() };
+    for (const tf of POLL_TIMEFRAMES) {
+      for (const sym of ALL_FOREX_INSTRUMENTS) {
+        const rows = await db
+          .select({ t: candlesTable.openTime, o: candlesTable.open, h: candlesTable.high, l: candlesTable.low, c: candlesTable.close })
+          .from(candlesTable)
+          .where(and(eq(candlesTable.symbol, sym), eq(candlesTable.timeframe, tf)))
+          .orderBy(desc(candlesTable.openTime))
+          .limit(POLL_HISTORY_BARS[tf]);
+        history[tf].set(sym, pollBars(rows.filter((r) => isClosedCandle(r.t.getTime(), tf, scanNow)).reverse(), tf));
+      }
     }
 
     // ── Replay pass: dispatch any active signals that were never traded ──
@@ -1276,23 +1278,23 @@ async function runWorkerTick(): Promise<void> {
         continue;
       }
 
-      const bars = history.get(symbol);
-      if (!bars) continue;
-      // The newest stored candle must be the one that just closed, or the
-      // vote would be about an older market.
-      const lastClosedOpen = Math.floor(scanNow / 1_800_000) * 1_800_000 - 1_800_000;
-      if (bars.t.length === 0 || bars.t[bars.t.length - 1]! < lastClosedOpen) {
-        recordRejection({ symbol, stage: "poll", reason: "The M30 candle that just closed has not been stored yet; polling at the next close" });
+      // Each timeframe's newest stored candle must be the one that most
+      // recently closed, or part of the vote would be about an older market.
+      const pollInput: PollInput = { symbol, bars: { M30: EMPTY_BARS, H1: EMPTY_BARS, H4: EMPTY_BARS }, closes: { M30: {}, H1: {}, H4: {} } };
+      let stale: string | null = null;
+      for (const tf of POLL_TIMEFRAMES) {
+        const bars = history[tf].get(symbol) ?? EMPTY_BARS;
+        const len = POLL_TIMEFRAME_MS[tf];
+        const lastClosedOpen = Math.floor(scanNow / len) * len - len;
+        if (bars.t.length === 0 || bars.t[bars.t.length - 1]! < lastClosedOpen) { stale = tf; break; }
+        pollInput.bars[tf] = bars;
+        pollInput.closes[tf] = alignCloses(bars, history[tf]);
+      }
+      if (stale) {
+        recordRejection({ symbol, stage: "poll", reason: `The ${stale} candle that just closed has not been stored yet; polling at the next close` });
         continue;
       }
-      const closes: Record<string, number[]> = {};
-      const index = new Map(bars.t.map((t, i) => [t, i]));
-      for (const [other, ob] of history) {
-        const aligned = new Array<number>(bars.t.length).fill(NaN);
-        ob.t.forEach((t, j) => { const i = index.get(t); if (i != null) aligned[i] = ob.c[j]!; });
-        closes[other] = aligned;
-      }
-      const poll = runPoll(bars, { symbol, closes }, minConfidence);
+      const poll = runPoll(pollInput, minConfidence);
       if (!poll.direction) {
         logger.info({ symbol, buy: poll.buy, sell: poll.sell, abstain: poll.abstain }, "Poll: no decision");
         recordRejection({ symbol, stage: "poll", reason: poll.reason });
@@ -1310,7 +1312,7 @@ async function runWorkerTick(): Promise<void> {
         stopZone: lv.stop.toFixed(digits),
         targetZone: lv.target.toFixed(digits),
         concepts: agreeing.join(", "),
-        reasoning: `${poll.reason}. Agreeing: ${agreeing.join(", ")}.${opposing.length ? ` Against: ${opposing.join(", ")}.` : ""} Stop ${POLL_STOP_ATR} M30 ATR, target ${activeConfig.minRiskReward}x the stop, closed after ${config.maxPositionHoldHours}h if neither is reached.`,
+        reasoning: `${poll.reason}. Agreeing: ${agreeing.join(", ")}.${opposing.length ? ` Against: ${opposing.join(", ")}.` : ""} Stop ${(POLL_STOP_FRACTION * 100).toFixed(1)}% from entry, target ${activeConfig.minRiskReward}x the stop after commission, closed after ${config.maxPositionHoldHours}h (or before Deriv's Friday close) if neither is reached.`,
       };
 
       // Only positions on the accounts this mode actually trades count: an old
