@@ -162,8 +162,8 @@ export default function AnalysisPage() {
         </CardHeader>
         <CardContent>
           <p className="text-[11px] text-muted-foreground mb-3">
-            Each scan records the exact gate that dropped a symbol, and approved signals report here while they wait for
-            price to retrace into their entry zone. The same refusal for the same pair is recorded once per 10 minutes, so
+            Each scan records why a pair was not traded — the poll's vote count when it did not reach a majority, or
+            the rule that refused it — and approved signals report here if their order is held back. The same refusal for the same pair is recorded once per 10 minutes, so
             a rescan with nothing new adds nothing new. The last 200 are kept.
           </p>
           {rejections.isLoading ? (

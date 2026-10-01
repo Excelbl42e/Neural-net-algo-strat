@@ -78,8 +78,8 @@ test("an already-multiplier stake is left exactly alone", () => {
 test("a losing trade at the $1.00 floor costs its 1-ATR stop, not a guessed $0.50 floor", () => {
   // 1 ATR (~0.1% of price) on $1 x 100 is ~$0.10. The old model clamped this to
   // an unverified $0.50 Deriv minimum, which the dispatcher no longer assumes.
-  assert.equal(typicalLoss(1, "multiplier"), 0.1);
-  assert.equal(typicalLoss(40, "multiplier"), 4);
+  assert.equal(typicalLoss(1, "multiplier"), 0.6);    // the poll's 0.6% stop at x100
+  assert.equal(typicalLoss(40, "multiplier"), 24);
   assert.equal(typicalLoss(0.99, "binary"), 0.99);     // a binary always costs everything
   // Never over the 80% stop cap, however wide the modelled stop.
   assert.equal(typicalLoss(1, "multiplier", 100, 0.02), 0.8);
@@ -104,12 +104,11 @@ test("$4.99 no longer falls onto the binary path — the regression that motivat
   assert.ok(p.worstCaseLoss! < 0.99);
 });
 
-test("below the floor's reach the account trades binaries, and says so", () => {
+test("below the floor's reach the account does not trade, and says why (no binary fallback)", () => {
   const p = plan(3);
-  assert.equal(p.contract, "binary");
-  assert.equal(p.lifted, false);
-  // A binary's worst case is the whole stake, and the row must not pretend otherwise.
-  assert.equal(p.worstCaseLoss, p.stake);
+  assert.equal(p.contract, null);
+  assert.equal(p.stake, null);
+  assert.match(p.blocked ?? "", /multipliers only/);
 });
 
 test("the stake ladder keeps worst case shrinking as a share of equity", () => {

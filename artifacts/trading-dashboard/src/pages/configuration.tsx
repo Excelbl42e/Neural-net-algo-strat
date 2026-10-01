@@ -250,26 +250,24 @@ export default function ConfigurationPage() {
           <div className="flex items-start gap-2 rounded-lg border border-border p-3 text-[11px] text-muted-foreground">
             <TrendingUp className="w-3.5 h-3.5 mt-0.5 shrink-0 text-primary" />
             <span>
-              <strong className="text-foreground">Typical loss</strong> is the stop the order actually carries. The stop sits at
-              the setup's structural level, at least one H1 ATR from entry — about $0.10 plus Deriv's commission on a
-              $1.00 stake. If Deriv's minimum stop-loss is higher (the demo self-test reports it), the stop is widened to
-              that minimum, and a setup whose reward:risk no longer clears your floor waits instead of trading. Each stop
-              is also capped at what is left of the day's loss budget. <strong className="text-foreground">Worst case</strong> is a stop that
-              gaps — capped at 80% of stake on a multiplier, but the whole stake on a binary, which carries no stop at
-              all. A <span className="text-amber-400">↑</span> marks a stake raised to $1.00 to keep it off the binary
-              path; a <span className="text-primary">↓</span> marks risk tapered below your saved setting by the balance
-              band. Binaries expire in 1 day where Deriv allows it and 3 days where it does not, and the "Force-close
-              after" setting below applies to them too, so one is bought back at that age rather than running to expiry.
+              <strong className="text-foreground">Typical loss</strong> is the stop the order actually carries: 0.6% of price from
+              entry, which at x100 is $0.60 plus Deriv's commission (about $0.02) on a $1.00 stake. If Deriv's minimum
+              stop-loss is higher, the stop is widened to it, and a trade whose reward:risk then no longer clears your floor
+              is not sent. Each stop is also capped at what is left of the day's loss budget.
+              <strong className="text-foreground"> Worst case</strong> is a stop that gaps — capped at 80% of stake, where
+              Deriv's own stop-out would otherwise take the whole stake. A <span className="text-amber-400">↑</span> marks a
+              stake raised to $1.00, Deriv's multiplier minimum; a <span className="text-primary">↓</span> marks risk tapered
+              below your saved setting by the balance band. Where $1.00 would be over 20% of the balance the bot does not
+              trade at all: the strategy poll was tested on multipliers only, so it never falls back to binaries.
             </span>
           </div>
           {yourRow?.lifted && (
             <div className="flex items-start gap-2 rounded-lg border border-primary/40 bg-primary/10 p-3 text-[11px] text-primary" data-testid="note-floor-lift">
               <AlertCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
               <span>
-                Your risk setting sizes this trade under $1.00, which Deriv will not open as a multiplier. Rather than
-                dropping to a binary — no stop-loss, whole stake at risk — the stake is raised to exactly $1.00, whose
-                loss is bounded by its stop at $0.80. That is <strong>less</strong> money at risk than the smaller stake
-                would have been, which is why the cap is allowed to round up here and nowhere else.
+                Your risk setting sizes this trade under $1.00, the smallest multiplier Deriv will open, so the stake is
+                raised to exactly $1.00. Its loss is bounded by its stop — about $0.62 normally, $0.80 at most — and the
+                lift only happens while that worst case stays within 20% of the balance.
               </span>
             </div>
           )}
@@ -277,22 +275,19 @@ export default function ConfigurationPage() {
             <div className="flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-[11px] text-amber-400" data-testid="warn-multiplier-boundary">
               <AlertCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
               <span>
-                The $1.00 floor holds your trades on multipliers down to a balance of about <strong>$4.00</strong>. Below
-                that, a $1.00 stake would put more than 20% of the account at risk in one trade, so the lift stops and
-                trades become binaries: no stop-loss, no take-profit, the full stake gone on a loser. At a $
-                {headroomLoss.toFixed(2)} typical loss per trade you have roughly {headroomTrades} losing trade
-                {headroomTrades === 1 ? "" : "s"} of headroom before that happens.
+                The $1.00 floor keeps you trading down to a balance of about <strong>$4.00</strong>. Below that, a $1.00
+                stake would put more than 20% of the account at risk in one trade, so the bot stops trading until the
+                balance is back (it never falls back to binaries). At a ${headroomLoss.toFixed(2)} typical loss per trade
+                you have roughly {headroomTrades} losing trade{headroomTrades === 1 ? "" : "s"} of headroom before that happens.
               </span>
             </div>
           )}
-          {yourRow?.ok && yourRow.contract === "binary" && (
-            <div className="flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-[11px] text-amber-400" data-testid="warn-binary-mode">
+          {yourRow && !yourRow.ok && (
+            <div className="flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-[11px] text-amber-400" data-testid="warn-no-trade">
               <AlertCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
               <span>
-                At ${equity.toFixed(2)} the account cannot carry a $1.00 multiplier without risking over 20% in a single
-                trade, so trades are placed as binaries — no stop-loss, no take-profit, full stake at risk. Because a
-                losing binary costs everything, the bot also demands a higher-confidence setup before taking one, so
-                expect fewer trades here. A balance of <strong>$4.00</strong> or more returns you to multipliers.
+                At ${equity.toFixed(2)} the bot does not trade: {yourRow.reason ?? "no stake survives the risk caps"}.
+                A balance of about <strong>$4.00</strong> or more lets it trade again.
               </span>
             </div>
           )}
@@ -310,8 +305,8 @@ export default function ConfigurationPage() {
           <CardContent className="space-y-3">
             <p className="text-xs text-muted-foreground">
               A single risk percentage cannot serve both ends of an account's life. At $5, 20% is not aggression — it is
-              the smallest number that reaches Deriv's $1.00 multiplier stake, and anything less drops to a stop-less
-              binary. At $500 that same 20% is a $100 swing per trade. So your saved settings are a <em>ceiling</em>, and
+              the smallest number that reaches Deriv's $1.00 multiplier stake, and anything less cannot open a multiplier
+              at all. At $500 that same 20% is a $100 swing per trade. So your saved settings are a <em>ceiling</em>, and
               the balance applies a second one; the lower of the two is what trades. The ladder only ever tightens, never
               loosens, and the bands are cut so that no step ever pushes the stake back under $1.00.
             </p>

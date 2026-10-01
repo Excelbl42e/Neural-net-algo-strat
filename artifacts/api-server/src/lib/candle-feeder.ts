@@ -30,7 +30,7 @@ const normalizeSymbol = (s: string): string => {
  * Timeframes this feeder builds and stores.
  *
  * M1 was built and persisted here but read by nothing: the chart offers M5 and
- * up, and the judge uses H4/H1/M30. At 1,440 bars a day per symbol it was
+ * up, and the strategy poll uses M30/H1/H4. At 1,440 bars a day per symbol it was
  * roughly three quarters of all candle writes and re-fetched 500 rows per
  * symbol on every reconnect, for data no code path has ever queried. Removed.
  */

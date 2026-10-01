@@ -400,7 +400,7 @@ async function dispatchTradeUnlocked(
   }
 
   if (conn.accountId == null) {
-    await recordGeneratedReason(signal.id, "Connected demo broker has no linked account");
+    await recordGeneratedReason(signal.id, `Connected ${wantEnv} broker has no linked account`);
     logger.warn({ symbol: signal.symbol, broker: conn.label }, "No linked account; refusing unvalidated execution");
     return;
   }
@@ -608,14 +608,12 @@ async function dispatchTradeUnlocked(
     return;
   }
 
-  // ── Entry timing: the order waits for price to come into the approved zone ──
+  // ── Entry: only at a price close to the one the poll voted on ──
   //
-  // A multiplier fills at market. Signals fire while price is still away from
-  // the FVG it has to retrace into, and the bracket used to be measured from
-  // the FVG midpoint while the order filled at market — shifting the stop up
-  // onto the FVG (where the retrace goes) and the target past the liquidity
-  // pool. planEntry measures everything from the live price instead, and
-  // holds the signal until that price is actually inside the zone.
+  // A multiplier fills at market. The signal's entry band is a quarter of an
+  // M30 ATR either side of the price at the scan; planEntry measures stop,
+  // target and reward:risk from the live price and only enters inside that
+  // band, so a price that has run away since the vote is not chased.
   const entryLowNum  = signal.entryLow  != null ? parseFloat(signal.entryLow)  : Number.NaN;
   const entryHighNum = signal.entryHigh != null ? parseFloat(signal.entryHigh) : Number.NaN;
   const stopNum      = signal.stopLevel    != null ? parseFloat(signal.stopLevel)    : Number.NaN;
@@ -934,8 +932,8 @@ function applyConfig(config: BotConfigRow): void {
   activeMode = config.enabled && (config.autotradeMode === "auto_demo" || config.autotradeMode === "auto_live")
     ? config.autotradeMode
     : null;
-  // An unreadable threshold must not silently disable the binary bar: NaN
-  // compares false against everything, which would wave every setup through.
+  // An unreadable agreement threshold falls back to simple majority (0.5);
+  // tallyPoll clamps it as well, so NaN can never mean "trade anything".
   const parsedMinConfidence = parseFloat(config.minConfidence);
   const parsedMinRr = parseFloat(config.minRiskReward);
   activeConfig = {
@@ -977,12 +975,12 @@ function signalRowFrom(p: typeof signalsTable.$inferSelect): SignalRow {
 
 // ── Entry watcher ────────────────────────────────────────────────────────────
 //
-// Signals now wait for price to retrace into their zone, and a thirty-minute
-// scan would mostly miss that retrace: an FVG is a narrow range and price
-// can pass through it between two scans. The live tick is already in memory,
-// so checking pending signals against it every few seconds is nearly free.
-// Only a signal whose price is in its zone, or whose setup is over, is handed
-// to the dispatcher, which re-runs every check before anything is sent.
+// A poll signal is normally traded right after the scan. When its order is
+// held back (no fresh tick yet, a quote refused, the dispatch queue busy) it
+// stays valid until the next scan, and this watcher retries it against the
+// live tick every few seconds. Only a signal whose price is in its entry band,
+// or whose levels are already broken, is handed to the dispatcher, which
+// re-runs every check before anything is sent.
 
 const ENTRY_WATCH_MS = 15_000;
 let entryWatchHandle: ReturnType<typeof setInterval> | null = null;

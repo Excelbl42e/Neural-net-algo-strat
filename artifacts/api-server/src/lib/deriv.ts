@@ -363,10 +363,7 @@ export async function getContractQuote(
  * parameter shape used by real forex signal dispatch — a quote-only
  * `proposal`, never a `buy`, so it can never open a position or leave
  * anything to close. Used by the demo self-test to catch a wrong field name
- * on the multiplier path the same way the binary path's buy already caught
- * one, without the risk of an orphaned open position (this codebase has no
- * "sell to close" capability at all — a multiplier position can only close
- * via its own stop-loss/take-profit).
+ * on the multiplier path before any order is sent.
  */
 export async function checkMultiplierProposal(token: string, environment: "demo" | "real", symbol: string): Promise<{ ok: boolean; message: string }> {
   const meta = getSyntheticSymbol(symbol);
