@@ -1,5 +1,31 @@
 # Changes in this build (vs. your Replit export)
 
+## Research: strategies and filters from the two books (no bot changes)
+
+Everything below uses the live rules (0.6% stop, 1.5x target, 4-day limit, Friday close, every Deriv forex pair, Nov 2025 – Sep 2026; selection to Jun, test Jul–Sep). Scripts: `research/backtest/book-voters.mts`, `book-lib.mts`, `book-poll.mts`, `book-meta.mts`, `book-filters.mts`. Every setting tried is listed.
+
+**Seven new voters from the books: none added.** Chan's turning point (ex. 7.1), pair-spread reversion against the most correlated pair (Chan ch. 7), SADF explosiveness, Chu-Stinchcombe-White CUSUM break, fractionally differentiated reversion, CUSUM filter trend and low-entropy momentum (AFML ch. 2, 5, 17, 18). Alone, none earns money after commission in both periods. Added to the 60 voters one at a time, the best two (fracdiff +$1.10, SADF +$0.07 over 1,041 trades) change nothing that matters; all seven together lose $11 instead of making $18.
+
+**CUSUM "real move" entry filter (AFML ch. 2): rejected.** All 8 settings did worse than no filter ($18.01): from −$9.27 to +$17.32.
+
+**Meta-labeling (AFML ch. 3): promising.** A second model (logistic regression, 15 features known at the entry: vote share, H4-vs-M30 voter agreement, volatility percentile, hour, weekday, recent poll win rate on the pair and overall, trend, stretch, high/low spread and volatility estimates) predicts whether the poll's trade wins; predicted losers are skipped. It skips about half the votes.
+- Trained Nov–Jun, tested Jul–Sep: kept trades averaged $0.083 per $1 vs $0.036 for all (skipped ones −$0.006); total $10.74 vs $9.84.
+- Combinatorial purged cross-validation (AFML ch. 12, 45 fits, 9 out-of-sample histories): better in 9 of 9 histories, +$5.52 on average over $18.01, and better than 87–99% of random skips of the same size.
+- Not sensitive to its settings: kept trades averaged $0.056–$0.236 for every regularization (0.1–100) and threshold (0.45–0.55) tried.
+- $10 account (every vote until one stake left, model refit monthly from Feb): 26-day runs up 51% (vs 42%), typical $10.17 (vs $9.45), under $5 5% (vs 7%), but worst $2.06 (vs $4.22); 12-day runs about the same.
+
+**Correlation between open positions (Chan ch. 6, AFML ch. 16): mixed.** $10 account, every vote until one stake left:
+
+| | 12 days: up / under $5 / typical / best | 26 days: up / under $5 / typical / best |
+|---|---|---|
+| No limit (now) | 56% / 7% / $10.07 / $23.60 | 42% / 7% / $9.45 / $21.08 |
+| At most 2 trades on the same side of a currency | 53% / 0% / $10.08 / $16.39 | 47% / 9% / $9.82 / $13.93 |
+| At most 3 | 58% / 2% / $10.80 / $22.63 | 40% / 0% / $9.19 / $17.06 |
+| Skip if correlation with an open trade > 0.5 | 53% / 0% / $10.12 / $13.57 | 53% / 5% / $10.16 / $13.91 |
+| Skip if correlation with an open trade > 0.7 | 58% / 2% / $10.64 / $17.89 | 51% / 5% / $10.32 / $21.47 |
+
+Deploy: `.replitignore` now leaves `research/` and the PDFs out of the deployed image. The bot never read them; it trades on live Deriv candles.
+
 ## Research: two trading books checked against the bot (no bot changes)
 
 Read Chan, *Quantitative Trading* (2008) and López de Prado, *Advances in Financial Machine Learning* (2018), both added to the repo root, and tested the ideas that fit a 60-vote forex poll on Deriv multipliers. Script: `research/backtest/book-tests.mts` (live rules, every Deriv forex pair, Nov 2025 – Sep 2026; selection period to Jun, test Jul–Sep).
