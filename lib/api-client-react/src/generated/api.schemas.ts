@@ -321,6 +321,8 @@ export interface CandleResponse {
   timeframe: string;
   candles: Candle[];
   lastTick?: LastTick | null;
+  /** The candle still being built from live ticks (not stored yet), or null. */
+  forming?: Candle | null;
 }
 
 export interface CandleFeederStatus {

@@ -1,5 +1,18 @@
 # Changes in this build (vs. your Replit export)
 
+## Live chart: the forming candle and the live price
+
+The Chart page drew only completed candles stored in the database, so it ran up to one candle behind (a whole day on D1) and its price line was the last stored close. Now:
+- **Forming candle:** `/api/candles` also returns `forming`, the candle the feeder is building from live Deriv ticks (`getFormingCandle` in `candle-feeder.ts`). The chart draws it as the last candle and refreshes every 2 seconds (was 5).
+- **Price line:** while ticks are arriving (one within the last 2 minutes) it is a cyan **LIVE** line at the latest tick, and the bar above the chart shows "● LIVE price … · tick hh:mm:ss (Ns ago)". With no recent tick (weekend, quiet feed) it says so and shows the last price.
+- **Zoom:** zoom and scroll are kept across refreshes; the view refits only when the pair or timeframe changes.
+- Trading is unchanged: the bot already used live ticks for every entry.
+
+**Checked:**
+- **Server, real ticks:** on Deriv's 24/7 synthetic R_100 (forex is closed on weekends), two requests 6 seconds apart returned the same forming M5 candle with its high/close moving 687.64 → 687.95 and matching tick times.
+- **Dashboard:** in Chromium the closed-market state reads "No live tick … Last price". With a streaming tick, the LIVE line and text update on each refresh (1.12548 → 1.12588), a zoom survives refreshes, and there are no page errors.
+- Typecheck, tests and both builds pass.
+
 ## Fix: the COT row turned System health yellow while the first report was still downloading
 
 Right after a restart the "COT report (veto)" row said "Fetching the CFTC report…" and was marked degraded, which turned the whole panel's badge yellow. While the first download is in progress it is now idle (grey). It turns yellow only if the download failed or this week's report is missing.

@@ -620,6 +620,18 @@ class CandleFeeder {
     return best;
   }
 
+  /** The newest candle still being built from live ticks for a symbol and timeframe (not stored yet). */
+  getFormingCandle(symbol: string, tf: string): { time: number; open: number; high: number; low: number; close: number } | null {
+    const prefix = `${normalizeSymbol(symbol)}|${tf}|`;
+    let best: { time: number; open: number; high: number; low: number; close: number } | null = null;
+    for (const [key, b] of this.buckets) {
+      if (!key.startsWith(prefix)) continue;
+      const time = Number(key.slice(prefix.length));
+      if (!best || time > best.time) best = { time, open: b.open, high: b.high, low: b.low, close: b.close };
+    }
+    return best;
+  }
+
   /** Get the latest in-memory tick for a symbol (used by the chart's live overlay). */
   getLastTick(symbol: string): { price: number; at: number } | null {
     return this.lastTick.get(normalizeSymbol(symbol)) ?? null;
@@ -651,6 +663,10 @@ export function symbolRejectionReason(symbol: string): string | null {
 
 export function getOpenBucketRange(symbol: string, tf: string) {
   return feeder.getOpenBucketRange(symbol, tf);
+}
+
+export function getFormingCandle(symbol: string, tf: string) {
+  return feeder.getFormingCandle(symbol, tf);
 }
 
 export function getLastTick(symbol: string) {

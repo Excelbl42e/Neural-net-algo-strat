@@ -625,7 +625,15 @@ export const ListCandlesResponse = zod.object({
   "lastTick": zod.union([zod.object({
   "price": zod.number(),
   "at": zod.number().int()
-}),zod.null()]).optional()
+}),zod.null()]).optional(),
+  "forming": zod.union([zod.object({
+  "time": zod.number().int(),
+  "open": zod.number(),
+  "high": zod.number(),
+  "low": zod.number(),
+  "close": zod.number(),
+  "volume": zod.number().nullish()
+}),zod.null()]).optional().describe('The candle still being built from live ticks (not stored yet), or null.')
 })
 
 
