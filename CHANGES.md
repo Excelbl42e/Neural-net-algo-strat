@@ -1,5 +1,23 @@
 # Changes in this build (vs. your Replit export)
 
+## Research: balance from 4 hours to 8 weeks, and when $10 reaches $20 (no bot changes)
+
+This uses the live poll on the $10 account, starting at 07:00 UTC on each of 233 weekdays. The balance includes open positions. Script: `research/backtest/to-twenty.mts`.
+
+| After | Average | Median | Middle half | Up | Under $5 | Worst / best |
+|---|---|---|---|---|---|---|
+| 4 hours | $9.85 | $9.91 | $9.66–$10.07 | 33% | 0% | $7.12 / $12.02 |
+| 8 hours | $9.94 | $9.95 | $9.41–$10.33 | 44% | 0% | $6.09 / $13.34 |
+| 1 day | $9.93 | $9.95 | $9.14–$10.64 | 46% | 0% | $5.35 / $15.64 |
+| 2 days | $9.90 | $9.67 | $8.73–$11.04 | 42% | 0% | $5.45 / $17.49 |
+| 4 days | $9.79 | $9.45 | $8.35–$11.04 | 40% | 1% | $4.17 / $17.78 |
+| 1 week | $9.99 | $9.46 | $7.92–$11.57 | 39% | 2% | $3.21 / $23.39 |
+| 2 weeks | $10.12 | $9.56 | $7.67–$12.19 | 43% | 6% | $3.46 / $26.30 |
+| 4 weeks | $9.93 | $9.37 | $6.27–$12.58 | 44% | 13% | $1.84 / $24.43 |
+| 8 weeks | $8.43 | $7.42 | $4.34–$12.55 | 36% | 33% | $1.56 / $28.82 |
+
+$10 reached $20 within 8 weeks in 48 of 193 starts (25%): never within 4 days, 2% by 1 week, 7% by 2 weeks, 9% by 4 weeks. When it did, it took 4.9 days at the fastest and 33 days at the median. Along the way the balance fell under $5 at some point in 56% of starts. Of the 26 starts from July, 2 reached $20.
+
 ## Research: what $10 becomes after 4 days (no bot changes)
 
 This uses the live poll on the $10 account: every vote trades until one stake of free balance is left. Positions still open at the end are valued at that moment's price. Script: `research/backtest/four-day.mts`.
