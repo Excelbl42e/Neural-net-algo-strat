@@ -1,5 +1,36 @@
 # Changes in this build (vs. your Replit export)
 
+## Research: the week-by-week view, magnetohydrodynamics and more physics models (no bot changes)
+
+**$10 in every Monday 07:00 UTC, out on Friday after the close, 46 weeks** (`research/backtest/r-weekly.mts`):
+
+| | Live now | Weekly cycle (Mon–Tue, to Friday, max 4) | + COT veto |
+|---|---|---|---|
+| Average Friday balance | $10.16 | $10.38 | $10.59 |
+| Median | $9.93 | $10.12 | $10.35 |
+| Weeks up | 48% | 52% | 63% |
+| Weeks under $8 | 17% | 9% | 9% |
+| Worst / best week | $4.83 / $18.52 | $6.99 / $14.27 | $7.66 / $14.12 |
+| Total withdrawn over 46 weeks | +$7.52 | +$17.48 | +$27.33 |
+
+In Jul–Sep the COT veto changed nothing (+$9.60 both). Its gain in the Deriv year is all Nov–Jun; the 12-year COT test is the stronger evidence for it.
+
+**Physics and maths models** (`r-mhd.mts`; weekly-cycle poll, 60 voters: $35.06 per $1 trade-year, +$17.48 withdrawn weekly):
+
+| Model | FX version | Alone (bps per vote, sel / test) | Added to the poll |
+|---|---|---|---|
+| Alfvén waves (MHD) | Do crosses lag what the USD pairs imply? | Deviations are about 0.2 bps per M30 bar and snap back (autocorrelation −0.4); commission is 2–6 bps | Not tradable |
+| Magnetic tension (MHD) | Fade a pair's 4-day move not explained by the 3 main market factors (z > 2) | +1.5 / +33.7 (votes on 2% of bars) | $34.22; weekly +$17.76 |
+| Dynamo / Ising magnetisation | Follow the dollar when all 6 USD pairs moved the same way over a day | +0.2 / +1.3 | $33.03; weekly +$11.70 |
+| Hawkes self-excitation | Follow the side whose large moves are clustering | −8.0 / +8.3 | $35.34; weekly +$15.55 |
+
+None added.
+
+**Random matrix theory** (Marchenko–Pastur), from 1,499 H4 returns of the 14 pairs:
+- Correlation eigenvalues are 4.60, 3.62, 2.27, 1.57 and 1.20, then zeros. Noise would stay below 1.20.
+- So the 14 pairs contain about 4 real independent bets (5 at most). They span only 6 dimensions, because every cross is two USD pairs combined.
+- This is why "at most 4 open" was the best cap: a 5th to 9th position mostly repeats a bet already held.
+
 ## Research: COT over 12 years, more voters, physics and topology models (no bot changes)
 
 These were tested on the weekly cycle from the entry below (Mon–Tue entries, hold to Friday, max 4 open), live poll and stop/target. Scripts: `research/backtest/r-cot.mts`, `r-cot2`, `r-nvoters`, `r-physics`, `r-tda`, `r-extra`, `r-combo` (`.mts`).
