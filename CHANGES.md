@@ -12,6 +12,8 @@ This uses the live poll on the $10 account: every vote trades until one stake of
 
 About 12 trades are opened per 4 days. Jul–Sep weekday windows averaged $10.07 (under $8 in 8%); Nov–Jun windows averaged $9.77 (under $8 in 26%).
 
+After 2 days (live 4-day hold, open positions valued at day 2), Monday starts averaged $10.25 (median $9.67, middle half $9.08–$11.54, up 45%, under $8 13%, worst $6.14). Mon–Thu starts averaged $9.93. Switching to a 2-day hold barely changes the 2-day balance, but over a full week it averages $10.12 instead of $10.33, and 26% of weeks end under $8 instead of 17%.
+
 ## Research: 2- or 3-day holds and other timeframes (no bot changes)
 
 Holds of 2, 3 and 4 days were each tested with seven timeframe setups. All other rules are the live ones. Script: `research/backtest/hold-tf.mts`; `book-lib.mts` now has `setHold`. "Re-tuned" re-picks each voter's timeframe for that hold using only Nov–Jun. "Decide on H1/H4" polls only at those closes.

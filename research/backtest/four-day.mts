@@ -44,3 +44,15 @@ console.log("\nMonday starts one by one:", all.filter((x) => new Date(x.st).getU
 const wk: typeof all = []; for (let st = START; st + 5 * 86_400_000 <= END; st += 86_400_000) if (new Date(st).getUTCDay() === 1) wk.push({ st, ...run(st, st + 5 * 86_400_000) });
 console.log("");
 report("Monday to Friday close", wk);
+
+// 2-day windows (Mon 00:00 -> Wed 00:00 etc.), with the live 4-day hold and, for comparison, a 2-day hold
+const { setHold } = await import("./book-lib.mts");
+for (const hold of [192, 96]) { setHold(hold);
+  console.log(`\n== $10 after 2 days, ${hold / 48}-day hold${hold === 192 ? " (live)" : ""}, open positions valued at day 2 ==`);
+  const two: typeof all = []; for (let st = START; st + 2 * 86_400_000 <= END; st += 86_400_000) { const dw = new Date(st).getUTCDay(); if (dw >= 1 && dw <= 4) two.push({ st, ...run(st, st + 2 * 86_400_000) }); }
+  report("every Mon-Thu start", two);
+  report("Monday starts (Mon-Wed 00:00)", two.filter((x) => new Date(x.st).getUTCDay() === 1));
+  report("  test months (Jul-Sep)", two.filter((x) => x.st >= SPLIT));
+  if (hold === 96) { const w4: typeof all = []; for (let st = START; st + 4 * 86_400_000 <= END; st += 86_400_000) if (new Date(st).getUTCDay() === 1) w4.push({ st, ...run(st, st + 5 * 86_400_000) }); report("2-day hold, Monday to Friday close", w4); }
+}
+setHold(192);
