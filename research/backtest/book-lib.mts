@@ -8,7 +8,9 @@ for (const tf of ["M30", "H1", "H4"]) { loadTF(tf); loadTF(tf, new URL(`./data/v
 
 export type Voter = { id: string; tf: string };
 export const LIVE: Voter[] = Object.entries(POLL_TIMEFRAME).map(([id, tf]) => ({ id, tf }));
-export const RR = 1.5, HOLD = 192, STOP = 0.006, END = Date.parse("2026-10-01T00:00:00Z");
+export let HOLD = 192; // M30 bars (4 days); setHold changes it for every simulation below
+export const setHold = (bars: number) => { HOLD = bars; };
+export const RR = 1.5, STOP = 0.006, END = Date.parse("2026-10-01T00:00:00Z");
 export const okTime = (ms: number) => { const d = new Date(ms), day = d.getUTCDay(), h = d.getUTCHours(); return day >= 1 && day <= 5 && h >= 7 && h < 21 && !(day === 5 && h >= 16); };
 
 export type Decision = { d: number; share: number; buy: number; sell: number };
@@ -33,7 +35,7 @@ export function simTrade(s: string, i: number, d: number) {
     if (j > i + 1 && b.t[j] - b.t[j - 1] > 6 * 3600_000 && d * (b.o[j] - sp) <= 0) { px = b.o[j]; reason = "stop"; }
     else if (d > 0 ? b.l[j] <= sp : b.h[j] >= sp) { px = sp; reason = "stop"; }
     else if (d > 0 ? b.h[j] >= tp : b.l[j] <= tp) { px = tp; reason = "target"; }
-    else if (j - (i + 1) >= HOLD) { px = b.c[j]; reason = "4-day"; }
+    else if (j - (i + 1) >= HOLD) { px = b.c[j]; reason = "hold"; }
     else if (flat) { px = b.c[j]; reason = "friday"; }
     if (px != null) return { j, reason, pnl: Math.max(-0.8, d * (px - e0) / e0 * 100 - comm) };
   }

@@ -1,5 +1,25 @@
 # Changes in this build (vs. your Replit export)
 
+## Research: 2- or 3-day holds and other timeframes (no bot changes)
+
+Holds of 2, 3 and 4 days were each tested with seven timeframe setups. All other rules are the live ones. Script: `research/backtest/hold-tf.mts`; `book-lib.mts` now has `setHold`. "Re-tuned" re-picks each voter's timeframe for that hold using only Nov–Jun. "Decide on H1/H4" polls only at those closes.
+
+| Hold | Setup | Total (1 yr) | Test Jul–Sep avg | $10 12d: up / typical | $10 26d: up / typical / under $5 |
+|---|---|---|---|---|---|
+| 4d | **live mix (now)** | **+$18.01** | **$0.036** | **56% / $10.07** | **42% / $9.45 / 7%** |
+| 4d | decide on H1 closes | +$12.03 | $0.026 | 49% / $9.80 | 35% / $9.22 / 7% |
+| 4d | decide on H4 closes | +$6.39 | $0.036 | 47% / $9.71 | 37% / $8.74 / 16% |
+| 4d | all M30 / all H1 / all H4 | −$22.19 / −$16.82 / −$8.37 | | 44–47% | 26–40%, under $5 14–23% |
+| 3d | live mix | +$8.13 | $0.020 | 49% / $9.83 | 30% / $8.42 / 16% |
+| 3d | decide on H4 closes | +$6.85 | $0.034 | 49% / $10.00 | 40% / $8.46 / 16% |
+| 3d | re-tuned mix | +$4.52 | $0.020 | 44% / $9.52 | 30% / $8.34 / 21% |
+| 3d | all M30 / H1 / H4 | −$19.76 / −$13.48 / −$7.88 | | | |
+| 2d | live mix | +$11.74 | −$0.011 | 44% / $9.76 | 42% / $8.49 / 21% |
+| 2d | re-tuned mix | +$4.45 | −$0.007 | 40% / $8.85 | 37% / $7.69 / 21% |
+| 2d | other setups | −$33.84 to −$4.10 | | | |
+
+The current settings are best on every measure: a 4-day hold, each voter on its own timeframe, and a poll at every M30 close. This includes the unseen Jul–Sep months, where 2-day holds lose and 3-day holds make about half as much. Putting all voters on one timeframe loses money at every hold. No change.
+
 ## Research: three more books checked (no bot changes)
 
 Books: Aronson, *Evidence-Based Technical Analysis*; Qian, Hua & Sorensen, *Quantitative Equity Portfolio Management* (scanned, read via OCR); Hull, *Options, Futures and Other Derivatives*. Same rules and data as the entry below. Script: `research/backtest/book3.mts`.
