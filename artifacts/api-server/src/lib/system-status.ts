@@ -8,6 +8,7 @@ import { getBalanceSyncStatus } from "./balance-sync.js";
 import { getSecret } from "./secrets.js";
 import { isAIConfigured } from "./ai-client.js";
 import { getNewsCalendarStatus } from "./news-calendar.js";
+import { getCotSeries, getCotStatus } from "./cot-positioning.js";
 
 export type Health = "ok" | "degraded" | "down" | "idle";
 export interface Component { name: string; status: Health; reason: string }
@@ -53,6 +54,19 @@ export async function getSystemStatus() {
   const staleMs = w.lastRunAt ? Date.now() - Date.parse(w.lastRunAt) : Infinity;
   push("signal_worker", !w.running && !w.lastRunAt ? "idle" : w.lastError ? "degraded" : staleMs > 2 * w.intervalMs + 60_000 ? "degraded" : "ok",
     w.lastError ? `last error: ${w.lastError}` : w.lastRunAt ? `last tick ${w.lastRunAt}` : "no tick yet");
+
+  // COT veto: informational only. Without the report the veto stands down and
+  // every vote trades, so this is never "down".
+  // Warm the cache in the background (never awaited) so the first order of
+  // the week does not wait on the download and this row shows the real state.
+  if (cfg?.cotVeto) void getCotSeries();
+  const cot = getCotStatus();
+  push("cot_report", !cfg?.cotVeto ? "idle" : cot.usable ? "ok" : "degraded",
+    !cfg?.cotVeto ? "COT veto is off (Configuration page)"
+      : cot.usable ? `CFTC report of ${cot.latestReport} in use${cot.lastError ? `; last refresh failed (${cot.lastError}), using the cached report` : ""}`
+      : cot.lastError ? `CFTC report unreachable (${cot.lastError}); the veto stands down and every vote trades`
+      : cot.latestReport ? `No CFTC report for this week yet (latest ${cot.latestReport}); the veto stands down and every vote trades`
+      : "Fetching the CFTC report…");
 
   const r = getReconcilerStatus();
   const lock = await getExecutionLock().catch(() => ({ locked: false, reason: null, signalId: null }));

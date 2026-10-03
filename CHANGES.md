@@ -1,5 +1,296 @@
 # Changes in this build (vs. your Replit export)
 
+## COT veto, and the weekly cycle as an option
+
+Built from the research below. On upgrade only the **COT veto is switched on** (once; a later choice is kept). The owner keeps the other settings as they are: new trades every weekday, Max positions 14, Max hold 96h. The weekly cycle can be chosen on the Configuration page: "New trades open on" Monday–Tuesday, Max positions 4, Max hold 120h.
+
+- **System health:** a new "COT report (veto)" row shows which CFTC report is in use, or that the veto is standing down and why. It is never red, because without the report every vote trades. The report is fetched in the background when the dashboard checks status. After a failed download the next try waits 30 minutes, so a down CFTC site cannot slow orders.
+
+- **The veto runs at the scan too.** A vetoed vote no longer creates a signal that the dispatcher would cancel and the scan would recreate every hour. It is logged under "COT veto" in Analysis rejections. The dispatcher check stays as a backstop.
+
+### Checked against Deriv's current API docs (developers.deriv.com/llms, fetched 2026-10-03)
+
+- **`buy`:** `buy: "1"` with `price` and `parameters` {`contract_type` MULTUP/MULTDOWN, `underlying_symbol`, `amount`, `basis: "stake"`, `currency`, `multiplier`, `limit_order` {`stop_loss`, `take_profit`}}. Matches the schema.
+- **`sell`:** {`sell`: contract_id, `price`: 0} = sell at market. Matches. `portfolio: 1` and `proposal_open_contract` with `contract_id` also match.
+- **Contract status fields read:** `is_sold`, `profit`, `buy_price`, `purchase_time`, `underlying_symbol`, `status`, `sell_price`. All are in the schema.
+- **Login:** an OTP WebSocket URL from `POST /trading/v1/options/accounts/{id}/otp` with `Authorization: Bearer` plus `Deriv-App-ID`. Market data comes from `wss://api.derivws.com/trading/v1/options/ws/public`. Matches.
+- **Multipliers:** `contracts_for` on frxEURUSD returns multipliers 100/200/300/500/800. The bot uses 100, the smallest. Rate limits (100 requests/s per connection, 5 connections) are far above what the bot sends.
+
+**News data:** ForexFactory's weekly calendar, `https://nfs.faireconomy.media/ff_calendar_thisweek.json`, overridable with `NEWS_CALENDAR_URL`. This research sandbox's network blocks that host, so it could not be fetched here. After redeploying, the Dashboard's System health "News calendar" row must read OK ("N events cached"). If it is red, no forex trade is placed (fail-closed by design). The COT data comes from the CFTC public API, which was fetched successfully.
+
+**Deploy:** no new packages (lockfile unchanged). The two new columns are added by `ensureSchema()` at boot, before any worker starts. The Replit build commands (`pnpm --filter @workspace/api-server run build`, `... trading-dashboard run build`) both pass locally.
+
+### Pre-deploy check: every page clicked through, desktop and phone
+
+A local build with a test database and sample account, trades and signals was opened in Chromium at 1440px and 375px. On all 11 pages it checked for page errors, failed API calls, "NaN" / "undefined" / "Invalid Date" text, overflow and clipped text, then clicked every button. Fixed:
+
+- **Signals:** the "RECORD: CANCELLED / EXECUTED" badge was cut off at the card edge on desktop; the card header now wraps.
+- **Trades:** on a phone, "Log Trade" was pushed off the right edge; the header buttons now wrap.
+- **Chart:**
+  - Prices showed 2 decimals (EURUSD "1.13"); now 5, or 3 for JPY pairs.
+  - The last price had two overlapping labels; now one.
+- **Signals "Clear History" and Brokers "remove connection":** these used the browser's built-in confirm popup, which embedded views such as Replit's preview can block silently, leaving the button looking dead. They now use the same inline "Confirm / ✕" as the Trades page. Both checked: cancel keeps everything; confirm deletes.
+- **Text:**
+  - The Dashboard said "1 broker connections".
+  - The COT veto reason said "3th percentile"; it now reads "more one-sided than in 97% of the last 3 years".
+- **Unused Inter font:** no longer downloaded (the app uses DM Sans).
+
+Checked and fine:
+- Brokers "Sync" with a bad token shows a clear "Sync failed" message with Deriv's reason.
+- A code review of the branch's bot changes found only the COT status row overstating usability, now fixed (it checks a report exists for the current week).
+- Typecheck, 64 tests and both builds pass.
+
+- **Entry days.** `forexPreScanGate` refuses new signals and orders after the last entry day. It runs in the scan and again in the dispatcher, next to the Friday 16:00 cutoff. Open positions are never closed by it. Choices: Monday only, Mon–Tue, Mon–Wed, Mon–Thu or every weekday.
+- **COT veto** (`cot-positioning.ts`). Each week the bot reads the CFTC's legacy futures report from its public API (no key; `COT_URL` overrides the address).
+  - It computes speculators' positioning per pair (base minus quote currency, USD = 0) and its percentile among the last 156 weeks.
+  - In the dispatcher, a buy at the 90th percentile or above, or a sell at the 10th or below, is cancelled with the reason shown on the Signals page and under "COT veto" in Analysis rejections.
+  - A report is used from the Monday after its Tuesday, as backtested.
+  - The data is cached for 6 hours; two missed weekly reports or no data means the veto stands down and every vote trades as before.
+- **Checked:**
+  - The live COT module gives the same signal as the research code for all 658 pair-Mondays of the backtest year (0 differences).
+  - The real CFTC feed returns the 2026-09-29 report. For Monday 2026-10-05 it would block sells on GBPUSD, GBPJPY, USDCHF and EURCHF, where speculators are at 3-year extreme shorts.
+  - Against a local Postgres, the upgrade switches the veto on and leaves every other setting alone. Saving other values works, and a weekday of 9 is refused.
+  - The Configuration page shows the new controls with no page errors and no overflow at 375px.
+  - New tests: entry-day gate, COT timing, extreme detection, veto direction, too-little-history. `npm run typecheck && npm test && npm run build` pass (64 tests), and the dashboard builds.
+- **Expected, on the owner's settings** (every weekday, every vote until one stake left, 4-day hold; `research/backtest/r-veto-live.mts`). Without → with the veto:
+  - Per $1 trade, sel / test: $0.011 / $0.036 → $0.027 / $0.048; year $18.01 → $30.39 (127 trades skipped).
+  - $10 in each Monday, out each Friday, 46 weeks: average $10.16 → $10.32, weeks up 48% → 52%, under $8 17% → 15%, worst $4.83 → $6.38.
+  - Withdrawn: +$7.52 → +$14.78 (Nov–Jun +$4.26 → +$8.50, Jul–Sep +$3.26 → +$6.29).
+  - 12 weeks from $10: median $5.63 → $8.33, under $5 47% → 21%.
+
+## Research: the week-by-week view, magnetohydrodynamics and more physics models (no bot changes)
+
+**$10 in every Monday 07:00 UTC, out on Friday after the close, 46 weeks** (`research/backtest/r-weekly.mts`):
+
+| | Live now | Weekly cycle (Mon–Tue, to Friday, max 4) | + COT veto |
+|---|---|---|---|
+| Average Friday balance | $10.16 | $10.38 | $10.59 |
+| Median | $9.93 | $10.12 | $10.35 |
+| Weeks up | 48% | 52% | 63% |
+| Weeks under $8 | 17% | 9% | 9% |
+| Worst / best week | $4.83 / $18.52 | $6.99 / $14.27 | $7.66 / $14.12 |
+| Total withdrawn over 46 weeks | +$7.52 | +$17.48 | +$27.33 |
+
+In Jul–Sep the COT veto changed nothing (+$9.60 both). Its gain in the Deriv year is all Nov–Jun; the 12-year COT test is the stronger evidence for it.
+
+**Physics and maths models** (`r-mhd.mts`; weekly-cycle poll, 60 voters: $35.06 per $1 trade-year, +$17.48 withdrawn weekly):
+
+| Model | FX version | Alone (bps per vote, sel / test) | Added to the poll |
+|---|---|---|---|
+| Alfvén waves (MHD) | Do crosses lag what the USD pairs imply? | Deviations are about 0.2 bps per M30 bar and snap back (autocorrelation −0.4); commission is 2–6 bps | Not tradable |
+| Magnetic tension (MHD) | Fade a pair's 4-day move not explained by the 3 main market factors (z > 2) | +1.5 / +33.7 (votes on 2% of bars) | $34.22; weekly +$17.76 |
+| Dynamo / Ising magnetisation | Follow the dollar when all 6 USD pairs moved the same way over a day | +0.2 / +1.3 | $33.03; weekly +$11.70 |
+| Hawkes self-excitation | Follow the side whose large moves are clustering | −8.0 / +8.3 | $35.34; weekly +$15.55 |
+
+None added.
+
+**Random matrix theory** (Marchenko–Pastur), from 1,499 H4 returns of the 14 pairs:
+- Correlation eigenvalues are 4.60, 3.62, 2.27, 1.57 and 1.20, then zeros. Noise would stay below 1.20.
+- So the 14 pairs contain about 4 real independent bets (5 at most). They span only 6 dimensions, because every cross is two USD pairs combined.
+- This is why "at most 4 open" was the best cap: a 5th to 9th position mostly repeats a bet already held.
+
+## Research: COT over 12 years, more voters, physics and topology models (no bot changes)
+
+These were tested on the weekly cycle from the entry below (Mon–Tue entries, hold to Friday, max 4 open), live poll and stop/target. Scripts: `research/backtest/r-cot.mts`, `r-cot2`, `r-nvoters`, `r-physics`, `r-tda`, `r-extra`, `r-combo` (`.mts`).
+
+**COT positioning, 12 years (2014–2026, 639 weeks × 14 pairs).** Each pair was traded from the week's first open to its last close, using Yahoo daily prices (not committed; see README) and `data/cot.json`.
+
+| Rule | bps per trade after 2 bps | 2014–17 | 2018–20 | 2021–23 | 2024–26 |
+|---|---|---|---|---|---|
+| Follow speculators' net position | −4.9 (t −2.9) | −4.3 | −7.0 | −2.0 | −6.4 |
+| Follow its 1-week / 4-week change | −4.0 / −4.0 | | | | |
+| **Fade 3-year extremes (above 90th pct sell, below 10th buy)** | **+7.6 (t 1.8)** | +1.9 | +13.5 | +2.5 | +9.7 |
+| Fade 1-year extremes | +3.3 | +2.0 | +6.5 | −4.3 | +8.3 |
+
+That's 7 rules tried. Only fading 3-year extremes was positive in every era.
+
+**COT inside the bot (Deriv year, weekly cycle):**
+
+| | Per trade sel / test | 12 weeks from $10: median, growth (scan / random order), under $5 | Rest of year from 1st Mondays Dec–Jun |
+|---|---|---|---|
+| Weekly cycle | $0.053 / $0.081 | $13.11, ×1.29 / ×1.10, 3% | $32, 36, 24, 8, 26, 18, 22 |
+| **+ COT veto (skip a trade that follows the crowd into a 3-year extreme)** | $0.059 / $0.101 | **$14.71, ×1.49 / ×1.27, 0%** | **$52, 46, 30, 24, 26, 21, 25** |
+| + COT as a 61st voter | $0.048 / $0.081 | $10.77, ×1.04, 11% | $21, 22, 8, 2, 22, 14, 19 |
+| COT-agreeing pairs get the slots first | | $10.55, ×1.10, 1% | |
+
+The veto removes 68 trades in Nov–Jun and 7 in Jul–Sep. It is better in both start halves (×1.36→×1.65 for Nov–Mar, ×1.19→×1.29 for Apr–Jul). In the bot, CFTC's weekly report (Tuesday positions, published Friday) would have to be fetched each weekend.
+
+**Would more voters help? Yes, if they are good on their own and different.** With random subsets of the 60, per trade sel / test and year total:
+- 10 voters: $0.019 / $0.053, $19.86
+- 30 voters: $0.033 / $0.059, $26.13
+- 50 voters: $0.044 / $0.071, $30.39
+- 60 voters: $0.053 / $0.081, $35.06
+
+The curve is still rising at 60. The voters agree 66% of the time (50% = independent). New voters so far failed because they lose money alone.
+
+**Physics-style voters (alone over 4 days; then added to the poll):**
+- Kramers–Moyal/Fokker–Planck drift: about 0 alone; $34.01 when added (vs $35.06).
+- Schrödinger-style potential well, the data version of the quantum harmonic oscillator: loses alone (−3 to −9 bps); $33.37 when added.
+- Viscous Burgers shock fade: loses alone (−12 bps in Jul–Sep); $35.44 when added.
+- Navier–Stokes "Reynolds number" (follow smooth trends): +$5 per trade-year when added, but it agrees with the poll 99% of the time, and in the $10 account it is worse (×1.18 vs ×1.29).
+
+None added.
+
+**Algebraic topology (persistent homology, Gidea & Katz 2018).** Total H1 persistence of the Rips complex of the last 50 H4 moves of the 6 USD pairs. The code passes its self-check: a circle gives one loop of about 1.4. Trade results by its percentile show no steady pattern; the bottom fifth was −$0.087 in sel and +$0.154 in test. "Stand aside when high" cut the year to $24.51–$33.63 (vs $35.06). Rejected.
+
+## Research: how to make the $10 account grow: open early in the week, hold to Friday, at most 4 open (no bot changes)
+
+This uses the live poll and live stop/target throughout. Balances include open positions. Runs start at 07:00 UTC on every weekday. A new simulator, `research/backtest/r-lib.mts`, makes every rule a parameter; with the live rules it reproduces 1,041 trades and $18.01 exactly. Scripts: `r-anatomy`, `r-exits`, `r-exits2`, `r-days`, `r-mech`, `r-account`, `r-account2`, `r-priority`, `r-signal`, `r-final`, `r-risk`, `r-prune` (all `.mts`).
+
+**The problem: the edge per trade is positive, but the account shrinks.** From $10 with every vote traded, the median after 12 weeks is $5.55, with 47% of runs under $5. Run through the whole year without resetting, it ends at $2 from 5 of 7 starting months. At $10 every stake is the $1 minimum, which is 6.2% at risk. Up to 9 correlated positions are open at once, so ups and downs compound away the small edge.
+
+**Finding 1: trades opened on Monday make most of the money; late-week trades lose.** Per $1 trade, Nov–Jun / Jul–Sep: Mon +0.056 / +0.089, Tue +0.030 / +0.017, Wed −0.042 / +0.082, Thu −0.060 / −0.079, Fri −0.011 / +0.002. Monday trades get their full hold; later ones are cut by the Friday close (55–92% of them end there). Trading only Mon–Tue: +$0.047 / +$0.071 per trade (vs +$0.011 / +$0.036), $30.84 vs $18.01 for the year. It beat trading every day in 7 of 11 months, and only 4% of random day choices of the same size did as well. Allowing entries before 07:00 UTC makes it worse.
+
+**Finding 2: with only early-week entries, hold until the Friday close instead of 4 days.** Per trade +$0.053 / +$0.081, $35.06 for the year.
+
+**Finding 3: at most 4 positions open.** This is the best cap with every day traded and with Mon–Tue, from $10 and from $25. Fewer grows too slowly; more lets the swings eat the edge (8-week growth, Mon–Tue: 3 open ×0.98, 4 ×1.18, 5 ×1.10, every vote ×0.92). The live scan order (majors first) picks which simultaneous votes get the slots. Random order is worse (×1.05) but still above the current setup.
+
+| From $10 | Live now | Live + max 4 open | **Mon–Tue entries, hold to Friday, max 4** | Monday only, to Friday, max 4 |
+|---|---|---|---|---|
+| 1 week: median / up | $9.46 / 39% | $9.94 / 48% | $10.01 / 51% | $10.10 / 53% |
+| 4 weeks: median / under $5 | $9.37 / 13% | $10.62 / 3% | $10.61 / 2% | $10.41 / 1% |
+| 12 weeks: median / under $5 / $20+ | $5.55 / 47% / 1% | $11.12 / 21% / 10% | **$13.11 / 3% / 20%** | $12.28 / 0% / 9% |
+| Rest of year from the 1st Monday of Dec, Jan, Feb, Mar, Apr, May, Jun | $2, 2, 2, 2, 16, 2, 16 | $20, 20, 18, 11, 18, 2, 16 | **$32, 36, 24, 8, 26, 18, 22** | $29, 30, 23, 18, 26, 19, 22 |
+| 8-week growth: starts Nov–Jun / Jul–Aug | ×0.62 / ×1.28 | ×0.90 / ×1.67 | ×1.12 / ×1.73 | ×1.10 / ×1.69 |
+
+**Tested and not worth changing:**
+- Stop/target grid (0.4–0.78% × 1–3R or no target): the surface is noisy and nothing beats 0.6% / 1.5R in both periods.
+- Break-even stop and trailing stops: at best ±$3 over the year.
+- Holding through the weekend: Nov–Jun got worse.
+- Meta-labeling on top of Mon–Tue: +$1.34 for the year, no gain in Jul–Sep.
+- A walk-forward pair filter: worse.
+- Priority by vote share or by currency overlap: worse than scan order.
+- Risk per trade 3–7%: about the same growth, so 5% stays; 10% is worse.
+- Dropping the worst voters (6-block cross-validation): $11.93–$23.41 held-out vs $35.06 for all 60.
+
+**How it could be run:** "Max positions" = 4 and "Max hold" = 120h (until the Friday close) are existing settings. "New trades only Monday–Tuesday" needs a small code change. With only the cap changed (every day traded), 12-week runs median $11.12 with 21% under $5.
+
+**Limits:** one year of data (Deriv serves no more). The weekday rule and the cap were found on this same year, though both hold in each half. The cap's best value is sharp: 3 grows little and 5 grows less. The news blackout is not simulated.
+
+## Research: "liquidity sweep -> VWAP reclaim -> structure shift" day-trading rule (no bot changes)
+
+This rule comes from a video the owner shared. It was tested on M30 candles, all 14 pairs, Nov 2025–Sep 2026. Script: `research/backtest/vwap-sweep.mts`. Deriv forex has no volume, so VWAP is the session's time-weighted average from 00:00 UTC.
+
+The setup, in order:
+1. During 07:00–17:00 UTC, price sweeps the previous day's high/low or the Asian session's high/low.
+2. A close back over VWAP follows.
+3. A close beyond the swing point of the 6 bars before the sweep follows.
+
+Entry is at the next open, with the stop just beyond the sweep extreme, a 2R target and a flat exit at 20:00 UTC.
+
+- **Result:** 1,508 trades, about 6.6 a day, 36–37% winners. Average −0.22R in Nov–Jun and −0.20R in Jul–Sep, which is about −0.8% of equity per trade at 5% risk. Before commission it averages −0.025R, so there is no edge to begin with. The stop is only about 0.12% away, so commission takes about a fifth of the risk on every trade.
+- **Variants:** all 10 lost in both periods. These were 1.5R or 3R targets, 2h or 8h windows, requiring the sweep bar to close back inside, previous-day or Asian levels only, and with or against the daily trend.
+- **As a 61st voter:** the best variant made $16.30 instead of $18.01. In the $10 account, 26-day runs ended up 37% of the time, against 42%.
+
+Rejected, consistent with the earlier ICT sweep → structure break → FVG result.
+
+## Research: balance from 4 hours to 8 weeks, and when $10 reaches $20 (no bot changes)
+
+This uses the live poll on the $10 account, starting at 07:00 UTC on each of 233 weekdays. The balance includes open positions. Script: `research/backtest/to-twenty.mts`.
+
+| After | Average | Median | Middle half | Up | Under $5 | Worst / best |
+|---|---|---|---|---|---|---|
+| 4 hours | $9.85 | $9.91 | $9.66–$10.07 | 33% | 0% | $7.12 / $12.02 |
+| 8 hours | $9.94 | $9.95 | $9.41–$10.33 | 44% | 0% | $6.09 / $13.34 |
+| 1 day | $9.93 | $9.95 | $9.14–$10.64 | 46% | 0% | $5.35 / $15.64 |
+| 2 days | $9.90 | $9.67 | $8.73–$11.04 | 42% | 0% | $5.45 / $17.49 |
+| 4 days | $9.79 | $9.45 | $8.35–$11.04 | 40% | 1% | $4.17 / $17.78 |
+| 1 week | $9.99 | $9.46 | $7.92–$11.57 | 39% | 2% | $3.21 / $23.39 |
+| 2 weeks | $10.12 | $9.56 | $7.67–$12.19 | 43% | 6% | $3.46 / $26.30 |
+| 4 weeks | $9.93 | $9.37 | $6.27–$12.58 | 44% | 13% | $1.84 / $24.43 |
+| 8 weeks | $8.43 | $7.42 | $4.34–$12.55 | 36% | 33% | $1.56 / $28.82 |
+
+$10 reached $20 within 8 weeks in 48 of 193 starts (25%): never within 4 days, 2% by 1 week, 7% by 2 weeks, 9% by 4 weeks. When it did, it took 4.9 days at the fastest and 33 days at the median. Along the way the balance fell under $5 at some point in 56% of starts. Of the 26 starts from July, 2 reached $20.
+
+## Research: what $10 becomes after 4 days (no bot changes)
+
+This uses the live poll on the $10 account: every vote trades until one stake of free balance is left. Positions still open at the end are valued at that moment's price. Script: `research/backtest/four-day.mts`.
+
+| Window | Runs | Average | Median | Middle half | Up | $12+ | Under $8 | Worst / best |
+|---|---|---|---|---|---|---|---|---|
+| Any weekday, 4 days | 230 | $9.86 | $9.53 | $8.44–$10.91 | 37% | 17% | 21% | $4.14 / $17.80 |
+| Monday 00:00 to Friday 00:00 | 46 | $10.43 | $9.84 | $8.64–$12.25 | 48% | 26% | 20% | $5.63 / $17.80 |
+| Monday to Friday close (all closed) | 46 | $10.33 | $10.02 | $8.68–$12.32 | 50% | 26% | 17% | $5.07 / $18.52 |
+
+About 12 trades are opened per 4 days. Jul–Sep weekday windows averaged $10.07 (under $8 in 8%); Nov–Jun windows averaged $9.77 (under $8 in 26%).
+
+After 2 days (live 4-day hold, open positions valued at day 2), Monday starts averaged $10.25 (median $9.67, middle half $9.08–$11.54, up 45%, under $8 13%, worst $6.14). Mon–Thu starts averaged $9.93. Switching to a 2-day hold barely changes the 2-day balance, but over a full week it averages $10.12 instead of $10.33, and 26% of weeks end under $8 instead of 17%.
+
+## Research: 2- or 3-day holds and other timeframes (no bot changes)
+
+Holds of 2, 3 and 4 days were each tested with seven timeframe setups. All other rules are the live ones. Script: `research/backtest/hold-tf.mts`; `book-lib.mts` now has `setHold`. "Re-tuned" re-picks each voter's timeframe for that hold using only Nov–Jun. "Decide on H1/H4" polls only at those closes.
+
+| Hold | Setup | Total (1 yr) | Test Jul–Sep avg | $10 12d: up / typical | $10 26d: up / typical / under $5 |
+|---|---|---|---|---|---|
+| 4d | **live mix (now)** | **+$18.01** | **$0.036** | **56% / $10.07** | **42% / $9.45 / 7%** |
+| 4d | decide on H1 closes | +$12.03 | $0.026 | 49% / $9.80 | 35% / $9.22 / 7% |
+| 4d | decide on H4 closes | +$6.39 | $0.036 | 47% / $9.71 | 37% / $8.74 / 16% |
+| 4d | all M30 / all H1 / all H4 | −$22.19 / −$16.82 / −$8.37 | | 44–47% | 26–40%, under $5 14–23% |
+| 3d | live mix | +$8.13 | $0.020 | 49% / $9.83 | 30% / $8.42 / 16% |
+| 3d | decide on H4 closes | +$6.85 | $0.034 | 49% / $10.00 | 40% / $8.46 / 16% |
+| 3d | re-tuned mix | +$4.52 | $0.020 | 44% / $9.52 | 30% / $8.34 / 21% |
+| 3d | all M30 / H1 / H4 | −$19.76 / −$13.48 / −$7.88 | | | |
+| 2d | live mix | +$11.74 | −$0.011 | 44% / $9.76 | 42% / $8.49 / 21% |
+| 2d | re-tuned mix | +$4.45 | −$0.007 | 40% / $8.85 | 37% / $7.69 / 21% |
+| 2d | other setups | −$33.84 to −$4.10 | | | |
+
+The current settings are best on every measure: a 4-day hold, each voter on its own timeframe, and a poll at every M30 close. This includes the unseen Jul–Sep months, where 2-day holds lose and 3-day holds make about half as much. Putting all voters on one timeframe loses money at every hold. No change.
+
+## Research: three more books checked (no bot changes)
+
+Books: Aronson, *Evidence-Based Technical Analysis*; Qian, Hua & Sorensen, *Quantitative Equity Portfolio Management* (scanned, read via OCR); Hull, *Options, Futures and Other Derivatives*. Same rules and data as the entry below. Script: `research/backtest/book3.mts`.
+
+**Is the poll's edge real? (Aronson ch. 1, 6): yes, the side it picks matters.** It trades 52% long, and leaning with each pair's drift explains $0.0001 of its $0.0173 per $1 per trade. In a permutation test that keeps every entry and exit rule but picks the side at random (5,000 runs), only 0.9% of runs beat its $18.01 total, and only 1.9% beat its $9.84 in the test months.
+
+**Three Aronson rule types as new voters: none added.** These were a divergence between channel-normalized price and RSI, a Fisher transform of channel position, and nearness to the 20-day high or low (his "52-week high" anchoring effect). Alone, only the divergence rule at the slowest setting made money (+3 bps in the selection months, +10 bps in the test months); the others lost in both. Added to the 60, divergence gave +$0.57 and the 20-day-high rule +$0.77 over 1,041 trades, both with a lower test-month average. In the $10 account, both were within a run or two of the current poll (26-day runs: 40% up vs 42%).
+
+**Weighting voters by their information coefficient (QEPM ch. 4, 7, 9): rejected.** This replaces one vote each with weights refit every month on earlier data, trading the same share of bars. From Jan, the majority poll made +$8.70. Mean-IC weights made −$54.41, IC/variance weights −$22.48, the book's optimal weights (Σ⁻¹·IC, shrunk) −$54.18, positive-IC voters only −$1.24, and quiet/busy contextual weights −$4.24 and +$0.10. Every variant was worse in the $10 account.
+
+**Volatility-based stop (Hull ch. 23, EWMA λ 0.94): rejected.** This sets the stop at k × EWMA daily volatility (median 0.41% at entries) instead of 0.6%, keeping 5% risk. Per trade, as % of equity, selection / test months: fixed 0.6% gave 0.088 / 0.289; k = 0.75 gave −0.006 / −0.181; k = 1 gave 0.102 / 0.079; k = 1.5 gave 0.048 / 0.265; k = 2 gave 0.028 / 0.314. No setting beats the fixed stop in both periods.
+
+Hull's remaining chapters (options pricing, interest-rate and credit derivatives, VaR) and the rest of QEPM (stock valuation, fundamental factors, turnover) don't apply to a forex multiplier poll.
+
+## Research: strategies and filters from the two books (no bot changes)
+
+Everything below uses the live rules (0.6% stop, 1.5x target, 4-day limit, Friday close, every Deriv forex pair, Nov 2025 – Sep 2026; selection to Jun, test Jul–Sep). Scripts: `research/backtest/book-voters.mts`, `book-lib.mts`, `book-poll.mts`, `book-meta.mts`, `book-filters.mts`. Every setting tried is listed.
+
+**Seven new voters from the books: none added.** Chan's turning point (ex. 7.1), pair-spread reversion against the most correlated pair (Chan ch. 7), SADF explosiveness, Chu-Stinchcombe-White CUSUM break, fractionally differentiated reversion, CUSUM filter trend and low-entropy momentum (AFML ch. 2, 5, 17, 18). Alone, none earns money after commission in both periods. Added to the 60 voters one at a time, the best two (fracdiff +$1.10, SADF +$0.07 over 1,041 trades) change nothing that matters; all seven together lose $11 instead of making $18.
+
+**CUSUM "real move" entry filter (AFML ch. 2): rejected.** All 8 settings did worse than no filter ($18.01): from −$9.27 to +$17.32.
+
+**Meta-labeling (AFML ch. 3): promising.** A second model (logistic regression, 15 features known at the entry: vote share, H4-vs-M30 voter agreement, volatility percentile, hour, weekday, recent poll win rate on the pair and overall, trend, stretch, high/low spread and volatility estimates) predicts whether the poll's trade wins; predicted losers are skipped. It skips about half the votes.
+- Trained Nov–Jun, tested Jul–Sep: kept trades averaged $0.083 per $1 vs $0.036 for all (skipped ones −$0.006); total $10.74 vs $9.84.
+- Combinatorial purged cross-validation (AFML ch. 12, 45 fits, 9 out-of-sample histories): better in 9 of 9 histories, +$5.52 on average over $18.01, and better than 87–99% of random skips of the same size.
+- Not sensitive to its settings: kept trades averaged $0.056–$0.236 for every regularization (0.1–100) and threshold (0.45–0.55) tried.
+- $10 account (every vote until one stake left, model refit monthly from Feb): 26-day runs up 51% (vs 42%), typical $10.17 (vs $9.45), under $5 5% (vs 7%), but worst $2.06 (vs $4.22); 12-day runs about the same.
+
+**Correlation between open positions (Chan ch. 6, AFML ch. 16): mixed.** $10 account, every vote until one stake left:
+
+| | 12 days: up / under $5 / typical / best | 26 days: up / under $5 / typical / best |
+|---|---|---|
+| No limit (now) | 56% / 7% / $10.07 / $23.60 | 42% / 7% / $9.45 / $21.08 |
+| At most 2 trades on the same side of a currency | 53% / 0% / $10.08 / $16.39 | 47% / 9% / $9.82 / $13.93 |
+| At most 3 | 58% / 2% / $10.80 / $22.63 | 40% / 0% / $9.19 / $17.06 |
+| Skip if correlation with an open trade > 0.5 | 53% / 0% / $10.12 / $13.57 | 53% / 5% / $10.16 / $13.91 |
+| Skip if correlation with an open trade > 0.7 | 58% / 2% / $10.64 / $17.89 | 51% / 5% / $10.32 / $21.47 |
+
+Deploy: `.replitignore` now leaves `research/` and the PDFs out of the deployed image. The bot never read them; it trades on live Deriv candles.
+
+## Research: two trading books checked against the bot (no bot changes)
+
+Read Chan, *Quantitative Trading* (2008) and López de Prado, *Advances in Financial Machine Learning* (2018), both added to the repo root, and tested the ideas that fit a 60-vote forex poll on Deriv multipliers. Script: `research/backtest/book-tests.mts` (live rules, every Deriv forex pair, Nov 2025 – Sep 2026; selection period to Jun, test Jul–Sep).
+
+| Idea (source) | Result | Verdict |
+|---|---|---|
+| Close a trade when a newer vote points the other way (Chan ch.7) | −$0.011 per $1 trade vs +$0.017 now; win rate 48.5% → 41% | Rejected |
+| Same, without the target | −$0.011 per trade | Rejected |
+| Size stakes by vote share (AFML ch.10) | No pattern: 80–100% share earned $0.023 (sel) / $0.019 (test), 70–80% earned −$0.015 / +$0.075 | Rejected: share does not rank trades |
+| Probabilistic Sharpe ratio (AFML ch.14) | 85% chance the per-trade edge is above zero (all 1,041 trades) | Edge likely but small |
+| Deflated Sharpe ratio, for the number of settings tried in the poll search | 29% if 10 were tried, 6% if 100, 1% if 1,000 | After the search, the edge cannot be told apart from luck |
+| Win rate needed to break even (AFML ch.15) | 48.5% won vs 46.6% needed; 11% chance the true rate is below break-even | Thin margin |
+
+Already in the bot and endorsed by the books: Kelly-style sizing (Chan ch.6), one out-of-sample test period (Chan ch.3), the look-ahead truncation test (Chan ex.3.6), stop/target/time-limit exits (AFML's triple barrier), and commission in every backtest.
+
 ## Real-money audit fixes
 
 Checked before connecting the real account: the order path, the Deriv buy/sell/status calls, the balance sync, the contract monitor and the reconciler. Four fixes:

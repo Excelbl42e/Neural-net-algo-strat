@@ -22,6 +22,14 @@ import { useQuery } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import { AlertCircle, Save, ShieldCheck, Layers, TrendingUp } from "lucide-react";
 
+const ENTRY_DAYS_LABEL: Record<number, string> = {
+  1: "Monday only",
+  2: "Monday–Tuesday (weekly cycle)",
+  3: "Monday–Wednesday",
+  4: "Monday–Thursday",
+  5: "Every weekday",
+};
+
 const formSchema = z.object({
   enabled: z.boolean(),
   autotradeMode: z.enum(["off", "auto_demo", "auto_live"]),
@@ -38,6 +46,8 @@ const formSchema = z.object({
   newsBlackoutAfterMin: z.coerce.number().int().min(0).max(1440),
   maxSpreadCostPct: z.coerce.number().min(0).max(100),
   maxPositionHoldHours: z.coerce.number().int().min(1).max(8760),
+  lastEntryWeekday: z.coerce.number().int().min(1).max(5),
+  cotVeto: z.boolean(),
   maxDailyLossPct: z.coerce.number().min(0).max(100),
   minConfidence: z.coerce.number().min(0).max(1),
   allowedInstruments: z.string(),
@@ -108,6 +118,8 @@ export default function ConfigurationPage() {
       newsBlackoutAfterMin: 30,
       maxSpreadCostPct: 0.5,
       maxPositionHoldHours: 96,
+      lastEntryWeekday: 5,
+      cotVeto: false,
       maxDailyLossPct: 5,
       minConfidence: 0.5,
       allowedInstruments: "",
@@ -134,6 +146,8 @@ export default function ConfigurationPage() {
         newsBlackoutAfterMin: config.newsBlackoutAfterMin ?? 30,
         maxSpreadCostPct: Number(config.maxSpreadCostPct ?? 0.5),
         maxPositionHoldHours: config.maxPositionHoldHours ?? 96,
+        lastEntryWeekday: config.lastEntryWeekday ?? 5,
+        cotVeto: config.cotVeto ?? false,
         maxDailyLossPct: Number(config.maxDailyLossPct),
         minConfidence: Number(config.minConfidence),
         allowedInstruments: config.allowedInstruments,
@@ -381,7 +395,7 @@ export default function ConfigurationPage() {
                   <FormDescription className="text-[11px]">
                     14 (one per pair) means every majority vote opens a position until only one stake of free balance
                     is left — the "At once" column above shows how many that is at each balance. Lower it to cap how
-                    many trades can be open together.
+                    many trades can be open together (the backtest's weekly cycle used 4).
                   </FormDescription>
                   {yourRow?.fundablePositions != null && yourRow.configuredPositions != null
                     && yourRow.fundablePositions < yourRow.configuredPositions && (
@@ -442,7 +456,7 @@ export default function ConfigurationPage() {
                 ["newsBlackoutBeforeMin", "News blackout: minutes before a high-impact release", "1"],
                 ["newsBlackoutAfterMin", "News blackout: minutes after a high-impact release", "1"],
                 ["maxSpreadCostPct", "Max trading cost (% of position size, i.e. stake × multiplier) — Deriv's commission from a live quote of the exact order", "0.01"],
-                ["maxPositionHoldHours", "Buy back any open position after this many hours if it has hit neither stop nor target (the poll was tested at 96 — four days; positions are also always closed before Deriv's Friday close)", "1"],
+                ["maxPositionHoldHours", "Buy back any open position after this many hours if it has hit neither stop nor target (the poll was tested at 96 — four days; 120 holds to the Friday close, which always closes positions before Deriv's weekend)", "1"],
               ] as const).map(([name, label, step]) => (
                 <FormField key={name} control={form.control} name={name} render={({ field }) => (
                   <FormItem>
@@ -452,6 +466,40 @@ export default function ConfigurationPage() {
                   </FormItem>
                 )} />
               ))}
+              <FormField control={form.control} name="lastEntryWeekday" render={({ field }) => (
+                <FormItem>
+                  <FormLabel>New trades open on</FormLabel>
+                  <Select onValueChange={(v) => { if (v) field.onChange(Number(v)); }} value={String(field.value)}>
+                    <FormControl>
+                      <SelectTrigger data-testid="select-last-entry-weekday">
+                        <SelectValue>{ENTRY_DAYS_LABEL[field.value] ?? "Every weekday"}</SelectValue>
+                      </SelectTrigger>
+                    </FormControl>
+                    <SelectContent>
+                      {[2, 1, 3, 4, 5].map((d) => <SelectItem key={d} value={String(d)}>{ENTRY_DAYS_LABEL[d]}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                  <FormDescription className="text-[11px]">
+                    Weekly cycle (UTC days). Trades opened Monday–Tuesday had the whole week to work and earned most of the
+                    backtest's profit; ones opened later were cut short by the Friday close. Open positions are never closed by this.
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )} />
+              <FormField control={form.control} name="cotVeto" render={({ field }) => (
+                <FormItem className="flex flex-row items-start justify-between gap-4 rounded-lg border border-border p-3">
+                  <div className="space-y-1">
+                    <FormLabel>COT veto</FormLabel>
+                    <FormDescription className="text-[11px]">
+                      Skip a trade that would follow speculators when their positioning on the pair is at a 3-year extreme
+                      (CFTC weekly report, used from the Monday after it). If the report cannot be fetched, every vote trades as before.
+                    </FormDescription>
+                  </div>
+                  <FormControl>
+                    <Switch checked={field.value} onCheckedChange={field.onChange} className="data-[state=checked]:bg-primary" data-testid="switch-cot-veto" />
+                  </FormControl>
+                </FormItem>
+              )} />
             </CardContent>
           </Card>
 

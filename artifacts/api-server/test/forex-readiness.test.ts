@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   isForexWeekendClosed, activeSessions, parseKillzones, sessionAllowed, isFridayNewTradeCutoff, isFridayFlattenWindow,
-  symbolCurrencyPair, newsBlackoutActive, forexPreScanGate, tradingCostGate,
+  symbolCurrencyPair, newsBlackoutActive, forexPreScanGate, tradingCostGate, isPastLastEntryDay,
 } from "../src/lib/forex-readiness.ts";
 import type { NewsEvent } from "../src/lib/news-calendar.ts";
 
@@ -172,4 +172,23 @@ test("each named session covers the UTC window it claims", () => {
   assert.equal(sessionAllowed(wed(21), "london,newyork"), false);
   // An unrecognised name is ignored rather than silently blocking everything.
   assert.equal(sessionAllowed(wed(3), "tokyo"), true, "no valid session parsed = no restriction");
+});
+
+test("weekly cycle: new trades open Monday up to the last entry weekday (UTC), every weekday when unset", () => {
+  // 2026-10-05 is a Monday
+  const at = (iso: string) => new Date(iso);
+  assert.equal(isPastLastEntryDay(at("2026-10-05T07:00:00Z"), 2), false); // Monday
+  assert.equal(isPastLastEntryDay(at("2026-10-06T20:59:00Z"), 2), false); // Tuesday
+  assert.equal(isPastLastEntryDay(at("2026-10-07T00:00:00Z"), 2), true);  // Wednesday
+  assert.equal(isPastLastEntryDay(at("2026-10-09T10:00:00Z"), 2), true);  // Friday
+  assert.equal(isPastLastEntryDay(at("2026-10-06T10:00:00Z"), 1), true);  // Monday only: Tuesday refused
+  assert.equal(isPastLastEntryDay(at("2026-10-08T10:00:00Z"), 5), false); // every weekday
+  assert.equal(isPastLastEntryDay(at("2026-10-08T10:00:00Z"), undefined), false);
+  assert.equal(isPastLastEntryDay(at("2026-10-08T10:00:00Z"), Number.NaN), false); // unreadable = no restriction
+  const gate = (iso: string, last?: number) => forexPreScanGate({ symbol: "frxEURUSD", now: at(iso), killzones: "london,newyork", newsEvents: [], newsBlackoutBeforeMin: 30, newsBlackoutAfterMin: 30, lastEntryWeekday: last });
+  assert.equal(gate("2026-10-06T13:00:00Z", 2).ok, true);
+  const wed = gate("2026-10-07T13:00:00Z", 2);
+  assert.equal(wed.ok, false);
+  assert.match(wed.reason ?? "", /Monday to Tuesday only/);
+  assert.equal(gate("2026-10-07T13:00:00Z").ok, true);
 });

@@ -154,6 +154,23 @@ export interface ForexPreScanInput {
   newsEvents: NewsEvent[] | null;
   newsBlackoutBeforeMin: number;
   newsBlackoutAfterMin: number;
+  /** Last UTC weekday new trades may open (1 = Monday ... 5 = Friday). Missing or invalid means every weekday. */
+  lastEntryWeekday?: number;
+}
+
+const WEEKDAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+/**
+ * Weekly cycle: new trades open only from Monday up to this UTC weekday, so
+ * each one has most of the week before the Friday close. The backtest found
+ * trades opened Monday-Tuesday earned most of the poll's profit and those
+ * opened Wednesday-Friday, cut short by the Friday close, did not
+ * (research/backtest/r-days.mts, CHANGES.md). Open positions are unaffected.
+ */
+export function isPastLastEntryDay(now: Date, lastEntryWeekday: number | null | undefined): boolean {
+  if (lastEntryWeekday == null || !Number.isInteger(lastEntryWeekday) || lastEntryWeekday < 1 || lastEntryWeekday >= 5) return false;
+  const day = now.getUTCDay();
+  return day >= 1 && day <= 5 && day > lastEntryWeekday;
 }
 
 export interface ForexGateResult {
@@ -168,6 +185,9 @@ export function forexPreScanGate(input: ForexPreScanInput): ForexGateResult {
   }
   if (isFridayNewTradeCutoff(input.now)) {
     return { ok: false, reason: "No new trades after 16:00 UTC on Friday, so nothing is left open over the weekend" };
+  }
+  if (isPastLastEntryDay(input.now, input.lastEntryWeekday)) {
+    return { ok: false, reason: `New trades open Monday to ${WEEKDAY_NAMES[input.lastEntryWeekday!]} only (weekly cycle); open positions run to the Friday close` };
   }
   if (!sessionAllowed(input.now, input.killzones)) {
     return { ok: false, reason: `Outside configured killzone session(s): ${input.killzones}` };

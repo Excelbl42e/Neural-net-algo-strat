@@ -34,6 +34,7 @@ const formSchema = z.object({
 type FormValues = z.infer<typeof formSchema>;
 
 export default function BrokersPage() {
+  const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
   const [open, setOpen] = useState(false);
   const [selfTest, setSelfTest] = useState<{ running: boolean; result?: { passed: boolean; message: string; steps: Array<{ step: string; atMs: number; detail?: string }> } }>({ running: false });
   const runSelfTest = async (id: number) => {
@@ -102,7 +103,7 @@ export default function BrokersPage() {
   };
 
   const handleDelete = (id: number) => {
-    if (!confirm("Remove this broker connection? Linked account stays.")) return;
+    setConfirmDeleteId(null);
     del.mutate({ id }, { onSuccess: () => { invalidate(); toast({ title: "Removed" }); } });
   };
 
@@ -189,15 +190,25 @@ export default function BrokersPage() {
                         {selfTest.running ? "Testing…" : "Demo self-test"}
                       </Button>
                     )}
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      onClick={() => handleDelete(c.id)}
-                      className="h-7 w-7 text-destructive"
-                      data-testid={`button-delete-${c.id}`}
-                    >
-                      <Trash2 className="w-3 h-3" />
-                    </Button>
+                    {confirmDeleteId === c.id ? (
+                      <div className="flex items-center gap-1">
+                        <Button size="sm" variant="destructive" className="text-xs" onClick={() => handleDelete(c.id)} data-testid={`button-confirm-delete-${c.id}`}>
+                          Remove (account stays)
+                        </Button>
+                        <Button size="sm" variant="ghost" className="text-xs text-muted-foreground" onClick={() => setConfirmDeleteId(null)} aria-label="Keep this connection">✕</Button>
+                      </div>
+                    ) : (
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        onClick={() => setConfirmDeleteId(c.id)}
+                        className="h-7 w-7 text-destructive"
+                        aria-label="Remove this broker connection"
+                        data-testid={`button-delete-${c.id}`}
+                      >
+                        <Trash2 className="w-3 h-3" />
+                      </Button>
+                    )}
                   </div>
                 </TableCell>
               </TableRow>

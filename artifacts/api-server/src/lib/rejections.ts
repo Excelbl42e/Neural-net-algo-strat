@@ -31,7 +31,8 @@ export interface RejectionEntry {
     | "sizing"
     | "entry"            // waiting for price to reach the approved zone, or setup over
     | "execution"
-    | "forex_readiness";
+    | "forex_readiness"
+    | "cot_veto";       // speculators' COT positioning at a 3-year extreme on the trade's side
   reason: string;
   metrics?: Record<string, unknown>;
 }

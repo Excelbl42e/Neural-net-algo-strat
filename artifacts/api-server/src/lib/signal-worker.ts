@@ -29,6 +29,7 @@ import {
   parseDerivLimitRejection, setupInvalidation,
 } from "./execution-risk.js";
 import { forexPreScanGate, tradingCostGate } from "./forex-readiness.js";
+import { getCotSeries, cotFadeSignal, cotVetoes } from "./cot-positioning.js";
 import { getNewsEvents } from "./news-calendar.js";
 import { claimReason, getExecutionLock } from "./reconciler.js";
 import { decryptSecret } from "./crypto.js";
@@ -251,6 +252,10 @@ interface ForexDispatchParams {
   newsBlackoutBeforeMin: number;
   newsBlackoutAfterMin: number;
   maxSpreadCostPct: number;
+  /** Weekly cycle: last UTC weekday new trades may open (5 = every weekday). */
+  lastEntryWeekday: number;
+  /** Skip a trade that goes with speculators at a 3-year COT positioning extreme. */
+  cotVeto: boolean;
 }
 
 async function dispatchTrade(
@@ -388,12 +393,32 @@ async function dispatchTradeUnlocked(
       newsEvents,
       newsBlackoutBeforeMin: forex.newsBlackoutBeforeMin,
       newsBlackoutAfterMin: forex.newsBlackoutAfterMin,
+      lastEntryWeekday: forex.lastEntryWeekday,
     });
     if (!preDispatch.ok) {
       await recordGeneratedReason(signal.id, preDispatch.reason ?? "Forex readiness gate failed");
       recordRejection({ symbol: signal.symbol, stage: "forex_readiness", reason: preDispatch.reason ?? "Forex readiness gate failed" });
       logger.warn({ symbol: signal.symbol, reason: preDispatch.reason }, "Forex readiness gate refused dispatch");
       return;
+    }
+  }
+
+  // COT veto: a trade that would go with speculators at a 3-year positioning
+  // extreme is skipped (cot-positioning.ts). Without fresh COT data it stands
+  // down and the vote trades as before.
+  if (forex.cotVeto && (signal.direction === "buy" || signal.direction === "sell")) {
+    const series = await getCotSeries();
+    if (series) {
+      const cot = cotFadeSignal(signal.symbol, series, new Date());
+      if (cotVetoes(signal.direction, cot)) {
+        const reason = `COT veto: speculators' positioning on this pair is more one-sided than in ${Math.round(Math.max(cot.percentile ?? 0, 1 - (cot.percentile ?? 0)) * 100)}% of the last 3 years (report used from ${cot.week}); a ${signal.direction} would follow the crowd at an extreme`;
+        const cancelled = await transitionSignalExecution(signal.id, "generated", "rejected", reason, { signalStatus: "cancelled" });
+        if (cancelled) {
+          recordRejection({ symbol: signal.symbol, stage: "cot_veto", reason, metrics: { percentile: cot.percentile ?? -1 } });
+          logger.info({ symbol: signal.symbol, signalId: signal.id, reason }, "Signal cancelled by the COT veto");
+        }
+        return;
+      }
     }
   }
 
@@ -848,6 +873,8 @@ function forexParamsFrom(config: BotConfigRow): ForexDispatchParams {
     newsBlackoutBeforeMin: config.newsBlackoutBeforeMin,
     newsBlackoutAfterMin: config.newsBlackoutAfterMin,
     maxSpreadCostPct: parseFloat(config.maxSpreadCostPct),
+    lastEntryWeekday: config.lastEntryWeekday,
+    cotVeto: config.cotVeto,
   };
 }
 
@@ -1124,6 +1151,7 @@ async function runWorkerTick(): Promise<void> {
         newsEvents,
         newsBlackoutBeforeMin: config.newsBlackoutBeforeMin,
         newsBlackoutAfterMin: config.newsBlackoutAfterMin,
+        lastEntryWeekday: config.lastEntryWeekday,
       });
       if (!preScan.ok) {
         recordRejection({ symbol, stage: "forex_readiness", reason: preScan.reason ?? "Forex readiness gate failed" });
@@ -1194,6 +1222,16 @@ async function runWorkerTick(): Promise<void> {
         logger.info({ symbol, buy: poll.buy, sell: poll.sell, abstain: poll.abstain }, "Poll: no decision");
         recordRejection({ symbol, stage: "poll", reason: poll.reason });
         continue;
+      }
+      // COT veto at the scan too, so a vetoed vote does not create a signal
+      // that the dispatcher would only cancel (and re-create every cooldown).
+      if (config.cotVeto) {
+        const series = await getCotSeries();
+        const cot = series ? cotFadeSignal(symbol, series, scanTime) : null;
+        if (cot && cotVetoes(poll.direction, cot)) {
+          recordRejection({ symbol, stage: "cot_veto", reason: `COT veto: speculators' positioning on this pair is more one-sided than in ${Math.round(Math.max(cot.percentile ?? 0, 1 - (cot.percentile ?? 0)) * 100)}% of the last 3 years; a ${poll.direction} would follow the crowd at an extreme`, metrics: { percentile: cot.percentile ?? -1 } });
+          continue;
+        }
       }
       const agreeing = poll.ballots.filter((b) => b.vote === (poll.direction === "buy" ? 1 : -1)).map((b) => b.name);
       const opposing = poll.ballots.filter((b) => b.vote === (poll.direction === "buy" ? -1 : 1)).map((b) => b.name);

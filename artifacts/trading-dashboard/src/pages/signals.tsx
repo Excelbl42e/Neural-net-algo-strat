@@ -42,6 +42,7 @@ type SignalForm = z.infer<typeof signalFormSchema>;
 
 export default function Signals() {
   const [open, setOpen] = useState(false);
+  const [confirmClear, setConfirmClear] = useState(false);
   const { data: signals, isLoading, isError, refetch } = useListSignals(undefined, { query: { queryKey: getListSignalsQueryKey(), refetchInterval: 10000 } });
   const brokers = useListBrokerConnections({ query: { queryKey: getListBrokerConnectionsQueryKey(), refetchInterval: 10000 } });
   const updateSignal = useUpdateSignal();
@@ -148,18 +149,25 @@ export default function Signals() {
         <>
           <div className="flex items-center justify-between mt-10">
             <h2 className="text-xl font-bold uppercase tracking-wider">Signal History</h2>
-            <Button
-              size="sm"
-              variant="destructive"
-              className="text-xs opacity-70 hover:opacity-100"
-              onClick={() => {
-                if (confirm(`Delete all ${pastSignals.length} past signals? This cannot be undone.`)) {
-                  pastSignals.forEach(s => handleDelete(s.id));
-                }
-              }}
-            >
-              <Trash2 className="w-3 h-3 mr-1" /> Clear History
-            </Button>
+            {confirmClear ? (
+              <div className="flex items-center gap-1">
+                <Button size="sm" variant="destructive" className="text-xs" data-testid="button-confirm-clear-history"
+                  onClick={() => { pastSignals.forEach(s => handleDelete(s.id)); setConfirmClear(false); }}>
+                  Delete all {pastSignals.length} past signals
+                </Button>
+                <Button size="sm" variant="ghost" className="text-xs text-muted-foreground" onClick={() => setConfirmClear(false)} aria-label="Keep signal history">✕</Button>
+              </div>
+            ) : (
+              <Button
+                size="sm"
+                variant="destructive"
+                className="text-xs opacity-70 hover:opacity-100"
+                data-testid="button-clear-history"
+                onClick={() => setConfirmClear(true)}
+              >
+                <Trash2 className="w-3 h-3 mr-1" /> Clear History
+              </Button>
+            )}
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
             {pastSignals.map(signal => (
@@ -290,8 +298,8 @@ function SignalCard({ signal, onUpdate, onDelete, readOnly = false }: {
   return (
     <Card className="border-border overflow-hidden flex flex-col bg-card/50" data-testid={`card-signal-${signal.id}`}>
       <CardHeader className="p-4 pb-2 border-b border-border bg-muted/20">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
+          <div className="flex items-center gap-2 min-w-0">
             <Badge variant="outline" className={cn(
               "uppercase font-mono-numbers tracking-widest px-2 py-0.5 rounded-sm border",
               isBuy ? "bg-green-500/10 text-green-500 border-green-500/30" : "bg-red-500/10 text-red-500 border-red-500/30"
@@ -301,7 +309,7 @@ function SignalCard({ signal, onUpdate, onDelete, readOnly = false }: {
             <span className="font-bold text-lg">{signal.symbol}</span>
           </div>
           <div className="flex items-center gap-1">
-            <Badge variant="secondary" className="uppercase text-[10px] tracking-wider" title="Signal record status, not broker execution">Record: {signal.status}</Badge>
+            <Badge variant="secondary" className="uppercase text-[10px] tracking-wider whitespace-nowrap" title="Signal record status, not broker execution">Record: {signal.status}</Badge>
             {onDelete && !confirmDelete && (
               <button
                 onClick={() => setConfirmDelete(true)}

@@ -3,3 +3,7 @@
 
 # No need to store the pnpm store twice.
 .local
+
+# Research only: backtest scripts, their candle data and the reference books are never part of the bot.
+research/
+*.pdf

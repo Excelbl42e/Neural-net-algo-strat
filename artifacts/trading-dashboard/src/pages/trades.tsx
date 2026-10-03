@@ -148,9 +148,9 @@ export default function TradesPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between border-b border-border pb-4">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border pb-4">
         <div><h1 className="text-2xl font-bold uppercase tracking-wider">Trade Records</h1><p className="text-xs text-muted-foreground mt-1">Stored trade rows, including manual entries; not an independently reconciled Deriv fill history.</p></div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {closedCount > 0 && (
             confirmBulk === "closed" ? (
               <div className="flex items-center gap-1">
