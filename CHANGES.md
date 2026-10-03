@@ -1,5 +1,20 @@
 # Changes in this build (vs. your Replit export)
 
+## Research: two trading books checked against the bot (no bot changes)
+
+Read Chan, *Quantitative Trading* (2008) and López de Prado, *Advances in Financial Machine Learning* (2018), both added to the repo root, and tested the ideas that fit a 60-vote forex poll on Deriv multipliers. Script: `research/backtest/book-tests.mts` (live rules, every Deriv forex pair, Nov 2025 – Sep 2026; selection period to Jun, test Jul–Sep).
+
+| Idea (source) | Result | Verdict |
+|---|---|---|
+| Close a trade when a newer vote points the other way (Chan ch.7) | −$0.011 per $1 trade vs +$0.017 now; win rate 48.5% → 41% | Rejected |
+| Same, without the target | −$0.011 per trade | Rejected |
+| Size stakes by vote share (AFML ch.10) | No pattern: 80–100% share earned $0.023 (sel) / $0.019 (test), 70–80% earned −$0.015 / +$0.075 | Rejected: share does not rank trades |
+| Probabilistic Sharpe ratio (AFML ch.14) | 85% chance the per-trade edge is above zero (all 1,041 trades) | Edge likely but small |
+| Deflated Sharpe ratio, for the number of settings tried in the poll search | 29% if 10 were tried, 6% if 100, 1% if 1,000 | After the search, the edge cannot be told apart from luck |
+| Win rate needed to break even (AFML ch.15) | 48.5% won vs 46.6% needed; 11% chance the true rate is below break-even | Thin margin |
+
+Already in the bot and endorsed by the books: Kelly-style sizing (Chan ch.6), one out-of-sample test period (Chan ch.3), the look-ahead truncation test (Chan ex.3.6), stop/target/time-limit exits (AFML's triple barrier), and commission in every backtest.
+
 ## Real-money audit fixes
 
 Checked before connecting the real account: the order path, the Deriv buy/sell/status calls, the balance sync, the contract monitor and the reconciler. Four fixes:
