@@ -50,3 +50,6 @@ Thumbs.db
 
 # uploaded books live in the database / object storage, not the repo
 artifacts/uploads/
+
+# backtest vote caches (rebuilt by research/backtest/tf-votes.mts)
+research/backtest/data/votes*.json
