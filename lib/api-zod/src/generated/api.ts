@@ -1023,6 +1023,8 @@ export const getBotConfigResponseMaxSpreadCostPctMax = 100;
 
 export const getBotConfigResponseMaxPositionHoldHoursMax = 8760;
 
+export const getBotConfigResponseLastEntryWeekdayMax = 5;
+
 
 
 export const GetBotConfigResponse = zod.object({
@@ -1046,6 +1048,8 @@ export const GetBotConfigResponse = zod.object({
   "newsBlackoutAfterMin": zod.number().int().min(getBotConfigResponseNewsBlackoutAfterMinMin).max(getBotConfigResponseNewsBlackoutAfterMinMax).optional(),
   "maxSpreadCostPct": zod.number().min(getBotConfigResponseMaxSpreadCostPctMin).max(getBotConfigResponseMaxSpreadCostPctMax).optional(),
   "maxPositionHoldHours": zod.number().int().min(1).max(getBotConfigResponseMaxPositionHoldHoursMax).optional(),
+  "lastEntryWeekday": zod.number().int().min(1).max(getBotConfigResponseLastEntryWeekdayMax).optional().describe('Last UTC weekday new trades may open (1 Monday ... 5 Friday = every day)'),
+  "cotVeto": zod.boolean().optional().describe('Skip a trade that goes with speculators at a 3-year COT positioning extreme'),
   "notes": zod.string().nullish(),
   "updatedAt": zod.coerce.date()
 })
@@ -1097,6 +1101,8 @@ export const updateBotConfigBodyMaxSpreadCostPctMax = 100;
 
 export const updateBotConfigBodyMaxPositionHoldHoursMax = 8760;
 
+export const updateBotConfigBodyLastEntryWeekdayMax = 5;
+
 
 
 export const UpdateBotConfigBody = zod.object({
@@ -1119,6 +1125,8 @@ export const UpdateBotConfigBody = zod.object({
   "newsBlackoutAfterMin": zod.number().int().min(updateBotConfigBodyNewsBlackoutAfterMinMin).max(updateBotConfigBodyNewsBlackoutAfterMinMax).optional(),
   "maxSpreadCostPct": zod.number().min(updateBotConfigBodyMaxSpreadCostPctMin).max(updateBotConfigBodyMaxSpreadCostPctMax).optional(),
   "maxPositionHoldHours": zod.number().int().min(1).max(updateBotConfigBodyMaxPositionHoldHoursMax).optional(),
+  "lastEntryWeekday": zod.number().int().min(1).max(updateBotConfigBodyLastEntryWeekdayMax).optional().describe('Last UTC weekday new trades may open (1 Monday ... 5 Friday = every day)'),
+  "cotVeto": zod.boolean().optional().describe('Skip a trade that goes with speculators at a 3-year COT positioning extreme'),
   "notes": zod.string().optional()
 })
 
@@ -1153,6 +1161,8 @@ export const updateBotConfigResponseMaxSpreadCostPctMax = 100;
 
 export const updateBotConfigResponseMaxPositionHoldHoursMax = 8760;
 
+export const updateBotConfigResponseLastEntryWeekdayMax = 5;
+
 
 
 export const UpdateBotConfigResponse = zod.object({
@@ -1176,6 +1186,8 @@ export const UpdateBotConfigResponse = zod.object({
   "newsBlackoutAfterMin": zod.number().int().min(updateBotConfigResponseNewsBlackoutAfterMinMin).max(updateBotConfigResponseNewsBlackoutAfterMinMax).optional(),
   "maxSpreadCostPct": zod.number().min(updateBotConfigResponseMaxSpreadCostPctMin).max(updateBotConfigResponseMaxSpreadCostPctMax).optional(),
   "maxPositionHoldHours": zod.number().int().min(1).max(updateBotConfigResponseMaxPositionHoldHoursMax).optional(),
+  "lastEntryWeekday": zod.number().int().min(1).max(updateBotConfigResponseLastEntryWeekdayMax).optional().describe('Last UTC weekday new trades may open (1 Monday ... 5 Friday = every day)'),
+  "cotVeto": zod.boolean().optional().describe('Skip a trade that goes with speculators at a 3-year COT positioning extreme'),
   "notes": zod.string().nullish(),
   "updatedAt": zod.coerce.date()
 })

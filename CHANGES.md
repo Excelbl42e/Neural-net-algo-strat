@@ -1,5 +1,30 @@
 # Changes in this build (vs. your Replit export)
 
+## Weekly cycle and COT veto
+
+Built from the research below, as the owner asked. On upgrade, these are set once (a later choice on the Configuration page is kept):
+
+| Setting | Before | Now |
+|---|---|---|
+| New trades open on (new) | every weekday | **Monday–Tuesday** (UTC) |
+| Max positions | 14 | **4** |
+| Max hold | 96h | **120h**: past Friday, so the Friday 20:30 UTC close ends every trade |
+| COT veto (new) | — | **on** |
+
+- **Entry days.** `forexPreScanGate` refuses new signals and orders after the last entry day. It runs in the scan and again in the dispatcher, next to the Friday 16:00 cutoff. Open positions are never closed by it. Choices: Monday only, Mon–Tue, Mon–Wed, Mon–Thu or every weekday.
+- **COT veto** (`cot-positioning.ts`). Each week the bot reads the CFTC's legacy futures report from its public API (no key; `COT_URL` overrides the address).
+  - It computes speculators' positioning per pair (base minus quote currency, USD = 0) and its percentile among the last 156 weeks.
+  - In the dispatcher, a buy at the 90th percentile or above, or a sell at the 10th or below, is cancelled with the reason shown on the Signals page and under "COT veto" in Analysis rejections.
+  - A report is used from the Monday after its Tuesday, as backtested.
+  - The data is cached for 6 hours; two missed weekly reports or no data means the veto stands down and every vote trades as before.
+- **Checked:**
+  - The live COT module gives the same signal as the research code for all 658 pair-Mondays of the backtest year (0 differences).
+  - The real CFTC feed returns the 2026-09-29 report. For Monday 2026-10-05 it would block sells on GBPUSD, GBPJPY, USDCHF and EURCHF, where speculators are at 3-year extreme shorts.
+  - Against a local Postgres, the upgrade set 4 / 120h / Mon–Tue / veto on. Saving other values works, and a weekday of 9 is refused.
+  - The Configuration page shows the new controls with no page errors and no overflow at 375px.
+  - New tests: entry-day gate, COT timing, extreme detection, veto direction, too-little-history. `npm run typecheck && npm test && npm run build` pass (64 tests), and the dashboard builds.
+- **Expected, from the backtest** ($10 in each Monday, out each Friday, 46 weeks): average Friday balance $10.59 vs $10.16, weeks up 63% vs 48%, under $8 9% vs 17%, +$27.33 withdrawn vs +$7.52.
+
 ## Research: the week-by-week view, magnetohydrodynamics and more physics models (no bot changes)
 
 **$10 in every Monday 07:00 UTC, out on Friday after the close, 46 weeks** (`research/backtest/r-weekly.mts`):

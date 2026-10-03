@@ -28,6 +28,10 @@ export const botConfigTable = pgTable("bot_config", {
   // reaches either level. Binary contracts already expire on their own via
   // their configured duration and are unaffected by this.
   maxPositionHoldHours: integer("max_position_hold_hours").notNull().default(96),
+  // Weekly cycle: new trades open only Monday (1) to this UTC weekday; 5 = every weekday.
+  lastEntryWeekday: integer("last_entry_weekday").notNull().default(5),
+  // Skip a poll trade that goes with speculators at a 3-year COT positioning extreme.
+  cotVeto: boolean("cot_veto").notNull().default(false),
   notes: text("notes"),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
 });

@@ -14,7 +14,7 @@ const TIMEFRAMES = ["M5", "M15", "M30", "H1", "H4", "D1"];
 interface Rejection {
   at: string;
   symbol: string;
-  stage: "poll" | "pre_gpt" | "no_tick" | "expert_judge" | "post_gpt" | "portfolio" | "sizing" | "entry" | "execution" | "forex_readiness";
+  stage: "poll" | "pre_gpt" | "no_tick" | "expert_judge" | "post_gpt" | "portfolio" | "sizing" | "entry" | "execution" | "forex_readiness" | "cot_veto";
   reason: string;
   metrics?: Record<string, unknown>;
 }
@@ -33,6 +33,7 @@ const STAGE_LABEL: Record<Rejection["stage"], string> = {
   sizing: "Risk sizing",
   entry: "Entry timing",
   forex_readiness: "Market readiness",
+  cot_veto: "COT veto",
   execution: "Execution",
 };
 

@@ -1462,6 +1462,8 @@ components:
         newsBlackoutAfterMin:   { type: integer, minimum: 0, maximum: 1440 }
         maxSpreadCostPct:       { type: number, minimum: 0, maximum: 100 }
         maxPositionHoldHours:   { type: integer, minimum: 1, maximum: 8760 }
+        lastEntryWeekday:       { type: integer, minimum: 1, maximum: 5, description: "Last UTC weekday new trades may open (1 Monday ... 5 Friday = every day)" }
+        cotVeto:                { type: boolean, description: "Skip a trade that goes with speculators at a 3-year COT positioning extreme" }
         notes:                  { type: ["string", "null"] }
         updatedAt:              { type: string, format: date-time }
 
@@ -1488,6 +1490,8 @@ components:
         newsBlackoutAfterMin:   { type: integer, minimum: 0, maximum: 1440 }
         maxSpreadCostPct:       { type: number, minimum: 0, maximum: 100 }
         maxPositionHoldHours:   { type: integer, minimum: 1, maximum: 8760 }
+        lastEntryWeekday:       { type: integer, minimum: 1, maximum: 5, description: "Last UTC weekday new trades may open (1 Monday ... 5 Friday = every day)" }
+        cotVeto:                { type: boolean, description: "Skip a trade that goes with speculators at a 3-year COT positioning extreme" }
         notes:                  { type: string }
 
     # ──────────── Analysis ────────────

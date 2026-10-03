@@ -74,6 +74,14 @@ export interface BotConfig {
      * @maximum 8760
      */
   maxPositionHoldHours?: number;
+  /**
+     * Last UTC weekday new trades may open (1 Monday ... 5 Friday = every day)
+     * @minimum 1
+     * @maximum 5
+     */
+  lastEntryWeekday?: number;
+  /** Skip a trade that goes with speculators at a 3-year COT positioning extreme */
+  cotVeto?: boolean;
   /** @nullable */
   notes?: string | null;
   updatedAt: Date;
