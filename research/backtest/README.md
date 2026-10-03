@@ -14,7 +14,12 @@ Run from this folder with the api-server's import hooks:
 - `candles2y.json`: Deriv M30 and H1 candles for the 14 forex pairs, about one
   year up to 2026-10-01 (Deriv serves no older history). H4 is built from H1.
   Committed because it cannot be fetched again once it ages out of Deriv.
-- `cot.json`: CFTC Commitments of Traders data (COT voters, tested and rejected).
+- `cot.json`: CFTC Commitments of Traders data, 6 currencies, weekly 2014-2026. As a voter it was
+  rejected; as a veto (fade 3-year positioning extremes) it helps (`r-cot.mts`, `r-cot2.mts`, `r-extra.mts`).
+  `r-cot.mts` also needs Yahoo daily FX prices (not committed), fetched with:
+
+      for p in EURUSD GBPUSD USDJPY AUDUSD USDCAD GBPJPY USDCHF EURGBP EURJPY EURAUD EURCAD EURCHF GBPAUD AUDJPY; do
+        curl -s -A Mozilla/5.0 "https://query1.finance.yahoo.com/v8/finance/chart/${p}=X?interval=1d&range=15y" -o $YAHOO_DIR/$p.json; sleep 2; done
 - `votes-M30.json`, `votes-H1.json`, `votes-H4.json`: every strategy's vote at
   every bar. Not committed (large); rebuild them first, about a minute each:
 

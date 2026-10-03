@@ -1,5 +1,49 @@
 # Changes in this build (vs. your Replit export)
 
+## Research: COT over 12 years, more voters, physics and topology models (no bot changes)
+
+These were tested on the weekly cycle from the entry below (Mon–Tue entries, hold to Friday, max 4 open), live poll and stop/target. Scripts: `research/backtest/r-cot.mts`, `r-cot2`, `r-nvoters`, `r-physics`, `r-tda`, `r-extra`, `r-combo` (`.mts`).
+
+**COT positioning, 12 years (2014–2026, 639 weeks × 14 pairs).** Each pair was traded from the week's first open to its last close, using Yahoo daily prices (not committed; see README) and `data/cot.json`.
+
+| Rule | bps per trade after 2 bps | 2014–17 | 2018–20 | 2021–23 | 2024–26 |
+|---|---|---|---|---|---|
+| Follow speculators' net position | −4.9 (t −2.9) | −4.3 | −7.0 | −2.0 | −6.4 |
+| Follow its 1-week / 4-week change | −4.0 / −4.0 | | | | |
+| **Fade 3-year extremes (above 90th pct sell, below 10th buy)** | **+7.6 (t 1.8)** | +1.9 | +13.5 | +2.5 | +9.7 |
+| Fade 1-year extremes | +3.3 | +2.0 | +6.5 | −4.3 | +8.3 |
+
+That's 7 rules tried. Only fading 3-year extremes was positive in every era.
+
+**COT inside the bot (Deriv year, weekly cycle):**
+
+| | Per trade sel / test | 12 weeks from $10: median, growth (scan / random order), under $5 | Rest of year from 1st Mondays Dec–Jun |
+|---|---|---|---|
+| Weekly cycle | $0.053 / $0.081 | $13.11, ×1.29 / ×1.10, 3% | $32, 36, 24, 8, 26, 18, 22 |
+| **+ COT veto (skip a trade that follows the crowd into a 3-year extreme)** | $0.059 / $0.101 | **$14.71, ×1.49 / ×1.27, 0%** | **$52, 46, 30, 24, 26, 21, 25** |
+| + COT as a 61st voter | $0.048 / $0.081 | $10.77, ×1.04, 11% | $21, 22, 8, 2, 22, 14, 19 |
+| COT-agreeing pairs get the slots first | | $10.55, ×1.10, 1% | |
+
+The veto removes 68 trades in Nov–Jun and 7 in Jul–Sep. It is better in both start halves (×1.36→×1.65 for Nov–Mar, ×1.19→×1.29 for Apr–Jul). In the bot, CFTC's weekly report (Tuesday positions, published Friday) would have to be fetched each weekend.
+
+**Would more voters help? Yes, if they are good on their own and different.** With random subsets of the 60, per trade sel / test and year total:
+- 10 voters: $0.019 / $0.053, $19.86
+- 30 voters: $0.033 / $0.059, $26.13
+- 50 voters: $0.044 / $0.071, $30.39
+- 60 voters: $0.053 / $0.081, $35.06
+
+The curve is still rising at 60. The voters agree 66% of the time (50% = independent). New voters so far failed because they lose money alone.
+
+**Physics-style voters (alone over 4 days; then added to the poll):**
+- Kramers–Moyal/Fokker–Planck drift: about 0 alone; $34.01 when added (vs $35.06).
+- Schrödinger-style potential well, the data version of the quantum harmonic oscillator: loses alone (−3 to −9 bps); $33.37 when added.
+- Viscous Burgers shock fade: loses alone (−12 bps in Jul–Sep); $35.44 when added.
+- Navier–Stokes "Reynolds number" (follow smooth trends): +$5 per trade-year when added, but it agrees with the poll 99% of the time, and in the $10 account it is worse (×1.18 vs ×1.29).
+
+None added.
+
+**Algebraic topology (persistent homology, Gidea & Katz 2018).** Total H1 persistence of the Rips complex of the last 50 H4 moves of the 6 USD pairs. The code passes its self-check: a circle gives one loop of about 1.4. Trade results by its percentile show no steady pattern; the bottom fifth was −$0.087 in sel and +$0.154 in test. "Stand aside when high" cut the year to $24.51–$33.63 (vs $35.06). Rejected.
+
 ## Research: how to make the $10 account grow: open early in the week, hold to Friday, at most 4 open (no bot changes)
 
 This uses the live poll and live stop/target throughout. Balances include open positions. Runs start at 07:00 UTC on every weekday. A new simulator, `research/backtest/r-lib.mts`, makes every rule a parameter; with the live rules it reproduces 1,041 trades and $18.01 exactly. Scripts: `r-anatomy`, `r-exits`, `r-exits2`, `r-days`, `r-mech`, `r-account`, `r-account2`, `r-priority`, `r-signal`, `r-final`, `r-risk`, `r-prune` (all `.mts`).
