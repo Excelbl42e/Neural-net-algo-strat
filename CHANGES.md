@@ -1,5 +1,19 @@
 # Changes in this build (vs. your Replit export)
 
+## Research: three more books checked (no bot changes)
+
+Books: Aronson, *Evidence-Based Technical Analysis*; Qian, Hua & Sorensen, *Quantitative Equity Portfolio Management* (scanned, read via OCR); Hull, *Options, Futures and Other Derivatives*. Same rules and data as the entry below. Script: `research/backtest/book3.mts`.
+
+**Is the poll's edge real? (Aronson ch. 1, 6): yes, the side it picks matters.** It trades 52% long, and leaning with each pair's drift explains $0.0001 of its $0.0173 per $1 per trade. In a permutation test that keeps every entry and exit rule but picks the side at random (5,000 runs), only 0.9% of runs beat its $18.01 total, and only 1.9% beat its $9.84 in the test months.
+
+**Three Aronson rule types as new voters: none added.** These were a divergence between channel-normalized price and RSI, a Fisher transform of channel position, and nearness to the 20-day high or low (his "52-week high" anchoring effect). Alone, only the divergence rule at the slowest setting made money (+3 bps in the selection months, +10 bps in the test months); the others lost in both. Added to the 60, divergence gave +$0.57 and the 20-day-high rule +$0.77 over 1,041 trades, both with a lower test-month average. In the $10 account, both were within a run or two of the current poll (26-day runs: 40% up vs 42%).
+
+**Weighting voters by their information coefficient (QEPM ch. 4, 7, 9): rejected.** This replaces one vote each with weights refit every month on earlier data, trading the same share of bars. From Jan, the majority poll made +$8.70. Mean-IC weights made −$54.41, IC/variance weights −$22.48, the book's optimal weights (Σ⁻¹·IC, shrunk) −$54.18, positive-IC voters only −$1.24, and quiet/busy contextual weights −$4.24 and +$0.10. Every variant was worse in the $10 account.
+
+**Volatility-based stop (Hull ch. 23, EWMA λ 0.94): rejected.** This sets the stop at k × EWMA daily volatility (median 0.41% at entries) instead of 0.6%, keeping 5% risk. Per trade, as % of equity, selection / test months: fixed 0.6% gave 0.088 / 0.289; k = 0.75 gave −0.006 / −0.181; k = 1 gave 0.102 / 0.079; k = 1.5 gave 0.048 / 0.265; k = 2 gave 0.028 / 0.314. No setting beats the fixed stop in both periods.
+
+Hull's remaining chapters (options pricing, interest-rate and credit derivatives, VaR) and the rest of QEPM (stock valuation, fundamental factors, turnover) don't apply to a forex multiplier poll.
+
 ## Research: strategies and filters from the two books (no bot changes)
 
 Everything below uses the live rules (0.6% stop, 1.5x target, 4-day limit, Friday close, every Deriv forex pair, Nov 2025 – Sep 2026; selection to Jun, test Jul–Sep). Scripts: `research/backtest/book-voters.mts`, `book-lib.mts`, `book-poll.mts`, `book-meta.mts`, `book-filters.mts`. Every setting tried is listed.
