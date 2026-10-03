@@ -1,5 +1,17 @@
 # Changes in this build (vs. your Replit export)
 
+## Research: what $10 becomes after 4 days (no bot changes)
+
+This uses the live poll on the $10 account: every vote trades until one stake of free balance is left. Positions still open at the end are valued at that moment's price. Script: `research/backtest/four-day.mts`.
+
+| Window | Runs | Average | Median | Middle half | Up | $12+ | Under $8 | Worst / best |
+|---|---|---|---|---|---|---|---|---|
+| Any weekday, 4 days | 230 | $9.86 | $9.53 | $8.44–$10.91 | 37% | 17% | 21% | $4.14 / $17.80 |
+| Monday 00:00 to Friday 00:00 | 46 | $10.43 | $9.84 | $8.64–$12.25 | 48% | 26% | 20% | $5.63 / $17.80 |
+| Monday to Friday close (all closed) | 46 | $10.33 | $10.02 | $8.68–$12.32 | 50% | 26% | 17% | $5.07 / $18.52 |
+
+About 12 trades are opened per 4 days. Jul–Sep weekday windows averaged $10.07 (under $8 in 8%); Nov–Jun windows averaged $9.77 (under $8 in 26%).
+
 ## Research: 2- or 3-day holds and other timeframes (no bot changes)
 
 Holds of 2, 3 and 4 days were each tested with seven timeframe setups. All other rules are the live ones. Script: `research/backtest/hold-tf.mts`; `book-lib.mts` now has `setHold`. "Re-tuned" re-picks each voter's timeframe for that hold using only Nov–Jun. "Decide on H1/H4" polls only at those closes.
