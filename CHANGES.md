@@ -1,5 +1,39 @@
 # Changes in this build (vs. your Replit export)
 
+## Research: how to make the $10 account grow: open early in the week, hold to Friday, at most 4 open (no bot changes)
+
+This uses the live poll and live stop/target throughout. Balances include open positions. Runs start at 07:00 UTC on every weekday. A new simulator, `research/backtest/r-lib.mts`, makes every rule a parameter; with the live rules it reproduces 1,041 trades and $18.01 exactly. Scripts: `r-anatomy`, `r-exits`, `r-exits2`, `r-days`, `r-mech`, `r-account`, `r-account2`, `r-priority`, `r-signal`, `r-final`, `r-risk`, `r-prune` (all `.mts`).
+
+**The problem: the edge per trade is positive, but the account shrinks.** From $10 with every vote traded, the median after 12 weeks is $5.55, with 47% of runs under $5. Run through the whole year without resetting, it ends at $2 from 5 of 7 starting months. At $10 every stake is the $1 minimum, which is 6.2% at risk. Up to 9 correlated positions are open at once, so ups and downs compound away the small edge.
+
+**Finding 1: trades opened on Monday make most of the money; late-week trades lose.** Per $1 trade, Nov–Jun / Jul–Sep: Mon +0.056 / +0.089, Tue +0.030 / +0.017, Wed −0.042 / +0.082, Thu −0.060 / −0.079, Fri −0.011 / +0.002. Monday trades get their full hold; later ones are cut by the Friday close (55–92% of them end there). Trading only Mon–Tue: +$0.047 / +$0.071 per trade (vs +$0.011 / +$0.036), $30.84 vs $18.01 for the year. It beat trading every day in 7 of 11 months, and only 4% of random day choices of the same size did as well. Allowing entries before 07:00 UTC makes it worse.
+
+**Finding 2: with only early-week entries, hold until the Friday close instead of 4 days.** Per trade +$0.053 / +$0.081, $35.06 for the year.
+
+**Finding 3: at most 4 positions open.** This is the best cap with every day traded and with Mon–Tue, from $10 and from $25. Fewer grows too slowly; more lets the swings eat the edge (8-week growth, Mon–Tue: 3 open ×0.98, 4 ×1.18, 5 ×1.10, every vote ×0.92). The live scan order (majors first) picks which simultaneous votes get the slots. Random order is worse (×1.05) but still above the current setup.
+
+| From $10 | Live now | Live + max 4 open | **Mon–Tue entries, hold to Friday, max 4** | Monday only, to Friday, max 4 |
+|---|---|---|---|---|
+| 1 week: median / up | $9.46 / 39% | $9.94 / 48% | $10.01 / 51% | $10.10 / 53% |
+| 4 weeks: median / under $5 | $9.37 / 13% | $10.62 / 3% | $10.61 / 2% | $10.41 / 1% |
+| 12 weeks: median / under $5 / $20+ | $5.55 / 47% / 1% | $11.12 / 21% / 10% | **$13.11 / 3% / 20%** | $12.28 / 0% / 9% |
+| Rest of year from the 1st Monday of Dec, Jan, Feb, Mar, Apr, May, Jun | $2, 2, 2, 2, 16, 2, 16 | $20, 20, 18, 11, 18, 2, 16 | **$32, 36, 24, 8, 26, 18, 22** | $29, 30, 23, 18, 26, 19, 22 |
+| 8-week growth: starts Nov–Jun / Jul–Aug | ×0.62 / ×1.28 | ×0.90 / ×1.67 | ×1.12 / ×1.73 | ×1.10 / ×1.69 |
+
+**Tested and not worth changing:**
+- Stop/target grid (0.4–0.78% × 1–3R or no target): the surface is noisy and nothing beats 0.6% / 1.5R in both periods.
+- Break-even stop and trailing stops: at best ±$3 over the year.
+- Holding through the weekend: Nov–Jun got worse.
+- Meta-labeling on top of Mon–Tue: +$1.34 for the year, no gain in Jul–Sep.
+- A walk-forward pair filter: worse.
+- Priority by vote share or by currency overlap: worse than scan order.
+- Risk per trade 3–7%: about the same growth, so 5% stays; 10% is worse.
+- Dropping the worst voters (6-block cross-validation): $11.93–$23.41 held-out vs $35.06 for all 60.
+
+**How it could be run:** "Max positions" = 4 and "Max hold" = 120h (until the Friday close) are existing settings. "New trades only Monday–Tuesday" needs a small code change. With only the cap changed (every day traded), 12-week runs median $11.12 with 21% under $5.
+
+**Limits:** one year of data (Deriv serves no more). The weekday rule and the cap were found on this same year, though both hold in each half. The cap's best value is sharp: 3 grows little and 5 grows less. The news blackout is not simulated.
+
 ## Research: "liquidity sweep -> VWAP reclaim -> structure shift" day-trading rule (no bot changes)
 
 This rule comes from a video the owner shared. It was tested on M30 candles, all 14 pairs, Nov 2025–Sep 2026. Script: `research/backtest/vwap-sweep.mts`. Deriv forex has no volume, so VWAP is the session's time-weighted average from 00:00 UTC.

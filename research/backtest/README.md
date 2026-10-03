@@ -24,6 +24,11 @@ Run from this folder with the api-server's import hooks:
 
 ## Scripts that matter now
 
+- `r-lib.mts`: general simulator (stop, target, hold, Friday close, break-even, trailing, entry filter,
+  trading hours; $10 account with position cap, risk and priority). `r-final.mts` compares the live
+  setup with the weekly cycle (Mon-Tue entries, hold to Friday, at most 4 open); `r-*.mts` are the
+  studies behind it (see CHANGES.md).
+
 - `cand-lib.mts`: shared loader (candles, votes per timeframe, commission by hour).
 - `horizon2.mts`: live rules, one position per pair; how trades end (target,
   stop, 4-day limit, Friday close), hold times, and direction accuracy at
