@@ -1,5 +1,9 @@
 # Changes in this build (vs. your Replit export)
 
+## Fix: the COT row turned System health yellow while the first report was still downloading
+
+Right after a restart the "COT report (veto)" row said "Fetching the CFTC report…" and was marked degraded, which turned the whole panel's badge yellow. While the first download is in progress it is now idle (grey). It turns yellow only if the download failed or this week's report is missing.
+
 ## COT veto, and the weekly cycle as an option
 
 Built from the research below. On upgrade only the **COT veto is switched on** (once; a later choice is kept). The owner keeps the other settings as they are: new trades every weekday, Max positions 14, Max hold 96h. The weekly cycle can be chosen on the Configuration page: "New trades open on" Monday–Tuesday, Max positions 4, Max hold 120h.

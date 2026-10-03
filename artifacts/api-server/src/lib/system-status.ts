@@ -61,7 +61,7 @@ export async function getSystemStatus() {
   // the week does not wait on the download and this row shows the real state.
   if (cfg?.cotVeto) void getCotSeries();
   const cot = getCotStatus();
-  push("cot_report", !cfg?.cotVeto ? "idle" : cot.usable ? "ok" : "degraded",
+  push("cot_report", !cfg?.cotVeto ? "idle" : cot.usable ? "ok" : (cot.lastError || cot.latestReport) ? "degraded" : "idle",
     !cfg?.cotVeto ? "COT veto is off (Configuration page)"
       : cot.usable ? `CFTC report of ${cot.latestReport} in use${cot.lastError ? `; last refresh failed (${cot.lastError}), using the cached report` : ""}`
       : cot.lastError ? `CFTC report unreachable (${cot.lastError}); the veto stands down and every vote trades`
