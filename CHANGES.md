@@ -6,6 +6,20 @@ Built from the research below. On upgrade only the **COT veto is switched on** (
 
 - **System health:** a new "COT report (veto)" row shows which CFTC report is in use, or that the veto is standing down and why. It is never red, because without the report every vote trades. The report is fetched in the background when the dashboard checks status. After a failed download the next try waits 30 minutes, so a down CFTC site cannot slow orders.
 
+- **The veto runs at the scan too.** A vetoed vote no longer creates a signal that the dispatcher would cancel and the scan would recreate every hour. It is logged under "COT veto" in Analysis rejections. The dispatcher check stays as a backstop.
+
+### Checked against Deriv's current API docs (developers.deriv.com/llms, fetched 2026-10-03)
+
+- **`buy`:** `buy: "1"` with `price` and `parameters` {`contract_type` MULTUP/MULTDOWN, `underlying_symbol`, `amount`, `basis: "stake"`, `currency`, `multiplier`, `limit_order` {`stop_loss`, `take_profit`}}. Matches the schema.
+- **`sell`:** {`sell`: contract_id, `price`: 0} = sell at market. Matches. `portfolio: 1` and `proposal_open_contract` with `contract_id` also match.
+- **Contract status fields read:** `is_sold`, `profit`, `buy_price`, `purchase_time`, `underlying_symbol`, `status`, `sell_price`. All are in the schema.
+- **Login:** an OTP WebSocket URL from `POST /trading/v1/options/accounts/{id}/otp` with `Authorization: Bearer` plus `Deriv-App-ID`. Market data comes from `wss://api.derivws.com/trading/v1/options/ws/public`. Matches.
+- **Multipliers:** `contracts_for` on frxEURUSD returns multipliers 100/200/300/500/800. The bot uses 100, the smallest. Rate limits (100 requests/s per connection, 5 connections) are far above what the bot sends.
+
+**News data:** ForexFactory's weekly calendar, `https://nfs.faireconomy.media/ff_calendar_thisweek.json`, overridable with `NEWS_CALENDAR_URL`. This research sandbox's network blocks that host, so it could not be fetched here. After redeploying, the Dashboard's System health "News calendar" row must read OK ("N events cached"). If it is red, no forex trade is placed (fail-closed by design). The COT data comes from the CFTC public API, which was fetched successfully.
+
+**Deploy:** no new packages (lockfile unchanged). The two new columns are added by `ensureSchema()` at boot, before any worker starts. The Replit build commands (`pnpm --filter @workspace/api-server run build`, `... trading-dashboard run build`) both pass locally.
+
 ### Pre-deploy check: every page clicked through, desktop and phone
 
 A local build with a test database and sample account, trades and signals was opened in Chromium at 1440px and 375px. On all 11 pages it checked for page errors, failed API calls, "NaN" / "undefined" / "Invalid Date" text, overflow and clipped text, then clicked every button. Fixed:

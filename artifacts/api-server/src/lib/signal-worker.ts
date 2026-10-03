@@ -1223,6 +1223,16 @@ async function runWorkerTick(): Promise<void> {
         recordRejection({ symbol, stage: "poll", reason: poll.reason });
         continue;
       }
+      // COT veto at the scan too, so a vetoed vote does not create a signal
+      // that the dispatcher would only cancel (and re-create every cooldown).
+      if (config.cotVeto) {
+        const series = await getCotSeries();
+        const cot = series ? cotFadeSignal(symbol, series, scanTime) : null;
+        if (cot && cotVetoes(poll.direction, cot)) {
+          recordRejection({ symbol, stage: "cot_veto", reason: `COT veto: speculators' positioning on this pair is more one-sided than in ${Math.round(Math.max(cot.percentile ?? 0, 1 - (cot.percentile ?? 0)) * 100)}% of the last 3 years; a ${poll.direction} would follow the crowd at an extreme`, metrics: { percentile: cot.percentile ?? -1 } });
+          continue;
+        }
+      }
       const agreeing = poll.ballots.filter((b) => b.vote === (poll.direction === "buy" ? 1 : -1)).map((b) => b.name);
       const opposing = poll.ballots.filter((b) => b.vote === (poll.direction === "buy" ? -1 : 1)).map((b) => b.name);
       const lv = pollLevels(poll.direction, lastTick.price, poll.atr, activeConfig.minRiskReward);
