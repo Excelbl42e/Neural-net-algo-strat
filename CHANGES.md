@@ -1,5 +1,22 @@
 # Changes in this build (vs. your Replit export)
 
+## Research: "liquidity sweep -> VWAP reclaim -> structure shift" day-trading rule (no bot changes)
+
+This rule comes from a video the owner shared. It was tested on M30 candles, all 14 pairs, Nov 2025–Sep 2026. Script: `research/backtest/vwap-sweep.mts`. Deriv forex has no volume, so VWAP is the session's time-weighted average from 00:00 UTC.
+
+The setup, in order:
+1. During 07:00–17:00 UTC, price sweeps the previous day's high/low or the Asian session's high/low.
+2. A close back over VWAP follows.
+3. A close beyond the swing point of the 6 bars before the sweep follows.
+
+Entry is at the next open, with the stop just beyond the sweep extreme, a 2R target and a flat exit at 20:00 UTC.
+
+- **Result:** 1,508 trades, about 6.6 a day, 36–37% winners. Average −0.22R in Nov–Jun and −0.20R in Jul–Sep, which is about −0.8% of equity per trade at 5% risk. Before commission it averages −0.025R, so there is no edge to begin with. The stop is only about 0.12% away, so commission takes about a fifth of the risk on every trade.
+- **Variants:** all 10 lost in both periods. These were 1.5R or 3R targets, 2h or 8h windows, requiring the sweep bar to close back inside, previous-day or Asian levels only, and with or against the daily trend.
+- **As a 61st voter:** the best variant made $16.30 instead of $18.01. In the $10 account, 26-day runs ended up 37% of the time, against 42%.
+
+Rejected, consistent with the earlier ICT sweep → structure break → FVG result.
+
 ## Research: balance from 4 hours to 8 weeks, and when $10 reaches $20 (no bot changes)
 
 This uses the live poll on the $10 account, starting at 07:00 UTC on each of 233 weekdays. The balance includes open positions. Script: `research/backtest/to-twenty.mts`.
