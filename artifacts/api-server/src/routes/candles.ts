@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { getRecentCandles, getCandleFeederStatus, getLastTick, SUPPORTED_TIMEFRAMES, ensureSymbolSubscribed } from "../lib/candle-feeder.js";
+import { getRecentCandles, getCandleFeederStatus, getLastTick, getFormingCandle, SUPPORTED_TIMEFRAMES, ensureSymbolSubscribed } from "../lib/candle-feeder.js";
 import { SYNTHETIC_CATALOG, isSyntheticCode, getSyntheticSymbol } from "../lib/synthetic-catalog.js";
 
 const router: IRouter = Router();
@@ -54,7 +54,14 @@ router.get("/candles", async (req, res): Promise<void> => {
     volume: c.volume != null ? parseFloat(c.volume) : null,
   }));
 
-  res.json({ symbol, timeframe, candles, lastTick: getLastTick(symbol) });
+  // The candle still being built from live ticks, so the chart moves with the
+  // market instead of waiting for the candle to close and be stored. Only sent
+  // when it is newer than (or replaces) the last stored candle.
+  const f = getFormingCandle(symbol, timeframe);
+  const lastStored = candles.at(-1)?.time ?? -Infinity;
+  const forming = f && f.time >= lastStored ? { ...f, volume: null } : null;
+
+  res.json({ symbol, timeframe, candles, lastTick: getLastTick(symbol), forming });
 });
 
 export default router;

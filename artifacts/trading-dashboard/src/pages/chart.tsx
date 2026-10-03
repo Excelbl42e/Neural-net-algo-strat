@@ -61,7 +61,7 @@ export default function ChartPage() {
   const candlesParams = { symbol, timeframe, limit: 200 };
   const { data: candleData, isLoading: candlesLoading, isError: candlesError, refetch: retryCandles } = useListCandles(
     candlesParams,
-    { query: { queryKey: getListCandlesQueryKey(candlesParams), refetchInterval: 5000 } }
+    { query: { queryKey: getListCandlesQueryKey(candlesParams), refetchInterval: 2000 } }
   );
   const signalsParams = { status: "active" as const };
   const { data: allSignals } = useListSignals(
@@ -91,8 +91,19 @@ export default function ChartPage() {
   const rejected = (feederStatus as { rejectedSymbols?: Array<{ symbol: string; reason: string }> } | undefined)?.rejectedSymbols ?? [];
   const rejectedHere = rejected.find((r) => r.symbol === symbol)?.reason ?? null;
   const rejectedElsewhere = rejected.filter((r) => r.symbol !== symbol);
-  const latestCandle = candleData?.candles?.at(-1);
-  const latestCandleAt = latestCandle ? new Date(latestCandle.time * 1000).toLocaleString() : null;
+  // Stored candles plus the one still being built from live ticks, which
+  // replaces the last stored candle when they share an open time.
+  const liveCandles = useMemo(() => {
+    const stored = candleData?.candles ?? [];
+    const f = candleData?.forming;
+    if (!f) return stored;
+    return stored.at(-1)?.time === f.time ? [...stored.slice(0, -1), f] : [...stored, f];
+  }, [candleData]);
+  const lastTick = candleData?.lastTick ?? null;
+  // A tick in the last 2 minutes means the market is streaming right now.
+  const tickAgeSec = lastTick ? Math.max(0, Math.round((Date.now() - lastTick.at) / 1000)) : null;
+  const isLive = tickAgeSec != null && tickAgeSec <= 120;
+  const latestCandle = liveCandles.at(-1);
 
   return (
     <div className="space-y-4 min-w-0">
@@ -101,7 +112,7 @@ export default function ChartPage() {
         <div>
           <h1 className="text-2xl font-bold tracking-tight">{feederStatus?.connected ? "Deriv Candles" : "Stored Candles"}</h1>
           <p className="text-sm text-muted-foreground">
-            {feederStatus?.connected ? "Feeder reports connected. Candle closes remain stored data, not a live quote." : "Historical/stored candles; feed is disconnected or its state is unavailable. Not a live quote."} Stored signal levels are overlaid. Charting by Lightweight Charts, not a TradingView market-data feed.
+            {feederStatus?.connected ? "Live Deriv ticks: the last candle forms tick by tick and the chart refreshes every 2 seconds; earlier candles are stored history." : "Stored candles only; the feed is disconnected or its state is unavailable, so nothing is live."} Stored signal levels are overlaid. Charting by Lightweight Charts, not a TradingView market-data feed.
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap min-w-0">
@@ -146,7 +157,11 @@ export default function ChartPage() {
 
       {(latestCandle || feederStatus?.lastError || rejectedHere || rejectedElsewhere.length > 0) && (
         <div className="rounded-md border border-border bg-card/50 px-3 py-2 text-xs font-mono-numbers text-muted-foreground flex flex-wrap gap-x-4 gap-y-1">
-          {latestCandle && <span data-testid="text-last-stored-close">Last stored close: <strong className="text-foreground">{latestCandle.close}</strong> · candle timestamp {latestCandleAt}. The price line is not a live tick.</span>}
+          {isLive && lastTick ? (
+            <span data-testid="text-live-price"><span className="text-green-400">● LIVE</span> price <strong className="text-foreground">{lastTick.price}</strong> · tick {new Date(lastTick.at).toLocaleTimeString()} ({tickAgeSec}s ago). The last candle is still forming and moves with every tick.</span>
+          ) : latestCandle ? (
+            <span data-testid="text-last-price">No live tick{lastTick ? ` since ${new Date(lastTick.at).toLocaleString()}` : ""} — the market is closed or the feed is quiet. Last price <strong className="text-foreground">{lastTick?.price ?? latestCandle.close}</strong>.</span>
+          ) : null}
           {/* A symbol Deriv refuses is not a broken feed — say which one and what it means, instead of a bare "Invalid symbol". */}
           {rejectedHere && (
             <span className="text-amber-300" data-testid="text-symbol-rejected">
@@ -173,7 +188,9 @@ export default function ChartPage() {
             <EmptyChart connected={feederStatus?.connected} symbol={symbol} />
           ) : (
             <ChartCanvas symbol={symbol}
-              candles={candleData!.candles}
+              viewKey={`${symbol}|${timeframe}`}
+              livePrice={isLive && lastTick ? lastTick.price : null}
+              candles={liveCandles}
               signals={signalsForSymbol}
             />
           )}
@@ -227,11 +244,16 @@ function EmptyChart({ connected, symbol }: { connected?: boolean; symbol: string
 
 interface CandlePoint { time: number; open: number; high: number; low: number; close: number; volume?: number | null }
 
-function ChartCanvas({ candles, signals, symbol }: {
+function ChartCanvas({ candles, signals, symbol, viewKey, livePrice }: {
   candles: CandlePoint[];
   signals: Signal[];
   symbol: string;
+  /** Changes when the pair or timeframe changes; the view is refitted only then, not on every live refresh. */
+  viewKey: string;
+  /** Latest live tick, or null when the market is not streaming. */
+  livePrice: number | null;
 }) {
+  const fittedKeyRef = useRef<string | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const overlayRef = useRef<SVGSVGElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -314,9 +336,12 @@ function ChartCanvas({ candles, signals, symbol }: {
         close: c.close,
       }))
     );
-    // Fit all bars into view — auto-scales both axes to show every candle cleanly
-    chartRef.current?.timeScale().fitContent();
-  }, [candles]);
+    // Fit all bars into view once per pair/timeframe; live refreshes keep the user's zoom and scroll.
+    if (fittedKeyRef.current !== viewKey) {
+      chartRef.current?.timeScale().fitContent();
+      fittedKeyRef.current = viewKey;
+    }
+  }, [candles, viewKey]);
 
   // Render axis-anchored price lines: entry midline + stop + targets (clean labels on the right scale)
   useEffect(() => {
@@ -376,17 +401,22 @@ function ChartCanvas({ candles, signals, symbol }: {
     }
 
     const last = candles.at(-1);
-    if (last) {
+    if (livePrice != null) {
+      newLines.push(series.createPriceLine({
+        price: livePrice, color: "#22d3ee", lineWidth: 1, lineStyle: 2,
+        axisLabelVisible: true, title: "LIVE",
+      }));
+    } else if (last) {
       newLines.push(series.createPriceLine({
         price: last.close, color: "#8c9dab", lineWidth: 1, lineStyle: 2,
-        axisLabelVisible: true, title: "STORED CLOSE",
+        axisLabelVisible: true, title: "LAST",
       }));
     }
     priceLinesRef.current = newLines;
     type MarkerSetter = { setMarkers?: (m: typeof markers) => void };
     const seriesAny = series as unknown as MarkerSetter;
     if (typeof seriesAny.setMarkers === "function") seriesAny.setMarkers(markers);
-  }, [signals, candles]);
+  }, [signals, candles, livePrice]);
 
   // SVG overlay: draws human-style trader analysis — filled FVG / OB / Sweep boxes
   // and shaded entry / stop / target zones extending from the signal time forward.

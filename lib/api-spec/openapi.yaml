@@ -1154,6 +1154,11 @@ components:
           allOf:
             - $ref: "#/components/schemas/LastTick"
           nullable: true
+        forming:
+          description: The candle still being built from live ticks (not stored yet), or null.
+          allOf:
+            - $ref: "#/components/schemas/Candle"
+          nullable: true
 
     CandleFeederStatus:
       type: object
