@@ -19,7 +19,7 @@ const HEALTH_STYLE: Record<string, { dot: string; text: string }> = {
 };
 
 /** signal_judge -> Signal judge, ai -> AI */
-const NAME_OVERRIDES: Record<string, string> = { ai: "AI (unused)" };
+const NAME_OVERRIDES: Record<string, string> = { ai: "AI (unused)", cot_report: "COT report (veto)" };
 const humanize = (name: string) => {
   if (NAME_OVERRIDES[name]) return NAME_OVERRIDES[name]!;
   const spaced = name.replace(/_/g, " ");
@@ -75,7 +75,7 @@ export default function Dashboard() {
         <section className="grid gap-3 md:grid-cols-[1.1fr_1fr_1fr]">
           <StatusPanel icon={<Crosshair className="w-5 h-5" />} label="Strategy library" value={`${activeStrategies ?? 0} active`} detail="40 quantitative + 20 technical voters, seeded on boot" href="/strategy" />
           <StatusPanel icon={<Activity className="w-5 h-5" />} label="Signal worker" value={workerState} detail={workerDetail} href="/analysis" />
-          <StatusPanel icon={<Radio className="w-5 h-5" />} label="Deriv connectivity" value={`${connectedBrokers ?? 0} broker connections`} detail={`Candle feeder: ${feeder.data?.connected ? "connected" : "disconnected"} · ${feeder.data?.symbols.length ?? 0} subscribed symbols`} href="/brokers" />
+          <StatusPanel icon={<Radio className="w-5 h-5" />} label="Deriv connectivity" value={`${connectedBrokers ?? 0} broker connection${(connectedBrokers ?? 0) === 1 ? "" : "s"}`} detail={`Candle feeder: ${feeder.data?.connected ? "connected" : "disconnected"} · ${feeder.data?.symbols.length ?? 0} subscribed symbols`} href="/brokers" />
         </section>
         <section className="rounded-xl border border-border bg-card p-5 md:p-6">
           <div className="flex flex-wrap items-center justify-between gap-3">

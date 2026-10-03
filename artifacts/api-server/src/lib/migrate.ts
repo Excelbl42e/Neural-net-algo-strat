@@ -111,18 +111,16 @@ export async function ensureSchema(): Promise<void> {
     sql`ALTER TABLE bot_config ALTER COLUMN max_per_asset_class SET DEFAULT 14`,
     sql`ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS last_entry_weekday integer NOT NULL DEFAULT 5`,
     sql`ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS cot_veto boolean NOT NULL DEFAULT false`,
-    // One-time: the weekly cycle from the research (CHANGES.md): new trades
-    // Monday-Tuesday only, held to the Friday close (120h is past Friday, so the
-    // Friday flatten closes them), at most 4 open, and the COT veto on. A later
-    // choice on the Configuration page is kept.
+    // One-time: the COT veto on, as the owner chose. Entry days, position
+    // ceiling and hold stay as they are (every weekday, 14, 96h); the weekly
+    // cycle is available on the Configuration page. A later choice is kept.
     sql`WITH once AS (
           INSERT INTO app_secrets (key, value)
-          VALUES ('migration:weekly_cycle_cot_v1', now()::text)
+          VALUES ('migration:cot_veto_on_v1', now()::text)
           ON CONFLICT (key) DO NOTHING
           RETURNING key
         )
-        UPDATE bot_config SET last_entry_weekday = 2, max_position_hold_hours = 120,
-          max_concurrent_positions = 4, cot_veto = true
+        UPDATE bot_config SET cot_veto = true
         WHERE EXISTS (SELECT 1 FROM once)`,
     // Same upgrade: ICT signals still waiting for their entry when the poll
     // took over must not be traded by the replay pass afterwards.

@@ -393,9 +393,9 @@ export default function ConfigurationPage() {
                   <FormLabel>Max positions (hard ceiling)</FormLabel>
                   <FormControl><Input type="number" step="1" min="1" max="100" {...field} data-testid="input-max-positions" /></FormControl>
                   <FormDescription className="text-[11px]">
-                    4 is the weekly cycle's setting: the 14 pairs hold only about 4 independent bets, and the backtest grew
-                    the account fastest with at most 4 open. 14 (one per pair) means every majority vote opens a position until
-                    only one stake of free balance is left — the "At once" column above shows how many that is at each balance.
+                    14 (one per pair) means every majority vote opens a position until only one stake of free balance
+                    is left — the "At once" column above shows how many that is at each balance. Lower it to cap how
+                    many trades can be open together (the backtest's weekly cycle used 4).
                   </FormDescription>
                   {yourRow?.fundablePositions != null && yourRow.configuredPositions != null
                     && yourRow.fundablePositions < yourRow.configuredPositions && (
@@ -456,7 +456,7 @@ export default function ConfigurationPage() {
                 ["newsBlackoutBeforeMin", "News blackout: minutes before a high-impact release", "1"],
                 ["newsBlackoutAfterMin", "News blackout: minutes after a high-impact release", "1"],
                 ["maxSpreadCostPct", "Max trading cost (% of position size, i.e. stake × multiplier) — Deriv's commission from a live quote of the exact order", "0.01"],
-                ["maxPositionHoldHours", "Buy back any open position after this many hours if it has hit neither stop nor target (120 with the weekly cycle = held to the Friday close, which always closes positions before Deriv's weekend)", "1"],
+                ["maxPositionHoldHours", "Buy back any open position after this many hours if it has hit neither stop nor target (the poll was tested at 96 — four days; 120 holds to the Friday close, which always closes positions before Deriv's weekend)", "1"],
               ] as const).map(([name, label, step]) => (
                 <FormField key={name} control={form.control} name={name} render={({ field }) => (
                   <FormItem>

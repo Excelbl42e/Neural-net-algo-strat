@@ -1,15 +1,30 @@
 # Changes in this build (vs. your Replit export)
 
-## Weekly cycle and COT veto
+## COT veto, and the weekly cycle as an option
 
-Built from the research below, as the owner asked. On upgrade, these are set once (a later choice on the Configuration page is kept):
+Built from the research below. On upgrade only the **COT veto is switched on** (once; a later choice is kept). The owner keeps the other settings as they are: new trades every weekday, Max positions 14, Max hold 96h. The weekly cycle can be chosen on the Configuration page: "New trades open on" Monday–Tuesday, Max positions 4, Max hold 120h.
 
-| Setting | Before | Now |
-|---|---|---|
-| New trades open on (new) | every weekday | **Monday–Tuesday** (UTC) |
-| Max positions | 14 | **4** |
-| Max hold | 96h | **120h**: past Friday, so the Friday 20:30 UTC close ends every trade |
-| COT veto (new) | — | **on** |
+- **System health:** a new "COT report (veto)" row shows which CFTC report is in use, or that the veto is standing down and why. It is never red, because without the report every vote trades. The report is fetched in the background when the dashboard checks status. After a failed download the next try waits 30 minutes, so a down CFTC site cannot slow orders.
+
+### Pre-deploy check: every page clicked through, desktop and phone
+
+A local build with a test database and sample account, trades and signals was opened in Chromium at 1440px and 375px. On all 11 pages it checked for page errors, failed API calls, "NaN" / "undefined" / "Invalid Date" text, overflow and clipped text, then clicked every button. Fixed:
+
+- **Signals:** the "RECORD: CANCELLED / EXECUTED" badge was cut off at the card edge on desktop; the card header now wraps.
+- **Trades:** on a phone, "Log Trade" was pushed off the right edge; the header buttons now wrap.
+- **Chart:**
+  - Prices showed 2 decimals (EURUSD "1.13"); now 5, or 3 for JPY pairs.
+  - The last price had two overlapping labels; now one.
+- **Signals "Clear History" and Brokers "remove connection":** these used the browser's built-in confirm popup, which embedded views such as Replit's preview can block silently, leaving the button looking dead. They now use the same inline "Confirm / ✕" as the Trades page. Both checked: cancel keeps everything; confirm deletes.
+- **Text:**
+  - The Dashboard said "1 broker connections".
+  - The COT veto reason said "3th percentile"; it now reads "more one-sided than in 97% of the last 3 years".
+- **Unused Inter font:** no longer downloaded (the app uses DM Sans).
+
+Checked and fine:
+- Brokers "Sync" with a bad token shows a clear "Sync failed" message with Deriv's reason.
+- A code review of the branch's bot changes found only the COT status row overstating usability, now fixed (it checks a report exists for the current week).
+- Typecheck, 64 tests and both builds pass.
 
 - **Entry days.** `forexPreScanGate` refuses new signals and orders after the last entry day. It runs in the scan and again in the dispatcher, next to the Friday 16:00 cutoff. Open positions are never closed by it. Choices: Monday only, Mon–Tue, Mon–Wed, Mon–Thu or every weekday.
 - **COT veto** (`cot-positioning.ts`). Each week the bot reads the CFTC's legacy futures report from its public API (no key; `COT_URL` overrides the address).
@@ -20,10 +35,14 @@ Built from the research below, as the owner asked. On upgrade, these are set onc
 - **Checked:**
   - The live COT module gives the same signal as the research code for all 658 pair-Mondays of the backtest year (0 differences).
   - The real CFTC feed returns the 2026-09-29 report. For Monday 2026-10-05 it would block sells on GBPUSD, GBPJPY, USDCHF and EURCHF, where speculators are at 3-year extreme shorts.
-  - Against a local Postgres, the upgrade set 4 / 120h / Mon–Tue / veto on. Saving other values works, and a weekday of 9 is refused.
+  - Against a local Postgres, the upgrade switches the veto on and leaves every other setting alone. Saving other values works, and a weekday of 9 is refused.
   - The Configuration page shows the new controls with no page errors and no overflow at 375px.
   - New tests: entry-day gate, COT timing, extreme detection, veto direction, too-little-history. `npm run typecheck && npm test && npm run build` pass (64 tests), and the dashboard builds.
-- **Expected, from the backtest** ($10 in each Monday, out each Friday, 46 weeks): average Friday balance $10.59 vs $10.16, weeks up 63% vs 48%, under $8 9% vs 17%, +$27.33 withdrawn vs +$7.52.
+- **Expected, on the owner's settings** (every weekday, every vote until one stake left, 4-day hold; `research/backtest/r-veto-live.mts`). Without → with the veto:
+  - Per $1 trade, sel / test: $0.011 / $0.036 → $0.027 / $0.048; year $18.01 → $30.39 (127 trades skipped).
+  - $10 in each Monday, out each Friday, 46 weeks: average $10.16 → $10.32, weeks up 48% → 52%, under $8 17% → 15%, worst $4.83 → $6.38.
+  - Withdrawn: +$7.52 → +$14.78 (Nov–Jun +$4.26 → +$8.50, Jul–Sep +$3.26 → +$6.29).
+  - 12 weeks from $10: median $5.63 → $8.33, under $5 47% → 21%.
 
 ## Research: the week-by-week view, magnetohydrodynamics and more physics models (no bot changes)
 

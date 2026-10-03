@@ -411,7 +411,7 @@ async function dispatchTradeUnlocked(
     if (series) {
       const cot = cotFadeSignal(signal.symbol, series, new Date());
       if (cotVetoes(signal.direction, cot)) {
-        const reason = `COT veto: speculators' positioning on this pair is at the ${Math.round((cot.percentile ?? 0) * 100)}th percentile of 3 years (week of ${cot.week}); a ${signal.direction} would follow the crowd at an extreme`;
+        const reason = `COT veto: speculators' positioning on this pair is more one-sided than in ${Math.round(Math.max(cot.percentile ?? 0, 1 - (cot.percentile ?? 0)) * 100)}% of the last 3 years (report used from ${cot.week}); a ${signal.direction} would follow the crowd at an extreme`;
         const cancelled = await transitionSignalExecution(signal.id, "generated", "rejected", reason, { signalStatus: "cancelled" });
         if (cancelled) {
           recordRejection({ symbol: signal.symbol, stage: "cot_veto", reason, metrics: { percentile: cot.percentile ?? -1 } });

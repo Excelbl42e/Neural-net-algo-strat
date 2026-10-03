@@ -87,6 +87,9 @@ export function cotVetoes(direction: "buy" | "sell", sig: CotSignal): boolean {
 
 let cache: { series: CotSeries; fetchedAt: number; latestReport: string } | null = null;
 let lastError: string | null = null;
+let lastFailAt = 0;
+/** After a failed fetch, wait this long before trying again, so a down feed cannot slow every order. */
+const RETRY_AFTER_FAIL_MS = 30 * 60_000;
 let inFlight: Promise<CotSeries | null> | null = null;
 
 async function fetchNow(): Promise<CotSeries | null> {
@@ -114,6 +117,7 @@ async function fetchNow(): Promise<CotSeries | null> {
     return series;
   } catch (err) {
     lastError = err instanceof Error ? err.message : String(err);
+    lastFailAt = Date.now();
     logger.warn({ msg: lastError }, "COT positioning fetch failed; the COT veto stands down until it recovers");
     return cache && Date.now() - cache.fetchedAt <= STALE_MAX_MS ? cache.series : null;
   }
@@ -122,13 +126,20 @@ async function fetchNow(): Promise<CotSeries | null> {
 /** Cached COT series, refreshed every 6 hours; null when no usable data (veto stands down). Never throws. */
 export async function getCotSeries(): Promise<CotSeries | null> {
   if (cache && Date.now() - cache.fetchedAt < CACHE_TTL_MS) return cache.series;
+  if (Date.now() - lastFailAt < RETRY_AFTER_FAIL_MS) return cache && Date.now() - cache.fetchedAt <= STALE_MAX_MS ? cache.series : null;
   if (inFlight) return inFlight;
   inFlight = fetchNow().finally(() => { inFlight = null; });
   return inFlight;
 }
 
-export function getCotStatus() {
+export function getCotStatus(now = new Date()) {
+  // Usable = fresh enough to be served AND a report exists for this week's Monday
+  // for every currency (the veto looks nothing up otherwise and stands down).
+  const week = mondayOf(now.getTime());
+  const usable = !!cache && Date.now() - cache.fetchedAt <= STALE_MAX_MS
+    && Object.values(COT_CODES).every((c) => cache!.series[c]?.has(week));
   return {
+    usable,
     latestReport: cache?.latestReport ?? null,
     fetchedAt: cache ? new Date(cache.fetchedAt).toISOString() : null,
     lastError,

@@ -172,7 +172,7 @@ export default function ChartPage() {
           ) : (candleData?.candles?.length ?? 0) === 0 ? (
             <EmptyChart connected={feederStatus?.connected} symbol={symbol} />
           ) : (
-            <ChartCanvas
+            <ChartCanvas symbol={symbol}
               candles={candleData!.candles}
               signals={signalsForSymbol}
             />
@@ -227,9 +227,10 @@ function EmptyChart({ connected, symbol }: { connected?: boolean; symbol: string
 
 interface CandlePoint { time: number; open: number; high: number; low: number; close: number; volume?: number | null }
 
-function ChartCanvas({ candles, signals }: {
+function ChartCanvas({ candles, signals, symbol }: {
   candles: CandlePoint[];
   signals: Signal[];
+  symbol: string;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const overlayRef = useRef<SVGSVGElement | null>(null);
@@ -271,6 +272,8 @@ function ChartCanvas({ candles, signals }: {
     });
     const series = chart.addSeries(CandlestickSeries, {
       priceLineVisible: false,
+      // the dashed "STORED CLOSE" line already labels the last close
+      lastValueVisible: false,
       upColor: "#22c55e",
       downColor: "#ef4444",
       borderUpColor: "#22c55e",
@@ -291,6 +294,12 @@ function ChartCanvas({ candles, signals }: {
       priceLinesRef.current = [];
     };
   }, []);
+
+  // Price precision of the pair: 3 decimals for JPY pairs, 5 for the rest
+  useEffect(() => {
+    const precision = symbol.endsWith("JPY") ? 3 : 5;
+    seriesRef.current?.applyOptions({ priceFormat: { type: "price", precision, minMove: 10 ** -precision } });
+  }, [symbol]);
 
   // Update candle data
   useEffect(() => {
