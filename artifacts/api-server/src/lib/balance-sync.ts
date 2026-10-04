@@ -132,12 +132,15 @@ async function syncOne(
       entry.lastError = null;
       entry.lastSyncAt = requestedAt;
 
-      await db
+      // Balance and sync time change together: a dispatcher reading the new
+      // time with the old balance would skip the stakes opened in between.
+      const markConnected = (tx: Pick<typeof db, "update"> = db) => tx
         .update(brokerConnectionsTable)
         .set({ status: "connected", lastSyncAt: entry.lastSyncAt, lastError: null })
         .where(eq(brokerConnectionsTable.id, conn.id));
 
       if (!conn.accountId) {
+        await markConnected();
         // First successful sync of a new connection: create + link the account
         // automatically so no manual "Sync" click is needed.
         const [acct] = await db.insert(accountsTable).values({
@@ -153,13 +156,17 @@ async function syncOne(
         }).returning();
         await db.update(brokerConnectionsTable).set({ accountId: acct.id }).where(eq(brokerConnectionsTable.id, conn.id));
       } else {
-        await db
-          .update(accountsTable)
-          .set({
-            balance: String(result.balance ?? 0),
-            equity: String(result.equity ?? 0),
-          })
-          .where(eq(accountsTable.id, conn.accountId));
+        const accountId = conn.accountId;
+        await db.transaction(async (tx) => {
+          await tx
+            .update(accountsTable)
+            .set({
+              balance: String(result.balance ?? 0),
+              equity: String(result.equity ?? 0),
+            })
+            .where(eq(accountsTable.id, accountId));
+          await markConnected(tx);
+        });
         logger.info(
           {
             connId: conn.id,

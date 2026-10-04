@@ -69,9 +69,16 @@ export const PAGE_SLOTS = 1000;
  * covers the latest 500 slots; each page ends where the previous one began,
  * so the stored history has no hole (an earlier version left one 500 slots
  * wide between the first request and the first page).
+ *
+ * Each end is one second before a bar opens. Deriv cuts the candle that
+ * contains `end` short at `end`, and a page ending mid-bar stored that partial
+ * candle as if it were complete (the insert then never replaces it).
  */
 export function historyPageEnds(nowS: number, granularity: number, pages: number): number[] {
   const ends: number[] = [];
-  for (let page = 1; page < pages; page++) ends.push(nowS - (FIRST_REQUEST_SLOTS + (page - 1) * PAGE_SLOTS) * granularity);
+  for (let page = 1; page < pages; page++) {
+    const nominal = nowS - (FIRST_REQUEST_SLOTS + (page - 1) * PAGE_SLOTS) * granularity;
+    ends.push((Math.floor(nominal / granularity) + 1) * granularity - 1);
+  }
   return ends;
 }

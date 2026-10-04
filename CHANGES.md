@@ -1,5 +1,47 @@
 # Changes in this build (vs. your Replit export)
 
+## Whole-codebase audit: entry hours, order bookkeeping, candle history
+
+### New trades only 07:00–21:00 UTC (London + New York), as backtested
+The Configuration field "Killzone sessions" was blank by default, and blank means every hour. Every poll backtest entered only 07:00–21:00 UTC (Friday until 16:00), so the live bot was not running the strategy that was tested.
+
+Same live rules plus the COT veto, 14 pairs (`research/backtest/r-hours-live.mts`):
+
+| Entry hours | $ per $1 stake, Nov–Jun / Jul–Oct | $10 every Monday, withdrawn Friday, 46 weeks | Weeks up |
+|---|---|---|---|
+| 07–21 UTC (the backtests) | +0.027 / +0.048 | **+$21.04** | 54% |
+| every hour (blank field) | −0.023 / +0.044 | −$20.79 | 33% |
+| 00–21 UTC (asian,london,newyork) | −0.016 / +0.044 | −$19.40 | 35% |
+
+The gap comes mostly from Nov–Jun; in Jul–Oct alone the two are close. On upgrade a **blank** field is set to `london,newyork` (once; a value already chosen is kept), and that is now the default for a new database. The field's help text says what each session covers.
+
+### Order bookkeeping (real-money paths)
+- **Unclear buy kept its tag.** When Deriv's answer to a buy was unclear, the signal's reason was overwritten and lost the `[stake= conn= t=]` tag the reconciler matches contracts by. If the order had in fact gone through, the reconciler could not find it and recorded it as "not placed", leaving a live position with no trade row. The tag is now kept.
+- **Clearing closed trades locked trading.** "Clear Closed" (and deleting one closed trade) left their signals marked executed with no trade. The reconciler reads that as "order placed, trade not yet written", which blocks every new order. The linked signals are now deleted with the trades.
+- **Live positions can't be deleted.** Deleting an open trade with a Deriv contract is refused, and its delete button is hidden; close it first. A manually logged trade with no contract can still be deleted. A signal whose order is still being confirmed with Deriv can't be deleted either.
+- **One trade row per signal.** The dispatcher and the reconciler could both write the trade for the same order, which would double-count it in the position count and P&L. A unique index now stops this.
+- **Contract found, account not linked yet:** the reconciler now waits instead of declaring the order not placed. A recovered trade's open price is the signal's entry zone, not the stake.
+- **Autotrade Off stops the next order.** The mode is read again just before each order. Before, a scan that was already dispatching used the setting from when it started.
+- **Small fixes:**
+  - The pre-buy retry count survives other status messages.
+  - The balance and its sync time are now written together.
+  - A manual Sync counts from when it started.
+  - A broker connection's environment can't be switched (add a new connection instead).
+  - A changed token waits for a fresh sync before any stake is sized.
+
+### Candle history
+Older history pages ended at an arbitrary second, so the last candle of each page was partial and was stored as complete. Real Deriv data: close 680.32 against the true 682.96. Each restart added more. Pages now end one second before a bar opens. Closed bars reloaded from Deriv now replace stored values that differ, so the next restart repairs the partial candles already in the database. Checked locally: two deliberately corrupted candles were restored from Deriv on restart.
+
+### Cleanup
+- Removed an unused AI-client import from the order path and dead code.
+- The signals list returns the newest 1,000 plus every signal a trade links to. It was unbounded and refetched every 10s.
+
+**Checked:**
+- Typecheck, 64 unit tests and both builds pass.
+- `test/db-integration.ts` against a local Postgres passes the six checks it now runs: claim tag, unique trade, deletes, entry-hours migration (once only), lock and encryption. Its stale PDF-purge check was removed.
+- Server run against Deriv's public feed: full backfill, no write errors.
+- Chromium pass over every page at desktop and phone width: no errors.
+
 ## Research: the 60-strategy poll on Deriv synthetic indices (no bot changes)
 
 The owner is considering moving from forex to synthetic indices. Tested first, with the live poll unchanged (same 60 voters, same timeframe per voter, simple majority, quorum 30) on a year of Deriv candles (Oct 2025 – Oct 2026) for 15 indices: Volatility 10/25/50/75/100, 1-second V10/V75/V100, Boom/Crash 500/1000, Jump 25/75 and Step. Traded as multipliers on each index's own Deriv terms:

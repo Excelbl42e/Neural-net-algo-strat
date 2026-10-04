@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { eq, sql } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { db, accountsTable, brokerConnectionsTable } from "@workspace/db";
 import {
   CreateAccountBody,

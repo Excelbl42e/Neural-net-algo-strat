@@ -23,6 +23,11 @@ export async function ensureSchema(): Promise<void> {
     // the whole candles table — 200ms at half a million rows, and growing every
     // hour it runs. This is the index it actually needs.
     sql`CREATE INDEX IF NOT EXISTS candles_tf_time_idx ON candles (timeframe, open_time)`,
+    // One trade row per signal. The dispatcher and the reconciler can both
+    // write the trade for a just-executed signal; without this a race left two
+    // rows for one contract, double-counted in the position count and P&L.
+    // (If old duplicates exist the index is skipped and logged, nothing else.)
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS trades_signal_id_unique ON trades (signal_id) WHERE signal_id IS NOT NULL`,
     sql`ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS small_account_max_risk_pct numeric(5,2) NOT NULL DEFAULT 10.00`,
     sql`ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS min_risk_reward numeric(5,2) NOT NULL DEFAULT 1.50`,
     sql`ALTER TABLE bot_config ADD COLUMN IF NOT EXISTS atr_percentile_min numeric(5,2) NOT NULL DEFAULT 15.00`,
@@ -122,6 +127,19 @@ export async function ensureSchema(): Promise<void> {
         )
         UPDATE bot_config SET cot_veto = true
         WHERE EXISTS (SELECT 1 FROM once)`,
+    // One-time: new trades only 07:00-21:00 UTC (London + New York sessions),
+    // the hours every poll backtest used. A blank field allowed every hour, and
+    // the same live rules over all hours lost money (research/backtest/
+    // r-hours-live.mts). Only a blank field is filled; a choice is kept.
+    sql`WITH once AS (
+          INSERT INTO app_secrets (key, value)
+          VALUES ('migration:entry_hours_london_newyork_v1', now()::text)
+          ON CONFLICT (key) DO NOTHING
+          RETURNING key
+        )
+        UPDATE bot_config SET killzones = 'london,newyork'
+        WHERE btrim(killzones) = '' AND EXISTS (SELECT 1 FROM once)`,
+    sql`ALTER TABLE bot_config ALTER COLUMN killzones SET DEFAULT 'london,newyork'`,
     // Same upgrade: ICT signals still waiting for their entry when the poll
     // took over must not be traded by the replay pass afterwards.
     sql`WITH once AS (

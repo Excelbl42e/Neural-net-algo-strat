@@ -28,8 +28,17 @@ let lastRunAt: Date | null = null;
 let lastError: string | null = null;
 let lastResolved = 0;
 
-export function claimReason(stake: number, connId: number): string {
-  return `Deriv order submission started; awaiting broker confirmation [stake=${stake.toFixed(2)} conn=${connId} t=${Date.now()}]`;
+/**
+ * What the reconciler matches a Deriv contract by. Every reason written while
+ * the order's outcome is unknown must keep it: without it a placed contract
+ * cannot be matched and the signal is declared "not placed".
+ */
+export function claimTag(stake: number, connId: number, t: number = Date.now()): string {
+  return `[stake=${stake.toFixed(2)} conn=${connId} t=${t}]`;
+}
+
+export function claimReason(stake: number, connId: number, t: number = Date.now()): string {
+  return `Deriv order submission started; awaiting broker confirmation ${claimTag(stake, connId, t)}`;
 }
 
 export function parseClaim(reason: string | null): { stake: number | null; connId: number | null; t: number | null } {
@@ -65,9 +74,13 @@ async function createTradeFor(signal: SignalRow, contractId: number, info: Deriv
   const [existing] = await db.select({ id: tradesTable.id }).from(tradesTable).where(eq(tradesTable.signalId, signal.id)).limit(1);
   if (existing) return;
   const buy = info?.buyPrice ?? stake ?? 0;
+  // Deriv's contract list carries no entry spot, and the buy price is the
+  // stake, not a price. The signal's entry zone is the nearest real price.
+  const zone = (Number(signal.entryLow) + Number(signal.entryHigh)) / 2;
+  const openPrice = signal.entryLow != null && signal.entryHigh != null && Number.isFinite(zone) && zone > 0 ? zone : null;
   await db.insert(tradesTable).values({
     signalId: signal.id, accountId, symbol: signal.symbol, direction: signal.direction,
-    openPrice: String(buy), lotSize: String(stake ?? buy),
+    openPrice: String(openPrice ?? buy), lotSize: String(stake ?? buy),
     stopLoss: signal.stopLevel, takeProfit: signal.target1Level,
     status: "open", strategy: signal.strategy,
     // The hold limit and the free-balance arithmetic both count from the
@@ -76,12 +89,13 @@ async function createTradeFor(signal: SignalRow, contractId: number, info: Deriv
     reasonChain: signal.reasoning ?? "Recovered by reconciler",
     annotations: JSON.stringify({
       contractId, recoveredByReconciler: true, confidence: signal.confidence,
+      openPriceSource: openPrice != null ? "signal_entry_zone" : "contract_buy_price",
       // Unknown when Deriv doesn't echo contract_type back (or wasn't fetched):
       // the max-hold-time safety net then can't tell this is a multiplier
       // position and won't force-close it. Manual close is still available.
       ...(info?.contractType ? { contractType: info.contractType } : {}),
     }),
-  });
+  }).onConflictDoNothing();
 }
 
 function matches(signal: SignalRow, claim: ReturnType<typeof parseClaim>, c: DerivContractInfo, used: Set<number>): boolean {
@@ -134,6 +148,13 @@ export async function reconcileOnce(): Promise<{ resolved: number; pending: numb
       pollOk = true;
       const hit = list.find((c) => matches(signal, claim, c, used));
       if (hit) { matched = { conn, info: hit }; break; }
+    }
+    if (matched && matched.conn.accountId == null) {
+      // The contract exists on Deriv, but its connection has no linked account
+      // yet (the balance sync links it). Wait; never declare it "not placed".
+      pending++;
+      logger.warn({ signalId: signal.id, contractId: matched.info.contractId }, "reconciler: contract found but its connection has no linked account yet");
+      continue;
     }
     if (matched && matched.conn.accountId != null) {
       used.add(matched.info.contractId);

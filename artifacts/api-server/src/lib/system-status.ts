@@ -1,4 +1,4 @@
-import { desc, eq, sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { botConfigTable, brokerConnectionsTable, candlesTable, db } from "@workspace/db";
 import { getCandleFeederStatus } from "./candle-feeder.js";
 import { getWorkerStatus } from "./signal-worker.js";

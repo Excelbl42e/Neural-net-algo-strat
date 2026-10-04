@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import { eq, desc, and, inArray, sql } from "drizzle-orm";
-import { db, tradesTable, brokerConnectionsTable } from "@workspace/db";
+import { db, tradesTable, brokerConnectionsTable, signalsTable } from "@workspace/db";
 import {
   CreateTradeBody,
   UpdateTradeBody,
@@ -128,16 +128,36 @@ router.delete("/trades/:id", async (req, res): Promise<void> => {
     res.status(400).json({ error: params.error.message });
     return;
   }
-  const [deleted] = await db
-    .delete(tradesTable)
-    .where(eq(tradesTable.id, params.data.id))
-    .returning({ id: tradesTable.id });
-  if (!deleted) {
+  const [trade] = await db.select().from(tradesTable).where(eq(tradesTable.id, params.data.id));
+  if (!trade) {
     res.status(404).json({ error: "Trade not found" });
     return;
   }
+  // An open broker position is never deleted (see bulk-delete below): close it first.
+  if (trade.status === "open" && getContractId(trade.annotations) !== null) {
+    res.status(400).json({ error: "This position is open at Deriv. Close it first; deleting the row would leave it open with nothing tracking it." });
+    return;
+  }
+  await deleteTradesWithSignals([trade.id]);
   res.status(204).end();
 });
+
+/**
+ * Deletes trades and the executed signals they came from. A signal marked
+ * executed with no trade row reads as a placed order whose trade was never
+ * written, and that locks all new orders until the reconciler links it, which
+ * it never can for a trade the owner deleted. So the signal goes too.
+ */
+async function deleteTradesWithSignals(ids: number[]): Promise<void> {
+  if (ids.length === 0) return;
+  await db.transaction(async (tx) => {
+    const deleted = await tx.delete(tradesTable).where(inArray(tradesTable.id, ids)).returning({ signalId: tradesTable.signalId });
+    const signalIds = deleted.map((d) => d.signalId).filter((id): id is number => id != null);
+    if (signalIds.length > 0) {
+      await tx.delete(signalsTable).where(and(inArray(signalsTable.id, signalIds), eq(signalsTable.executionStatus, "executed")));
+    }
+  });
+}
 
 // Manual safety valve: sell an open multiplier position at market now.
 // Evidence label: code review only — sellDerivTrade has not been exercised
@@ -227,9 +247,7 @@ router.post("/trades/bulk-delete", async (req, res): Promise<void> => {
     .from(tradesTable)
     .where(eq(tradesTable.status, "closed"));
   const ids = rows.map((r) => r.id);
-  if (ids.length > 0) {
-    await db.delete(tradesTable).where(inArray(tradesTable.id, ids));
-  }
+  await deleteTradesWithSignals(ids);
   res.json({
     deleted: ids.length,
     openKept,

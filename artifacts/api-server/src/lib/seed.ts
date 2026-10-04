@@ -18,7 +18,7 @@ export async function seedDefaults(): Promise<void> {
   if (!existing) {
     await db.insert(botConfigTable).values({
       id: 1, enabled: false, autotradeMode: "off", riskPerTradePct: "5", maxConcurrentPositions: 14,
-      maxDailyLossPct: "5", minConfidence: "0.50", allowedInstruments: "", killzones: "",
+      maxDailyLossPct: "5", minConfidence: "0.50", allowedInstruments: "", killzones: "london,newyork", cotVeto: true,
     }).onConflictDoNothing();
     logger.info("Created disabled bot configuration; no sample trading data was seeded");
   }

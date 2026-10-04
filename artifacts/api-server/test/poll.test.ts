@@ -89,12 +89,17 @@ test("every strategy has a tested timeframe, and the poll runs end to end on all
   assert.equal(r.buy + r.sell + r.abstain, 60);
 });
 
-test("history pages join up: no hole between the first request and the older pages", () => {
-  const now = 1_790_000_000, g = 3600;
-  const ends = historyPageEnds(now, g, 3);
-  assert.deepEqual(ends, [now - 500 * g, now - 1500 * g]);
-  // The first request covers (now-500g, now]; page k covers (end-1000g, end]: each starts where the next ends.
-  assert.equal(ends[1], ends[0]! - 1000 * g);
+test("history pages join up and end on whole bars: no hole, no partial candle", () => {
+  const g = 3600, bar = (s: number) => Math.floor(s / g);
+  for (const now of [1_790_000_000, 1_790_002_800 /* on a bar boundary */]) {
+    const ends = historyPageEnds(now, g, 3);
+    // One second before a bar opens, so the page's last candle is complete.
+    assert.deepEqual(ends.map((e) => (e + 1) % g), [0, 0]);
+    // The first request's oldest bar is bar(now)-499; page 1 ends on the bar
+    // before it, page 2 on the bar before page 1's 1000.
+    assert.equal(bar(ends[0]!), bar(now) - 500);
+    assert.equal(bar(ends[1]!), bar(ends[0]!) - 1000);
+  }
 });
 
 test("strategies survive flat and degenerate series without throwing or voting on nothing", () => {

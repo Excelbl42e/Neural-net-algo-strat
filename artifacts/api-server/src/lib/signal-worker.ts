@@ -6,11 +6,10 @@
  * majority by default) a signal is written and, in an auto mode, traded at
  * market on Deriv through the dispatcher below.
  */
-import { eq, ne, sql, and, or, gte, lt, lte, isNull, desc, inArray } from "drizzle-orm";
+import { eq, ne, sql, and, gte, lte, isNull, desc, inArray } from "drizzle-orm";
 import {
   db,
   signalsTable,
-  strategiesTable,
   botConfigTable,
   brokerConnectionsTable,
   tradesTable,
@@ -18,20 +17,19 @@ import {
   accountsTable,
 } from "@workspace/db";
 
-import { getOpenAI } from "./ai-client.js";
 import { logger } from "./logger.js";
 import { placeDerivTrade, getContractQuote } from "./deriv.js";
 import { getLastTick, getOpenBucketRange } from "./candle-feeder.js";
 import { ALL_FOREX_INSTRUMENTS, getSyntheticSymbol, isForexCode } from "./synthetic-catalog.js";
 import {
   pollStake, worstCaseLoss,
-  planEntry, entryZoneState, MULTIPLIER_MIN_STAKE, MULTIPLIER_STOP_CAP_PCT, DEFAULT_MIN_LIMIT_ORDER_USD,
+  planEntry, entryZoneState, MULTIPLIER_STOP_CAP_PCT, DEFAULT_MIN_LIMIT_ORDER_USD,
   parseDerivLimitRejection, setupInvalidation,
 } from "./execution-risk.js";
 import { forexPreScanGate, tradingCostGate } from "./forex-readiness.js";
 import { getCotSeries, cotFadeSignal, cotVetoes } from "./cot-positioning.js";
 import { getNewsEvents } from "./news-calendar.js";
-import { claimReason, getExecutionLock } from "./reconciler.js";
+import { claimReason, claimTag, getExecutionLock } from "./reconciler.js";
 import { decryptSecret } from "./crypto.js";
 import { getSecret } from "./secrets.js";
 import { recordRejection } from "./rejections.js";
@@ -170,19 +168,23 @@ async function recordGeneratedReason(signalId: number, reason: string): Promise<
     ));
 }
 
-async function findUntrackedExecutedSignal(): Promise<number | null> {
-  const [orphan] = await db.select({ id: signalsTable.id })
-    .from(signalsTable)
-    .leftJoin(tradesTable, eq(tradesTable.signalId, signalsTable.id))
-    .where(and(eq(signalsTable.executionStatus, "executed"), isNull(tradesTable.id)))
-    .limit(1);
-  return orphan?.id ?? null;
+/**
+ * The saved autotrade mode right now. The cached one is as old as the last
+ * scan or watcher pass, and a scan dispatching several orders runs for a while:
+ * Autotrade Off must stop the very next order, not the one after the scan.
+ */
+async function savedMode(): Promise<"auto_demo" | "auto_live" | null> {
+  const [c] = await db.select({ enabled: botConfigTable.enabled, mode: botConfigTable.autotradeMode })
+    .from(botConfigTable).where(eq(botConfigTable.id, 1));
+  return c?.enabled && (c.mode === "auto_demo" || c.mode === "auto_live") ? c.mode : null;
 }
 
 function preBuyRetryCount(reason: string | null): number {
   const match = reason?.match(/^Pre-buy retry (\d+)\/2:/);
   return match ? Number(match[1]) : 0;
 }
+/** Pre-buy retries per signal. The count in the reason alone was lost whenever another reason overwrote it. */
+const preBuyRetries = new Map<number, number>();
 
 interface SignalRow {
   id?: number;
@@ -338,7 +340,8 @@ async function dispatchTradeUnlocked(
     await recordGeneratedReason(signal.id, "Autotrade mode is off");
     return;
   }
-  const wantEnv = activeMode === "auto_live" ? "real" : "demo";
+  const dispatchMode = activeMode;
+  const wantEnv = dispatchMode === "auto_live" ? "real" : "demo";
   if (activeMode === "auto_live") {
     // auto_live requires one recorded, passed demo self-test.
     let passed = false;
@@ -643,10 +646,17 @@ async function dispatchTradeUnlocked(
     "Dispatching trade to Deriv",
   );
 
+  if ((await savedMode()) !== dispatchMode) {
+    await recordGeneratedReason(signal.id, "Autotrade mode changed just before the order; not sent");
+    logger.info({ signalId: signal.id, symbol: signal.symbol }, "Autotrade mode changed before the claim; order not sent");
+    return;
+  }
+
+  const claimedAt = Date.now();
   const [claim] = await db.update(signalsTable)
     .set({
       executionStatus: "awaiting_broker",
-      executionReason: claimReason(stakeAmount, conn.id),
+      executionReason: claimReason(stakeAmount, conn.id, claimedAt),
       contractId: null,
     })
     .where(and(
@@ -686,7 +696,8 @@ async function dispatchTradeUnlocked(
   if (!result.ok) {
     if (result.ambiguous) {
       logger.warn("Execution state unresolved; the reconciler will resolve it against Deriv");
-      const reason = result.message ?? "Deriv buy outcome is ambiguous";
+      // Keep the claim tag: it is what the reconciler finds the contract by.
+      const reason = `${result.message ?? "Deriv buy outcome is ambiguous"} ${claimTag(stakeAmount, conn.id, claimedAt)}`;
       const transitioned = await transitionSignalExecution(
         signal.id,
         "awaiting_broker",
@@ -701,7 +712,9 @@ async function dispatchTradeUnlocked(
       return;
     }
     if (result.retryable) {
-      const previousRetries = preBuyRetryCount(signal.executionReason);
+      const previousRetries = Math.max(preBuyRetries.get(signal.id) ?? 0, preBuyRetryCount(signal.executionReason));
+      if (preBuyRetries.size > 500) preBuyRetries.clear();
+      preBuyRetries.set(signal.id, previousRetries + 1);
       if (previousRetries < 2) {
         const reason = `Pre-buy retry ${previousRetries + 1}/2: ${result.message ?? "Transient broker failure before order submission"}`;
         const transitioned = await transitionSignalExecution(signal.id, "awaiting_broker", "generated", reason);
@@ -816,7 +829,7 @@ async function dispatchTradeUnlocked(
         tradeWritten = true;
         break;
       }
-      await db.insert(tradesTable).values(tradePayload);
+      await db.insert(tradesTable).values(tradePayload).onConflictDoNothing();
       tradeWritten = true;
       break;
     } catch (dbErr) {

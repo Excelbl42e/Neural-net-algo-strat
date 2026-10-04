@@ -123,7 +123,7 @@ export default function ConfigurationPage() {
       maxDailyLossPct: 5,
       minConfidence: 0.5,
       allowedInstruments: "",
-      killzones: "",
+      killzones: "london,newyork",
       notes: "",
     },
   });
@@ -520,7 +520,7 @@ export default function ConfigurationPage() {
                 <FormItem>
                   <FormLabel>Killzone sessions</FormLabel>
                   <FormControl><Input placeholder="london,newyork" {...field} data-testid="input-killzones" /></FormControl>
-                  <FormDescription className="text-[11px]">Comma-separated: asian, london, newyork. Blank allows any open-market hour. Signals are only generated while one of the listed sessions is active (UTC).</FormDescription>
+                  <FormDescription className="text-[11px]">Comma-separated: asian (00-09 UTC), london (07-16), newyork (12-21). New trades open only while a listed session is active. london,newyork (07:00-21:00 UTC) is what every backtest used; blank allows every hour, which lost money in the backtest.</FormDescription>
                   <FormMessage />
                 </FormItem>
               )} />

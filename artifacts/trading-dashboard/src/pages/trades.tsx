@@ -46,6 +46,12 @@ const tradeFormSchema = z.object({
 
 type TradeForm = z.infer<typeof tradeFormSchema>;
 
+/** An open row with a Deriv contract is a live position: it is closed, never deleted. */
+function isLiveBrokerPosition(trade: { status: string; annotations?: string | null }): boolean {
+  if (trade.status !== "open" || !trade.annotations) return false;
+  try { return typeof JSON.parse(trade.annotations)?.contractId === "number"; } catch { return false; }
+}
+
 export default function TradesPage() {
   const [open, setOpen] = useState(false);
   const [expandedId, setExpandedId] = useState<number | null>(null);
@@ -291,7 +297,7 @@ export default function TradesPage() {
                             </button>
                           )
                         )}
-                        {confirmDeleteId === trade.id ? (
+                        {isLiveBrokerPosition(trade) ? null : confirmDeleteId === trade.id ? (
                           <div className="flex items-center gap-1 justify-center">
                             <button
                               onClick={() => handleDelete(trade.id)}
