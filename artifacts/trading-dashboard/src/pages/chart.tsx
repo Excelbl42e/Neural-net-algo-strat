@@ -1,11 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   createChart,
+  createSeriesMarkers,
   CandlestickSeries,
   CrosshairMode,
   type IChartApi,
   type ISeriesApi,
   type IPriceLine,
+  type ISeriesMarkersPluginApi,
+  type SeriesMarker,
   type Time,
 } from "lightweight-charts";
 import {
@@ -13,10 +16,12 @@ import {
   useGetCandleFeederStatus,
   useListSignals,
   useListSymbols,
+  useListTrades,
   getListCandlesQueryKey,
   getGetCandleFeederStatusQueryKey,
   getListSignalsQueryKey,
   getListSymbolsQueryKey,
+  getListTradesQueryKey,
   type Signal,
   type SyntheticSymbol,
 } from "@workspace/api-client-react";
@@ -37,6 +42,14 @@ interface LevelDrawing {
   high: number;
   label?: string;
 }
+
+/** An open position as the chart draws it: prices as numbers (the API sends numeric columns as text). */
+interface OpenTradeLevels { id: number; direction: string; entry: number; stop: number | null; target: number | null; openedAt: number; stake: number }
+
+const toNum = (v: unknown): number | null => {
+  const n = typeof v === "number" ? v : typeof v === "string" && v.trim() !== "" ? Number(v) : NaN;
+  return Number.isFinite(n) && n > 0 ? n : null;
+};
 
 function parseLevels(raw: string | null | undefined): LevelDrawing[] {
   if (!raw) return [];
@@ -68,6 +81,19 @@ export default function ChartPage() {
     signalsParams,
     { query: { queryKey: getListSignalsQueryKey(signalsParams), refetchInterval: 5000 } }
   );
+
+  const tradesParams = { status: "open" as const, symbol };
+  const { data: openTradesRaw } = useListTrades(
+    tradesParams,
+    { query: { queryKey: getListTradesQueryKey(tradesParams), refetchInterval: 5000 } }
+  );
+  // Open positions on this pair, with the stop and target actually sent to Deriv.
+  const openTrades = useMemo<OpenTradeLevels[]>(() => (openTradesRaw ?? []).flatMap((t) => {
+    const entry = toNum(t.openPrice);
+    const openedAt = Date.parse(t.openedAt);
+    if (entry == null || !Number.isFinite(openedAt) || t.symbol.toLowerCase() !== symbol.toLowerCase()) return [];
+    return [{ id: t.id, direction: t.direction, entry, stop: toNum(t.stopLoss), target: toNum(t.takeProfit), openedAt, stake: toNum(t.lotSize) ?? 0 }];
+  }), [openTradesRaw, symbol]);
 
   const signalsForSymbol = useMemo(
     // Case-insensitive compare so frxEURUSD and FRXEURUSD both match.
@@ -192,10 +218,28 @@ export default function ChartPage() {
               livePrice={isLive && lastTick ? lastTick.price : null}
               candles={liveCandles}
               signals={signalsForSymbol}
+              trades={openTrades}
             />
           )}
         </CardContent>
       </Card>
+
+      {openTrades.length > 0 && (
+        <Card>
+          <CardContent className="p-4 space-y-2" data-testid="chart-open-trades">
+            <div className="text-[10px] uppercase tracking-widest text-muted-foreground">Open positions on {currentSymbolDisplay} (drawn on the chart)</div>
+            {openTrades.map((t) => (
+              <div key={t.id} className="flex flex-wrap gap-x-4 gap-y-1 font-mono-numbers text-xs">
+                <span className={t.direction === "buy" ? "text-green-500" : "text-red-500"}>#{t.id} {t.direction.toUpperCase()} ${t.stake.toFixed(2)}</span>
+                <span>entry {t.entry}</span>
+                <span className="text-red-400">stop {t.stop ?? "---"}</span>
+                <span className="text-blue-400">target {t.target ?? "---"}</span>
+                <span className="text-muted-foreground">opened {new Date(t.openedAt).toISOString().slice(0, 16).replace("T", " ")} UTC</span>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
 
       {/* Active signals legend */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -244,9 +288,11 @@ function EmptyChart({ connected, symbol }: { connected?: boolean; symbol: string
 
 interface CandlePoint { time: number; open: number; high: number; low: number; close: number; volume?: number | null }
 
-function ChartCanvas({ candles, signals, symbol, viewKey, livePrice }: {
+function ChartCanvas({ candles, signals, trades, symbol, viewKey, livePrice }: {
   candles: CandlePoint[];
   signals: Signal[];
+  /** Open positions on this pair: entry, stop and target lines plus an arrow where each opened. */
+  trades: OpenTradeLevels[];
   symbol: string;
   /** Changes when the pair or timeframe changes; the view is refitted only then, not on every live refresh. */
   viewKey: string;
@@ -259,6 +305,7 @@ function ChartCanvas({ candles, signals, symbol, viewKey, livePrice }: {
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const priceLinesRef = useRef<IPriceLine[]>([]);
+  const markersRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
 
   // Chart init
   useEffect(() => {
@@ -305,6 +352,7 @@ function ChartCanvas({ candles, signals, symbol, viewKey, livePrice }: {
     });
     chartRef.current = chart;
     seriesRef.current = series;
+    markersRef.current = createSeriesMarkers(series, []);
 
     const ro = new ResizeObserver(() => chart.applyOptions({ width: el.clientWidth, height: el.clientHeight }));
     ro.observe(el);
@@ -313,6 +361,7 @@ function ChartCanvas({ candles, signals, symbol, viewKey, livePrice }: {
       chart.remove();
       chartRef.current = null;
       seriesRef.current = null;
+      markersRef.current = null;
       priceLinesRef.current = [];
     };
   }, []);
@@ -351,7 +400,39 @@ function ChartCanvas({ candles, signals, symbol, viewKey, livePrice }: {
     priceLinesRef.current = [];
 
     const newLines: IPriceLine[] = [];
-    const markers: { time: Time; position: "aboveBar" | "belowBar"; color: string; shape: "arrowUp" | "arrowDown"; text: string }[] = [];
+    const markers: SeriesMarker<Time>[] = [];
+
+    for (const t of trades) {
+      const buy = t.direction === "buy";
+      const color = buy ? "#22c55e" : "#ef4444";
+      newLines.push(series.createPriceLine({
+        price: t.entry, color, lineWidth: 2, lineStyle: 0,
+        axisLabelVisible: true, title: `#${t.id} ${buy ? "BUY" : "SELL"}`,
+      }));
+      if (t.stop != null) {
+        newLines.push(series.createPriceLine({
+          price: t.stop, color: "#ef4444", lineWidth: 1, lineStyle: 2,
+          axisLabelVisible: true, title: `#${t.id} STOP`,
+        }));
+      }
+      if (t.target != null) {
+        newLines.push(series.createPriceLine({
+          price: t.target, color: "#3b82f6", lineWidth: 1, lineStyle: 2,
+          axisLabelVisible: true, title: `#${t.id} TP`,
+        }));
+      }
+      const openedSec = Math.floor(t.openedAt / 1000);
+      const bar = candles.findLast?.((c) => c.time <= openedSec);
+      if (bar) {
+        markers.push({
+          time: bar.time as Time,
+          position: buy ? "belowBar" : "aboveBar",
+          color,
+          shape: buy ? "arrowUp" : "arrowDown",
+          text: `#${t.id} ${buy ? "BUY" : "SELL"}`,
+        });
+      }
+    }
 
     for (const s of signals) {
       const dirColor = s.direction === "buy" ? "#22c55e" : "#ef4444";
@@ -413,10 +494,10 @@ function ChartCanvas({ candles, signals, symbol, viewKey, livePrice }: {
       }));
     }
     priceLinesRef.current = newLines;
-    type MarkerSetter = { setMarkers?: (m: typeof markers) => void };
-    const seriesAny = series as unknown as MarkerSetter;
-    if (typeof seriesAny.setMarkers === "function") seriesAny.setMarkers(markers);
-  }, [signals, candles, livePrice]);
+    // Markers must be in time order.
+    markers.sort((a, b) => (a.time as number) - (b.time as number));
+    markersRef.current?.setMarkers(markers);
+  }, [signals, trades, candles, livePrice]);
 
   // SVG overlay: draws human-style trader analysis — filled FVG / OB / Sweep boxes
   // and shaded entry / stop / target zones extending from the signal time forward.

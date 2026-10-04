@@ -1,5 +1,34 @@
 # Changes in this build (vs. your Replit export)
 
+## Chart: open positions drawn with their stop and take-profit
+
+The chart drew entry/stop/target lines only for signals still waiting to trade, and the bot trades a vote at once, so the lines vanished as soon as a position opened. Now every open trade on the pair shown gets:
+- a solid entry line (`#id BUY` / `#id SELL`);
+- the stop actually sent to Deriv (`#id STOP`, red dashed);
+- the take-profit (`#id TP`, blue dashed);
+- an arrow on the candle where it opened.
+
+A card under the chart lists them. The lines go when the trade closes. Refreshes every 5 seconds.
+
+Also fixed: the buy/sell arrows were never drawn. The code called `series.setMarkers`, which Lightweight Charts v5 removed; it now uses `createSeriesMarkers`.
+
+Checked in Chromium against a local server with an open EUR/USD trade, at desktop and phone width: lines, labels and arrow drawn; no page errors. Dashboard typecheck and build pass.
+
+## Research: Monday-only trading in the Asian session (no bot changes)
+
+The owner trades Monday only, every vote until one stake is left. Which "Killzone sessions" choice suits that? `research/backtest/r-asian.mts` uses the live poll, the COT veto and the live rule that a poll waits for the H1 and H4 candles that just closed. After the weekend the first H4 candle closes Monday 04:00 UTC, so on Mondays nothing opens before 04:00, whatever the field says.
+
+$10 every Monday, Monday-only entries, closed or valued Friday 21:00 UTC, 46 weeks:
+
+| Killzone sessions | Withdrawn | Weeks up | Per $1 stake, Nov–Jun / Jul–Oct |
+|---|---|---|---|
+| london,newyork (07–21, the default now) | **+$28.35** | 59% | +0.074 / +0.123 |
+| asian (00–09) | +$0.08 | 41% | −0.050 / +0.103 |
+| asian,london,newyork (00–21) | +$14.14 | 59% | +0.014 / +0.122 |
+| blank (every hour) | +$13.88 | 54% | +0.014 / +0.108 |
+
+Monday votes at 04:00–06:00 UTC (159 trades) lose −$0.036 per $1, and they take the pair before the better London votes. The model charges 6 bps commission outside 07–20 UTC. That figure was seen late in the day; the Asian hours were not measured. At 2 bps, Asian Monday trades would make +$0.029 per $1, still a third of London/New York's +$0.089.
+
 ## Whole-codebase audit: entry hours, order bookkeeping, candle history
 
 ### New trades only 07:00–21:00 UTC (London + New York), as backtested
