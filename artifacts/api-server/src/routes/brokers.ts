@@ -78,7 +78,13 @@ router.patch("/brokers/connections/:id", async (req, res): Promise<void> => {
     res.status(404).json({ error: "Not found" });
     return;
   }
-  const environment = parsed.data.environment ?? existing.environment;
+  // The linked account, its balance and its trades belong to the environment
+  // the connection was made for; switching it would file one under the other.
+  if (parsed.data.environment && parsed.data.environment !== existing.environment) {
+    res.status(400).json({ error: "A connection's environment cannot be changed. Add a new connection for the other environment instead." });
+    return;
+  }
+  const environment = existing.environment;
   const enabled = parsed.data.enabled ?? existing.enabled;
   if (enabled) {
     const authorization = await authorizeDerivAccount(parsed.data.credential?.trim() ?? await decryptSecret(existing.credential), environment);
@@ -89,7 +95,8 @@ router.patch("/brokers/connections/:id", async (req, res): Promise<void> => {
       return;
     }
   }
-  const patch = { ...parsed.data, ...(parsed.data.credential ? { credential: await encryptSecret(parsed.data.credential.trim()) } : {}) };
+  // A new token may reach a different balance: wait for a fresh sync before sizing anything.
+  const patch = { ...parsed.data, ...(parsed.data.credential ? { credential: await encryptSecret(parsed.data.credential.trim()), lastSyncAt: null } : {}) };
   const [updated] = await db
     .update(brokerConnectionsTable)
     .set(patch)
@@ -150,6 +157,8 @@ router.post("/brokers/connections/:id/sync", async (req, res): Promise<void> => 
     .where(eq(brokerConnectionsTable.id, conn.id));
 
   const plainToken = await decryptSecret(conn.credential);
+  // Stakes opened while the request is in flight count from its start (see balance-sync).
+  const requestedAt = new Date();
   const result = await syncDerivAccount(plainToken, conn.environment);
 
   if (!result.ok) {
@@ -213,7 +222,7 @@ router.post("/brokers/connections/:id/sync", async (req, res): Promise<void> => 
     .update(brokerConnectionsTable)
     .set({
       status: "connected",
-      lastSyncAt: new Date(),
+      lastSyncAt: requestedAt,
       lastError: null,
       accountId: linkedAccountId,
     })

@@ -31,7 +31,7 @@ const DEFAULTS = {
   maxDailyLossPct: 5,
   minConfidence: 0.5,
   allowedInstruments: "",
-  killzones: "",
+  killzones: "london,newyork",
   notes: null as string | null,
 };
 

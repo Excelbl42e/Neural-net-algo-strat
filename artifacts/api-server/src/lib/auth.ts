@@ -1,6 +1,5 @@
 import { createHmac, randomBytes, scrypt as scryptCb, timingSafeEqual } from "node:crypto";
 import { promisify } from "node:util";
-import { eq } from "drizzle-orm";
 import { db, appOwnerTable } from "@workspace/db";
 import { getOrCreateSecret, setSecret } from "./secrets.js";
 

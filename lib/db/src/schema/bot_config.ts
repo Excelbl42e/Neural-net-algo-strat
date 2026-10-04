@@ -11,7 +11,7 @@ export const botConfigTable = pgTable("bot_config", {
   maxDailyLossPct: numeric("max_daily_loss_pct", { precision: 5, scale: 2 }).notNull().default("5.00"),
   minConfidence: numeric("min_confidence", { precision: 4, scale: 3 }).notNull().default("0.500"),
   allowedInstruments: text("allowed_instruments").notNull().default(""),
-  killzones: text("killzones").notNull().default(""),
+  killzones: text("killzones").notNull().default("london,newyork"),
   smallAccountMaxRiskPct: numeric("small_account_max_risk_pct", { precision: 5, scale: 2 }).notNull().default("10.00"),
   minRiskReward: numeric("min_risk_reward", { precision: 5, scale: 2 }).notNull().default("1.50"),
   atrPercentileMin: numeric("atr_percentile_min", { precision: 5, scale: 2 }).notNull().default("15.00"),

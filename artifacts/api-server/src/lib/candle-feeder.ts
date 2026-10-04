@@ -98,7 +98,6 @@ function isPermanentSymbolError(error: { message?: string; code?: string }): boo
 // Do not reuse it for account authorization or trading.
 const DERIV_PUBLIC_WS_URL = "wss://api.derivws.com/trading/v1/options/ws/public";
 
-interface BucketKey { symbol: string; tf: string; bucket: number }
 interface OHLC { open: number; high: number; low: number; close: number; ticks: number }
 
 class CandleFeeder {
@@ -442,10 +441,23 @@ class CandleFeeder {
         low: String(c.low),
         close: String(c.close),
       }));
+      // Closed bars take Deriv's values: a page that used to end mid-bar left a
+      // partial candle stored as complete, and this repairs it on the next
+      // backfill. Only rows that differ are written. The current bar is the
+      // live feeder's and is left alone.
+      const closed = inserts.filter((c) => c.openTime.getTime() / 1000 < currentBucket);
+      const current = inserts.filter((c) => c.openTime.getTime() / 1000 >= currentBucket);
+      const differs = sql`(${candlesTable.open}, ${candlesTable.high}, ${candlesTable.low}, ${candlesTable.close})
+        IS DISTINCT FROM (excluded.open, excluded.high, excluded.low, excluded.close)`;
       if (inserts.length > 0) {
-        db.insert(candlesTable)
-          .values(inserts)
-          .onConflictDoNothing()
+        Promise.all([
+          closed.length > 0 ? db.insert(candlesTable).values(closed).onConflictDoUpdate({
+            target: [candlesTable.symbol, candlesTable.timeframe, candlesTable.openTime],
+            set: { open: sql`excluded.open`, high: sql`excluded.high`, low: sql`excluded.low`, close: sql`excluded.close` },
+            setWhere: differs,
+          }) : null,
+          current.length > 0 ? db.insert(candlesTable).values(current).onConflictDoNothing() : null,
+        ])
           .then(() => {
             logger.info(
               { symbol, tf, count: inserts.length },

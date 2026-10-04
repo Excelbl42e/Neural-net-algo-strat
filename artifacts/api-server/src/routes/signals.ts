@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { eq, desc, and } from "drizzle-orm";
+import { eq, desc, and, sql } from "drizzle-orm";
 import { db, signalsTable, type Signal } from "@workspace/db";
 import {
   CreateSignalBody,
@@ -32,6 +32,8 @@ function serializeSignal(s: Signal) {
   };
 }
 
+const SIGNAL_LIST_LIMIT = 1000;
+
 router.get("/signals", async (req, res): Promise<void> => {
   const query = ListSignalsQueryParams.safeParse(req.query);
   if (!query.success) {
@@ -42,6 +44,11 @@ router.get("/signals", async (req, res): Promise<void> => {
   const conditions = [];
   if (status) conditions.push(eq(signalsTable.status, status));
   if (symbol) conditions.push(eq(signalsTable.symbol, symbol));
+  // The poll writes a signal on about one bar in five per pair, and three pages
+  // refetch this list every 10s: the newest 1,000, plus every signal a trade
+  // row links to (the Trades page shows each trade's signal).
+  conditions.push(sql`(${signalsTable.id} IN (SELECT id FROM signals ORDER BY created_at DESC LIMIT ${SIGNAL_LIST_LIMIT})
+    OR ${signalsTable.id} IN (SELECT signal_id FROM trades WHERE signal_id IS NOT NULL))`);
 
   const signals = await db
     .select()
@@ -109,14 +116,19 @@ router.delete("/signals/:id", async (req, res): Promise<void> => {
     res.status(400).json({ error: params.error.message });
     return;
   }
-  const result = await db
-    .delete(signalsTable)
-    .where(eq(signalsTable.id, params.data.id))
-    .returning();
-  if (result.length === 0) {
+  const [signal] = await db.select({ executionStatus: signalsTable.executionStatus })
+    .from(signalsTable).where(eq(signalsTable.id, params.data.id));
+  if (!signal) {
     res.status(404).json({ error: "Signal not found" });
     return;
   }
+  // An order whose outcome is still unknown may be a live Deriv position; the
+  // reconciler needs this row to find it.
+  if (signal.executionStatus === "awaiting_broker" || signal.executionStatus === "ambiguous") {
+    res.status(409).json({ error: "This signal's order is still being confirmed with Deriv; it can be deleted once that is resolved." });
+    return;
+  }
+  await db.delete(signalsTable).where(eq(signalsTable.id, params.data.id));
   res.status(204).send();
 });
 
