@@ -58,14 +58,20 @@ const { default: tradesRouter } = await import("../src/routes/trades.ts");
 const express = (await import("express")).default;
 const app = express(); app.use(express.json()); app.use(tradesRouter);
 const server = app.listen(0); const port = (server.address() as { port: number }).port;
+// account 1 has an enabled connection (tracked); account 5 has none (an old, removed connection)
+await db.update(brokerConnectionsTable).set({ accountId: 1, enabled: true }).where(eq(brokerConnectionsTable.id, c!.id));
 const openLive = await db.insert(tradesTable).values({ ...row, signalId: null, status: "open", annotations: JSON.stringify({ contractId: 99 }) }).returning();
+const stale = await db.insert(tradesTable).values({ ...row, accountId: 5, signalId: null, status: "open", annotations: JSON.stringify({ contractId: 98 }) }).returning();
 assert.equal((await fetch(`http://127.0.0.1:${port}/trades/${openLive[0]!.id}`, { method: "DELETE" })).status, 400);
 const bulk = await (await fetch(`http://127.0.0.1:${port}/trades/bulk-delete`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ status: "closed" }) })).json() as { deleted: number; openKept: number };
-assert.equal(bulk.deleted, 1); assert.equal(bulk.openKept, 1);
+assert.equal(bulk.deleted, 2); assert.equal(bulk.openKept, 1); // the closed row and the untracked open row
+assert.equal((await db.select().from(tradesTable).where(eq(tradesTable.id, stale[0]!.id))).length, 0);
+await db.update(brokerConnectionsTable).set({ enabled: false }).where(eq(brokerConnectionsTable.id, c!.id));
+assert.equal((await fetch(`http://127.0.0.1:${port}/trades/${openLive[0]!.id}`, { method: "DELETE" })).status, 204); // untracked now
 assert.equal((await db.select().from(signalsTable).where(eq(signalsTable.id, ex!.id))).length, 0);
 assert.equal((await getExecutionLock()).locked, false);
-server.close(); await db.delete(tradesTable).where(eq(tradesTable.id, openLive[0]!.id));
-console.log("PASS trade deletes: live position refused; cleared trades leave no orphan lock");
+server.close();
+console.log("PASS trade deletes: tracked live position refused; untracked open rows and cleared trades go, no orphan lock");
 
 // 2e. entry hours: a blank killzones field became London + New York (07:00-21:00 UTC)
 await db.update(botConfigTable).set({ killzones: "" }).where(eq(botConfigTable.id, 1));

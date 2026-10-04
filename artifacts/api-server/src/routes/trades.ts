@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { eq, desc, and, inArray, sql } from "drizzle-orm";
+import { eq, desc, and, inArray } from "drizzle-orm";
 import { db, tradesTable, brokerConnectionsTable, signalsTable } from "@workspace/db";
 import {
   CreateTradeBody,
@@ -133,14 +133,26 @@ router.delete("/trades/:id", async (req, res): Promise<void> => {
     res.status(404).json({ error: "Trade not found" });
     return;
   }
-  // An open broker position is never deleted (see bulk-delete below): close it first.
-  if (trade.status === "open" && getContractId(trade.annotations) !== null) {
-    res.status(400).json({ error: "This position is open at Deriv. Close it first; deleting the row would leave it open with nothing tracking it." });
+  // An open position the bot is tracking is never deleted (see bulk-delete below): close it first.
+  if (trade.status === "open" && getContractId(trade.annotations) !== null && (await trackedAccountIds()).has(trade.accountId)) {
+    res.status(400).json({ error: "This position is open at Deriv and the bot is tracking it. Close it first; deleting the row would leave it open with nothing tracking it." });
     return;
   }
   await deleteTradesWithSignals([trade.id]);
   res.status(204).end();
 });
+
+/**
+ * Accounts with an enabled broker connection: the contract monitor checks the
+ * open trades of these, and only these. An open row on any other account (its
+ * connection removed or switched off) is never settled or closed by the bot,
+ * so it reads "open" forever whatever happened at Deriv; it can be deleted.
+ */
+async function trackedAccountIds(): Promise<Set<number>> {
+  const conns = await db.select({ accountId: brokerConnectionsTable.accountId })
+    .from(brokerConnectionsTable).where(eq(brokerConnectionsTable.enabled, true));
+  return new Set(conns.map((c) => c.accountId).filter((id): id is number => id != null));
+}
 
 /**
  * Deletes trades and the executed signals they came from. A signal marked
@@ -236,24 +248,24 @@ router.post("/trades/bulk-delete", async (req, res): Promise<void> => {
     res.status(400).json({ error: `Only closed trades can be deleted (got status "${status}")`, deleted: 0 });
     return;
   }
-  const [openRow] = await db
-    .select({ n: sql<number>`count(*)::int` })
-    .from(tradesTable)
-    .where(eq(tradesTable.status, "open"));
-  const openKept = openRow?.n ?? 0;
-
+  // Closed rows, plus open rows nothing tracks (see trackedAccountIds).
+  const tracked = await trackedAccountIds();
   const rows = await db
-    .select({ id: tradesTable.id })
+    .select({ id: tradesTable.id, status: tradesTable.status, accountId: tradesTable.accountId })
     .from(tradesTable)
-    .where(eq(tradesTable.status, "closed"));
-  const ids = rows.map((r) => r.id);
+    .where(inArray(tradesTable.status, ["open", "closed"]));
+  const isUntrackedOpen = (r: { status: string; accountId: number }) => r.status === "open" && !tracked.has(r.accountId);
+  const ids = rows.filter((r) => r.status === "closed" || isUntrackedOpen(r)).map((r) => r.id);
+  const untracked = rows.filter(isUntrackedOpen).length;
+  const openKept = rows.filter((r) => r.status === "open").length - untracked;
   await deleteTradesWithSignals(ids);
+  const what = `Deleted ${ids.length - untracked} closed trade(s)${untracked > 0 ? ` and ${untracked} untracked open row(s) (their account has no enabled broker connection)` : ""}.`;
   res.json({
     deleted: ids.length,
     openKept,
     message: openKept > 0
-      ? `Deleted ${ids.length} closed trade(s). ${openKept} open position(s) were kept — deleting those would leave real money open at Deriv with nothing tracking it. Close them first.`
-      : `Deleted ${ids.length} closed trade(s).`,
+      ? `${what} ${openKept} open position(s) the bot is tracking were kept. Close them first.`
+      : what,
   });
 });
 
