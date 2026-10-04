@@ -1,5 +1,19 @@
 # Changes in this build (vs. your Replit export)
 
+## Chart: open positions drawn with their stop and take-profit
+
+The chart drew entry/stop/target lines only for signals still waiting to trade, and the bot trades a vote at once, so the lines vanished as soon as a position opened. Now every open trade on the pair shown gets:
+- a solid entry line (`#id BUY` / `#id SELL`);
+- the stop actually sent to Deriv (`#id STOP`, red dashed);
+- the take-profit (`#id TP`, blue dashed);
+- an arrow on the candle where it opened.
+
+A card under the chart lists them. The lines go when the trade closes. Refreshes every 5 seconds.
+
+Also fixed: the buy/sell arrows were never drawn. The code called `series.setMarkers`, which Lightweight Charts v5 removed; it now uses `createSeriesMarkers`.
+
+Checked in Chromium against a local server with an open EUR/USD trade, at desktop and phone width: lines, labels and arrow drawn; no page errors. Dashboard typecheck and build pass.
+
 ## Research: Monday-only trading in the Asian session (no bot changes)
 
 The owner trades Monday only, every vote until one stake is left. Which "Killzone sessions" choice suits that? `research/backtest/r-asian.mts` uses the live poll, the COT veto and the live rule that a poll waits for the H1 and H4 candles that just closed. After the weekend the first H4 candle closes Monday 04:00 UTC, so on Mondays nothing opens before 04:00, whatever the field says.
