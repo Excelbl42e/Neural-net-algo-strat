@@ -1,5 +1,16 @@
 # Changes in this build (vs. your Replit export)
 
+## Fix: open rows from a removed broker connection could not be cleared
+
+The owner's Trades page showed open rows on the old demo account (#2). That account has no enabled broker connection. The contract monitor checks only accounts with an enabled connection, so these rows can never settle and read "open" forever. Since the audit, any open row with a Deriv contract was refused for deletion. Clear History then offered "0 closed" and silently did nothing.
+
+- **Untracked rows.** An open row whose account has no enabled connection is marked **open · untracked**. It can be deleted on its own, and Clear History removes it along with the closed rows. The confirm button counts both.
+- **Tracked positions stay protected.** An open position the bot does track still can't be deleted; close it first.
+- **Feedback.** Clear History now says what it deleted, and a refused delete shows why.
+- **No effect on trading.** Position limits and one-per-pair are counted per account, so these rows never held back trading on the real account.
+
+**Checked:** the integration test covers tracked vs. untracked rows. In Chromium with three old-demo rows and one real position: all three cleared, the real one kept, and the toast reported both. API typecheck and 64 tests pass; both builds pass.
+
 ## Chart: open positions drawn with their stop and take-profit
 
 The chart drew entry/stop/target lines only for signals still waiting to trade, and the bot trades a vote at once, so the lines vanished as soon as a position opened. Now every open trade on the pair shown gets:

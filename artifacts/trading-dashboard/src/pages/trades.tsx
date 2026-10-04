@@ -8,6 +8,7 @@ import {
   useBulkDeleteTrades,
   useCloseTrade,
   useListAccounts,
+  useListBrokerConnections,
   getListTradesQueryKey,
   getListSignalsQueryKey,
   getGetDashboardOverviewQueryKey,
@@ -46,7 +47,7 @@ const tradeFormSchema = z.object({
 
 type TradeForm = z.infer<typeof tradeFormSchema>;
 
-/** An open row with a Deriv contract is a live position: it is closed, never deleted. */
+/** An open row with a Deriv contract that the bot tracks is a live position: it is closed, never deleted. */
 function isLiveBrokerPosition(trade: { status: string; annotations?: string | null }): boolean {
   if (trade.status !== "open" || !trade.annotations) return false;
   try { return typeof JSON.parse(trade.annotations)?.contractId === "number"; } catch { return false; }
@@ -62,6 +63,12 @@ export default function TradesPage() {
   const { data: trades, isLoading } = useListTrades({ limit: 200 });
   const { data: signals, isError: signalsError } = useListSignals(undefined, { query: { queryKey: getListSignalsQueryKey(), refetchInterval: 10000 } });
   const { data: accounts } = useListAccounts();
+  const { data: connections } = useListBrokerConnections();
+  // The contract monitor only checks open trades of accounts with an enabled
+  // connection. Any other open row is never settled by the bot, so it reads
+  // "open" whatever happened at Deriv, and it may be deleted.
+  const trackedAccounts = new Set((connections ?? []).filter((c) => c.enabled && c.accountId != null).map((c) => c.accountId!));
+  const isUntracked = (t: { status: string; accountId: number }) => t.status === "open" && connections != null && !trackedAccounts.has(t.accountId);
   const createTrade = useCreateTrade();
   const deleteTrade = useDeleteTrade();
   const bulkDelete = useBulkDeleteTrades();
@@ -112,7 +119,13 @@ export default function TradesPage() {
   };
 
   const handleDelete = (id: number) => {
-    deleteTrade.mutate({ id }, { onSuccess: () => { setConfirmDeleteId(null); invalidateAll(); } });
+    deleteTrade.mutate({ id }, {
+      onSuccess: () => { setConfirmDeleteId(null); invalidateAll(); },
+      onError: (err) => {
+        setConfirmDeleteId(null);
+        toast({ title: "Not deleted", description: err instanceof Error ? err.message : "Request failed", variant: "destructive" });
+      },
+    });
   };
 
   const handleClose = (id: number) => {
@@ -142,11 +155,16 @@ export default function TradesPage() {
   const handleBulkDelete = (_scope: "closed" | "all") => {
     bulkDelete.mutate(
       { data: { status: "closed" } },
-      { onSuccess: () => { setConfirmBulk(null); invalidateAll(); } }
+      {
+        onSuccess: (r) => { setConfirmBulk(null); invalidateAll(); toast({ title: "History cleared", description: (r as { message?: string }).message }); },
+        onError: (err) => { setConfirmBulk(null); toast({ title: "Not cleared", description: err instanceof Error ? err.message : "Request failed", variant: "destructive" }); },
+      }
     );
   };
 
   const closedCount = (trades ?? []).filter((t) => t.status === "closed").length;
+  const untrackedCount = (trades ?? []).filter(isUntracked).length;
+  const clearable = closedCount + untrackedCount;
 
   if (isLoading) {
     return <Skeleton className="w-full h-96 rounded-xl" />;
@@ -175,7 +193,7 @@ export default function TradesPage() {
               </Button>
             )
           )}
-          {(trades?.length ?? 0) > 0 && (
+          {clearable > 0 && (
             confirmBulk === "all" ? (
               <div className="flex items-center gap-1">
                 <button
@@ -183,7 +201,7 @@ export default function TradesPage() {
                   disabled={bulkDelete.isPending}
                   className="text-[10px] bg-destructive text-destructive-foreground px-2 py-1 rounded font-mono-numbers uppercase"
                 >
-                  {bulkDelete.isPending ? "Clearing..." : `Confirm clear ${closedCount} closed (open kept)`}
+                  {bulkDelete.isPending ? "Clearing..." : `Confirm clear ${closedCount} closed${untrackedCount > 0 ? ` + ${untrackedCount} untracked` : ""} (tracked open kept)`}
                 </button>
                 <button onClick={() => setConfirmBulk(null)} className="text-[10px] text-muted-foreground hover:text-foreground px-1 py-1 rounded">✕</button>
               </div>
@@ -263,12 +281,19 @@ export default function TradesPage() {
                         ) : "---"}
                       </TableCell>
                       <TableCell className="text-center">
-                        <Badge variant="secondary" className="uppercase text-[9px] tracking-widest">
-                          {trade.status}
-                        </Badge>
+                        {isUntracked(trade) ? (
+                          <Badge variant="outline" className="uppercase text-[9px] tracking-widest text-amber-400 border-amber-400/40"
+                            title="This account has no enabled broker connection, so the bot never checks this row and it stays open whatever happened at Deriv. Check the position in Deriv; the row can be deleted.">
+                            open · untracked
+                          </Badge>
+                        ) : (
+                          <Badge variant="secondary" className="uppercase text-[9px] tracking-widest">
+                            {trade.status}
+                          </Badge>
+                        )}
                       </TableCell>
                       <TableCell className="text-center" onClick={(e) => e.stopPropagation()}>
-                        {trade.status === "open" && (
+                        {trade.status === "open" && !isUntracked(trade) && (
                           confirmCloseId === trade.id ? (
                             <div className="flex items-center gap-1 justify-center mb-1">
                               <button
@@ -297,7 +322,7 @@ export default function TradesPage() {
                             </button>
                           )
                         )}
-                        {isLiveBrokerPosition(trade) ? null : confirmDeleteId === trade.id ? (
+                        {isLiveBrokerPosition(trade) && !isUntracked(trade) ? null : confirmDeleteId === trade.id ? (
                           <div className="flex items-center gap-1 justify-center">
                             <button
                               onClick={() => handleDelete(trade.id)}
