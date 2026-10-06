@@ -1,5 +1,55 @@
 # Changes in this build (vs. your Replit export)
 
+## Research: is there an edge, and how big? (no bot changes)
+
+Every poll result so far rested on one year of Deriv candles, the year the strategies and settings were chosen on. Longer history (`research/edge/`), from Yahoo Finance (Dukascopy and HistData are blocked here):
+- **Hourly candles from Dec 2023:** they match Deriv's H1 bar for bar, apart from a constant +2.9 bps price offset.
+- **15 years of daily candles.**
+
+**1. The live poll against chance** (`backtest/edge-real.mts`, the year it was chosen on):
+- Its sides beat all of 2,000 coin-flip runs on the same entries (+$30.39 against a coin-flip median of -$21.41).
+- Bootstrap by week: about a 4% chance that the true average Monday-only week is zero or worse (8% for every weekday).
+- This year is partly in-sample, so these figures are optimistic.
+
+**2. The live poll on years it never saw** (`edge/h1-subpoll.mts`). The 32 voters on H1/H4 (half the poll; the 28 M30 voters need M30 history that is not available) on Yahoo candles, live rules, COT veto:
+
+| Period | Every weekday | Monday-only |
+|---|---|---|
+| Dec 2023 - Jun 2024 (unseen) | -$29.26 (483 trades) | -$6.21 |
+| Jul - Dec 2024 (unseen) | +$21.97 | +$8.31 |
+| Jan - Jun 2025 (unseen) | -$31.26 | -$16.07 |
+| Jul - Nov 2025 (unseen) | +$4.85 | +$29.82 |
+| **Unseen total** | **-$33.70 (-$0.016 per $1)** | **+$15.84 (+$0.021 per $1)** |
+| Nov 2025 - Jun 2026 (chosen on) | +$23.89 | +$23.53 |
+| Jul - Sep 2026 (test) | +$7.51 | +$10.33 |
+
+- On Deriv candles the same half-poll gives similar figures for the overlapping months, so the Yahoo data is not the cause.
+- Outside the year it was chosen on, this half of the poll has no edge on every weekday and a small, unsteady one on Mondays.
+
+**3. A weekly edge lab, 15 years** (`edge/weekly-lab.mts`, `weekly-score.mts`, `weekly-poll.mts`):
+- The owner's cycle: signal at Friday's close, Monday open to Friday close, live stop and target.
+- 193 signals: the 60 live and 60 new strategies on daily candles, the 60 fundamental voters, the live COT fade, and classic FX factors (time-series momentum 1 week to 12 months, 1-week and 1-month reversal, 200-day trend, last-week direction and range position, month-end).
+- Direction and choice on 2011-2019 only; test 2020 - Oct 2026; t-stats clustered by week.
+- **Alone:** 1 signal of 193 passed on 2011-2019, and it lost in 2020-2026.
+- **Combined:** no weekly poll chosen on 2011-2019 kept a significant edge in 2020-2026. The best was the top 40 by 2011-19 t: +$0.044 per $1, t 0.9.
+- The live 60 on daily candles lose in both periods. They are built for intraday bars.
+
+**4. The $10 account, Monday-only** (`edge/montecarlo.py`). 10,000 runs drawing whole real weeks of the half-poll's Monday trades:
+
+| Weeks drawn from | Median after 12 weeks | Median after 52 weeks | $20 reached by week 52 | $5 or less by week 52 |
+|---|---|---|---|---|
+| The year it was chosen on | $16.62 | $74.61 | 80% | 11% |
+| The 2 unseen years | $10.88 | $6.38 | 31% | 48% |
+| All 3 years | $12.62 | $17.40 | 47% | 33% |
+
+Withdrawing every Friday (each week from $10) averaged +$0.27 a week in the unseen years (53% of weeks up; worst -$5.11, best +$6.90).
+
+**What this means:**
+- No robust edge was found in prices, fundamentals or weekly structure over 15 years.
+- The live poll's edge is real in the year it was built on, but outside it the evidence is weak (half the poll, every weekday) to small (Mondays).
+- Monday-only entries held up better than every weekday on the unseen years (+$15.84 against -$33.70), which supports the owner's choice.
+- The live record from now on is the real test of the full poll.
+
 ## Research: replace the 20 technical voters, a 100-quant poll, fundamental voters (no bot changes)
 
 The owner asked for a 100-voter poll: drop the 20 technical strategies, add 20 new quantitative ones and 40 fundamental voters. All tested under live rules: COT veto, H1/H4 freshness, 07-21 UTC, quorum = half the voters.
