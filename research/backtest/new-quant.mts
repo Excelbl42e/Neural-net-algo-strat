@@ -1,4 +1,4 @@
-// 40 candidate quantitative strategies to replace the 20 technical ones. Same contract as
+// 60 candidate quantitative strategies to replace the 20 technical ones. Same contract as
 // poll-strategies.ts: pure, causal (the vote at bar i uses bars 0..i), +1 / -1 / 0 per bar, and `from`
 // only skips work. None of them repeats a live strategy; families: robust/statistical trend tests,
 // signal processing, volatility regimes, distribution shape, session/calendar effects, cross-pair
@@ -304,6 +304,129 @@ function hilbertPhase(b: Bars, from = 0): Int8Array {
   return v;
 }
 
+
+// ── 20 more (to reach 60 new quant strategies) ─────────────────────────────────
+function momAccel(b: Bars, from = 0): Int8Array {
+  const r = lr(b.c), v = out(N(b));
+  for (let i = Math.max(300, from); i < N(b); i++) { const s = sd(win(r, i, 200)); if (!(s > 0)) continue; const m1 = Math.log(b.c[i]! / b.c[i - 48]!), m0 = Math.log(b.c[i - 24]! / b.c[i - 72]!); const z = m1 / (s * Math.sqrt(48)); if (Math.abs(z) > 0.8 && Math.sign(m1 - m0) === Math.sign(m1)) v[i] = sign(z); }
+  return v;
+}
+function runupDrawdown(b: Bars, n: number, from = 0): Int8Array {
+  const v = out(N(b));
+  for (let i = Math.max(n, from); i < N(b); i++) { let lo = Infinity, hi = -Infinity, up = 0, dd = 0; for (let k = i - n + 1; k <= i; k++) { lo = Math.min(lo, b.l[k]!); hi = Math.max(hi, b.h[k]!); up = Math.max(up, b.h[k]! / lo - 1); dd = Math.max(dd, 1 - b.l[k]! / hi); } if (up + dd > 0) v[i] = sign((up - dd) / (up + dd), 0.5); }
+  return v;
+}
+function effRatio(b: Bars, i: number, n: number) { let path = 0; for (let k = i - n + 1; k <= i; k++) path += Math.abs(b.c[k]! - b.c[k - 1]!); return path > 0 ? (b.c[i]! - b.c[i - n]!) / path : 0; }
+function efficiency(b: Bars, mode: "trend" | "chop", from = 0): Int8Array {
+  const r = lr(b.c), v = out(N(b));
+  for (let i = Math.max(250, from); i < N(b); i++) { const er = effRatio(b, i, 24);
+    if (mode === "trend" && Math.abs(er) > 0.35) v[i] = sign(er);
+    if (mode === "chop" && Math.abs(effRatio(b, i, 48)) < 0.15) { const s = sd(win(r, i, 200)); if (s > 0) v[i] = (-sign(Math.log(b.c[i]! / b.c[i - 12]!) / (s * Math.sqrt(12)), 1.5)) as Vote; } }
+  return v;
+}
+function autocorrMulti(b: Bars, from = 0): Int8Array {
+  const r = lr(b.c), v = out(N(b));
+  for (let i = Math.max(310, from); i < N(b); i++) { const w = win(r, i, 300), m = mean(w); let den = 0; for (const x of w) den += (x - m) ** 2; if (!(den > 0)) continue;
+    let pred = 0; for (let L = 1; L <= 5; L++) { let num = 0; for (let k = L; k < w.length; k++) num += (w[k]! - m) * (w[k - L]! - m); pred += (num / den) * r[i - L + 1]!; }
+    v[i] = sign(pred / (Math.sqrt(den / w.length)), 0.05); }
+  return v;
+}
+function closeLocation(b: Bars, n: number, from = 0): Int8Array {
+  const v = out(N(b));
+  for (let i = Math.max(n, from); i < N(b); i++) { let s = 0, k = 0; for (let j = i - n + 1; j <= i; j++) { const rg = b.h[j]! - b.l[j]!; if (rg > 0) { s += (2 * b.c[j]! - b.h[j]! - b.l[j]!) / rg; k++; } } if (k) v[i] = sign(s / k, 0.15); }
+  return v;
+}
+function wickImbalance(b: Bars, n: number, from = 0): Int8Array {
+  const v = out(N(b));
+  for (let i = Math.max(n, from); i < N(b); i++) { let up = 0, dn = 0; for (let j = i - n + 1; j <= i; j++) { up += b.h[j]! - Math.max(b.o[j]!, b.c[j]!); dn += Math.min(b.o[j]!, b.c[j]!) - b.l[j]!; } if (up + dn > 0) v[i] = sign((dn - up) / (up + dn), 0.15); }
+  return v;
+}
+/** Weekend gap: on Monday, fade the gap between Friday's last close and Monday's first open. */
+function weekendGap(b: Bars, from = 0): Int8Array {
+  const v = out(N(b)), a = atrSeries(b);
+  for (let i = Math.max(50, from); i < N(b); i++) { if (new Date(b.t[i]!).getUTCDay() !== 1) continue; let k = i; while (k > 0 && b.t[k]! - b.t[k - 1]! < 24 * 3_600_000) k--; if (k === 0 || !(a[i]! > 0)) continue; const gap = b.o[k]! - b.c[k - 1]!; if (b.t[i]! - b.t[k]! < 24 * 3_600_000) v[i] = (-sign(gap / a[i]!, 0.5)) as Vote; }
+  return v;
+}
+/** Where last week's close sits in last week's range: close near the high -> follow up on the new week. */
+function weeklyCloseLocation(b: Bars, from = 0): Int8Array {
+  const v = out(N(b));
+  for (let i = Math.max(50, from); i < N(b); i++) { const d = new Date(b.t[i]!); const wk = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() - ((d.getUTCDay() + 6) % 7)); const prev = wk - 7 * 86_400_000;
+    let hi = -Infinity, lo = Infinity, c = NaN; for (let k = i; k >= 0 && b.t[k]! >= prev; k--) { if (b.t[k]! >= wk) continue; hi = Math.max(hi, b.h[k]!); lo = Math.min(lo, b.l[k]!); if (Number.isNaN(c)) c = b.c[k]!; }
+    if (hi > lo && Number.isFinite(c)) { const pos = (c - lo) / (hi - lo); v[i] = pos > 0.8 ? 1 : pos < 0.2 ? -1 : 0; } }
+  return v;
+}
+/** Synthetic currency indexes from the 14 pairs: follows the pair when both legs' short-term (6-bar) index moves agree. */
+function strengthFast(b: Bars, x: CrossContext | undefined, look: number, from = 0): Int8Array {
+  const v = out(N(b)); if (!x) return v; const base = x.symbol.slice(3, 6), quote = x.symbol.slice(6, 9);
+  for (let i = Math.max(look + 1, from); i < N(b); i++) { const str: Record<string, number[]> = {};
+    for (const [s, c] of Object.entries(x.closes)) { const a = c[i], p = c[i - look]; if (!(a! > 0 && p! > 0)) continue; const l = Math.log(a! / p!); (str[s.slice(3, 6)] ??= []).push(l); (str[s.slice(6, 9)] ??= []).push(-l); }
+    const g = (k: string) => (str[k]?.length ? mean(str[k]!) : NaN); const all = Object.keys(str).map(g).filter(Number.isFinite); const s = Math.sqrt(mean(all.map((q) => q * q)));
+    const bb = g(base), qq = g(quote); if (s > 0 && Number.isFinite(bb) && Number.isFinite(qq) && Math.sign(bb) !== Math.sign(qq)) v[i] = sign((bb - qq) / s, 1.5); }
+  return v;
+}
+/** USD index lead: for USD pairs, follow the 6-currency USD index's 4-bar move. */
+function usdLead(b: Bars, x: CrossContext | undefined, from = 0): Int8Array {
+  const v = out(N(b)); if (!x) return v; const base = x.symbol.slice(3, 6), quote = x.symbol.slice(6, 9); if (base !== "USD" && quote !== "USD") return v;
+  const legs: [string, number][] = [["frxEURUSD", -1], ["frxGBPUSD", -1], ["frxAUDUSD", -1], ["frxUSDJPY", 1], ["frxUSDCAD", 1], ["frxUSDCHF", 1]];
+  const idx = new Array(N(b)).fill(NaN); for (let i = 4; i < N(b); i++) { let s = 0, k = 0; for (const [p, sg] of legs) { const c = x.closes[p]; if (!c || p === x.symbol) continue; const a = c[i], q = c[i - 4]; if (a! > 0 && q! > 0) { s += sg * Math.log(a! / q!); k++; } } if (k >= 4) idx[i] = s / k; }
+  for (let i = Math.max(300, from); i < N(b); i++) { const w = win(idx, i, 300).filter(Number.isFinite); if (w.length < 200 || !Number.isFinite(idx[i])) continue; const s = sd(w); if (s > 0) v[i] = (sign(idx[i] / s, 1.5) * (base === "USD" ? 1 : -1)) as Vote; }
+  return v;
+}
+function quantileBreakout(b: Bars, n: number, from = 0): Int8Array {
+  const v = out(N(b));
+  for (let i = Math.max(n, from); i < N(b); i++) { const w = win(b.c, i - 1, n - 1).sort((p, q) => p - q); const hi = w[Math.floor(w.length * 0.97)]!, lo = w[Math.floor(w.length * 0.03)]!; v[i] = b.c[i]! > hi ? 1 : b.c[i]! < lo ? -1 : 0; }
+  return v;
+}
+/** Features shared by the learned classifiers (all causal). */
+function feats(b: Bars, r: number[], i: number): number[] {
+  const s = sd(win(r, i, 100)) || 1e-9; const z = (n: number) => Math.log(b.c[i]! / b.c[i - n]!) / (s * Math.sqrt(n));
+  return [z(4), z(12), z(48), sd(win(r, i, 24)) / s - 1, effRatio(b, i, 24)];
+}
+function naiveBayes(b: Bars, from = 0): Int8Array {
+  const r = lr(b.c), v = out(N(b)), F = featTable(b, r, Math.max(1100, from) - 1000).map((x) => x.slice(1));
+  for (let i = Math.max(1100, from); i < N(b); i++) {
+    const cnt = [[0, 0, 0], [0, 0, 0]].map(() => Array.from({ length: 5 }, () => [1, 1, 1])); let nUp = 1, nDn = 1; // Laplace
+    for (let t = i - 1000; t <= i - 4; t++) { if (!F[t]!.length) continue; const y = Math.log(b.c[t + 4]! / b.c[t]!) > 0 ? 0 : 1; if (y === 0) nUp++; else nDn++; F[t]!.forEach((f, k) => cnt[y]![k]![f > 0.5 ? 2 : f < -0.5 ? 0 : 1]++); }
+    let lp = Math.log(nUp / nDn); F[i]!.forEach((f, k) => { const bin = f > 0.5 ? 2 : f < -0.5 ? 0 : 1; lp += Math.log(cnt[0]![k]![bin]! / (nUp + 2)) - Math.log(cnt[1]![k]![bin]! / (nDn + 2)); });
+    v[i] = sign(lp, 0.15);
+  }
+  return v;
+}
+/** Features of every bar from `start` on (computed once per call; each is causal). */
+function featTable(b: Bars, r: number[], start: number): number[][] { const F: number[][] = []; for (let i = 0; i < N(b); i++) F.push(i >= Math.max(120, start) ? [1, ...feats(b, r, i)] : []); return F; }
+function logisticMulti(b: Bars, from = 0): Int8Array {
+  const r = lr(b.c), v = out(N(b)), lo = Math.max(700, from), F = featTable(b, r, lo - 600);
+  for (let i = lo; i < N(b); i++) {
+    const w = [0, 0, 0, 0, 0, 0]; const lrate = 0.05;
+    for (let ep = 0; ep < 3; ep++) for (let t = i - 600; t <= i - 4; t += 2) { const x = F[t]!; if (!x.length) continue; const y = b.c[t + 4]! > b.c[t]! ? 1 : 0; let z = 0; for (let k = 0; k < 6; k++) z += x[k]! * w[k]!; const p = 1 / (1 + Math.exp(-z)); for (let k = 0; k < 6; k++) w[k] = w[k]! + lrate * ((y - p) * x[k]! - 0.01 * w[k]!); }
+    const x = F[i]!; let z = 0; for (let k = 0; k < 6; k++) z += x[k]! * w[k]!; v[i] = sign(1 / (1 + Math.exp(-z)) - 0.5, 0.04);
+  }
+  return v;
+}
+function perceptron(b: Bars, from = 0): Int8Array {
+  const r = lr(b.c), v = out(N(b)), lo = Math.max(700, from), F = featTable(b, r, lo - 600);
+  for (let i = lo; i < N(b); i++) { const w = [0, 0, 0, 0, 0, 0];
+    for (let t = i - 600; t <= i - 4; t++) { const x = F[t]!; if (!x.length) continue; const y = b.c[t + 4]! > b.c[t]! ? 1 : -1; let z = 0; for (let k = 0; k < 6; k++) z += x[k]! * w[k]!; const yh = Math.sign(z) || 1;
+      for (let k = 0; k < 6; k++) w[k] = yh !== y ? 0.99 * w[k]! + 0.1 * y * x[k]! : 0.999 * w[k]!; }
+    const x = F[i]!; let z = 0; for (let k = 0; k < 6; k++) z += x[k]! * w[k]!; v[i] = sign(z, 0.05); }
+  return v;
+}
+function trendConsistency(b: Bars, from = 0): Int8Array {
+  const r = lr(b.c), v = out(N(b)), H = [6, 12, 24, 48, 96, 192];
+  for (let i = Math.max(400, from); i < N(b); i++) { const s = sd(win(r, i, 200)); if (!(s > 0)) continue; const z = H.map((n) => Math.log(b.c[i]! / b.c[i - n]!) / (s * Math.sqrt(n))); const up = z.filter((x) => x > 0.3).length, dn = z.filter((x) => x < -0.3).length; v[i] = up >= 5 ? 1 : dn >= 5 ? -1 : 0; }
+  return v;
+}
+function driftT(b: Bars, n: number, from = 0): Int8Array {
+  const r = lr(b.c), v = out(N(b));
+  for (let i = Math.max(n + 1, from); i < N(b); i++) { const w = win(r, i, n), s = sd(w); if (s > 0) v[i] = sign(mean(w) / (s / Math.sqrt(n)), 2); }
+  return v;
+}
+function longZFade(b: Bars, n: number, from = 0): Int8Array {
+  const v = out(N(b));
+  for (let i = Math.max(n, from); i < N(b); i++) { const w = win(b.c, i, n), m = mean(w), s = sd(w); if (s > 0) v[i] = (-sign((b.c[i]! - m) / s, 2.5)) as Vote; }
+  return v;
+}
+
 const C = (id: string, name: string, summary: string, compute: StrategyDef["compute"]): StrategyDef => ({ id, name, family: "quant", summary, compute });
 export const NEW_QUANT: StrategyDef[] = [
   C("vol_mom_60", "Volatility-scaled Momentum (60 bars)", "60-bar return over its volatility; follows moves over 1 sigma.", (b, _x, f) => volMom(b, 60, 1, f)),
@@ -346,4 +469,24 @@ export const NEW_QUANT: StrategyDef[] = [
   C("vol_mom_30", "Volatility-scaled Momentum (30 bars)", "30-bar return over its volatility; follows moves over 1.2 sigma.", (b, _x, f) => volMom(b, 30, 1.2, f)),
   C("binomial_trend_96", "Binomial Up-bar Test (96)", "Binomial test over 96 bars (z > 2.5).", (b, _x, f) => binomialTrend(b, 96, 2.5, f)),
   C("theil_sen_120", "Theil-Sen Robust Trend (120)", "Theil-Sen slope over 120 bars, in ATR.", (b, _x, f) => theilSen(b, 120, f)),
+  C("vol_mom_480", "Volatility-scaled Momentum (480 bars)", "480-bar return over its volatility; follows moves over 1 sigma.", (b, _x, f) => volMom(b, 480, 1, f)),
+  C("momentum_acceleration", "Momentum Acceleration", "48-bar momentum that is still accelerating (vs 24 bars ago).", (b, _x, f) => momAccel(b, f)),
+  C("runup_drawdown", "Run-up vs Drawdown", "Largest run-up against largest drawdown over 96 bars.", (b, _x, f) => runupDrawdown(b, 96, f)),
+  C("efficiency_trend", "Efficiency-ratio Trend", "Follows a 24-bar move when its path efficiency is above 0.35.", (b, _x, f) => efficiency(b, "trend", f)),
+  C("choppy_reversion", "Choppy-market Reversion", "When 48-bar efficiency is below 0.15, fades 12-bar 1.5-sigma moves.", (b, _x, f) => efficiency(b, "chop", f)),
+  C("autocorr_multi", "Multi-lag Autocorrelation Forecast", "Forecast from return autocorrelations at lags 1-5 (300 bars).", (b, _x, f) => autocorrMulti(b, f)),
+  C("close_location_pressure", "Close-location Pressure", "Where candles close within their range, averaged over 24 bars.", (b, _x, f) => closeLocation(b, 24, f)),
+  C("wick_imbalance", "Wick Imbalance", "Lower wicks (rejected lows) vs upper wicks over 48 bars.", (b, _x, f) => wickImbalance(b, 48, f)),
+  C("weekend_gap_fade", "Weekend Gap Fade", "On Mondays, fades the gap between Friday's close and Monday's open.", (b, _x, f) => weekendGap(b, f)),
+  C("weekly_close_location", "Weekly Close Location", "Last week's close in the top/bottom 20% of its range -> follow.", (b, _x, f) => weeklyCloseLocation(b, f)),
+  C("currency_strength_fast", "Fast Currency Divergence", "Follows when the pair's two currencies moved opposite ways across all pairs (6 bars).", (b, x, f) => strengthFast(b, x, 6, f)),
+  C("usd_index_lead", "USD Index Lead", "USD pairs only: follows a 1.5-sigma 4-bar move of the dollar index built from the other USD pairs.", (b, x, f) => usdLead(b, x, f)),
+  C("quantile_breakout_240", "Quantile Breakout (240)", "Close beyond the 97th / 3rd percentile of the last 240 closes.", (b, _x, f) => quantileBreakout(b, 240, f)),
+  C("naive_bayes", "Naive Bayes Classifier", "Naive Bayes on 5 binned features over the last 1,000 bars; 4-bar direction.", (b, _x, f) => naiveBayes(b, f)),
+  C("logistic_multi", "Logistic Regression (5 features)", "Regularized logistic regression on momentum, volatility and efficiency features.", (b, _x, f) => logisticMulti(b, f)),
+  C("online_perceptron", "Online Perceptron", "Perceptron learning the 4-bar direction from 5 features over 600 bars.", (b, _x, f) => perceptron(b, f)),
+  C("vol_mom_15", "Volatility-scaled Momentum (15 bars)", "15-bar return over its volatility; follows moves over 1.5 sigma.", (b, _x, f) => volMom(b, 15, 1.5, f)),
+  C("trend_consistency", "Trend Consistency", "At least 5 of 6 horizons (6-192 bars) point the same way.", (b, _x, f) => trendConsistency(b, f)),
+  C("drift_tstat_240", "Drift t-statistic (240)", "Mean-return t-statistic over 240 bars, |t| > 2.", (b, _x, f) => driftT(b, 240, f)),
+  C("long_z_fade_240", "Long-window Z-score Fade", "Fades a close 2.5 sd from its 240-bar mean.", (b, _x, f) => longZFade(b, 240, f)),
 ];

@@ -1,6 +1,6 @@
 # Changes in this build (vs. your Replit export)
 
-## Research: replace the 20 technical voters, add 40 fundamental voters (no bot changes)
+## Research: replace the 20 technical voters, a 100-quant poll, fundamental voters (no bot changes)
 
 The owner asked for a 100-voter poll: drop the 20 technical strategies, add 20 new quantitative ones and 40 fundamental voters. All tested under live rules: COT veto, H1/H4 freshness, 07-21 UTC, quorum = half the voters.
 
@@ -54,6 +54,21 @@ Two things could not be built:
   - it trades more often, so bad months are deeper (March: -$8.81 against -$4.80).
 
 **Conclusion:** none of the additions improves the poll. Removing the technical voters makes no reliable difference either way.
+
+**Follow-up: the 100-quant poll** (`poll100.mts`). The owner's actual design: drop the 20 technical voters and poll 100 quantitative strategies (the 40 live plus 60 new), with fundamentals as helpers rather than voters.
+- 20 more candidates were added: momentum acceleration, efficiency-ratio trend and chop reversion, multi-lag autocorrelation, candle close-location and wick pressure, weekend-gap fade, weekly close location, fast currency divergence, USD-index lead, quantile breakout, naive Bayes, logistic regression, online perceptron, trend consistency, long drift t-stat, long z-score fade.
+- Alone, the new trend-following ones lose over 4 days this year; the ones that win alone are mostly reversal.
+
+| Electorate / rule | Trades/yr | Per trade, sel / test | Monday-only withdrawn | Monday-only Jul-Sep | Weeks better / worse than live |
+|---|---|---|---|---|---|
+| Live 60 | 914 | 0.027 / 0.048 | +$28.35 | +$8.78 | — |
+| 100 quant (new at timeframe chosen on sel) | 528 | -0.036 / 0.018 | +$3.53 | +$2.72 | 19 / 25 |
+| 100 quant (new all on H1) | 481 | -0.033 / 0.005 | -$1.95 | -$0.54 | 22 / 23 |
+| 100 quant, fundamental priority for the limited stakes | 528 | same | +$3.53 | +$2.72 | 19 / 25 |
+| 100 quant, fundamental veto (net 2 against) | 401 | -0.044 / 0.032 | +$1.34 | +$2.77 | 18 / 28 |
+| Live 60, fundamental priority | 914 | identical to live | +$28.35 | +$8.78 | 0 / 0 |
+
+The live 40 quant voters were chosen from a larger pool for how they vote together. 60 unchosen voters mostly add noise and outvote them, and fundamentals as helpers do not repair that. **Nothing here beats the live 60**, so no strategy change goes into the next deploy.
 
 ## Fix: open rows from a removed broker connection could not be cleared
 
