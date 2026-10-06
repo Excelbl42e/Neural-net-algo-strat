@@ -1,5 +1,60 @@
 # Changes in this build (vs. your Replit export)
 
+## Research: replace the 20 technical voters, add 40 fundamental voters (no bot changes)
+
+The owner asked for a 100-voter poll: drop the 20 technical strategies, add 20 new quantitative ones and 40 fundamental voters. All tested under live rules: COT veto, H1/H4 freshness, 07-21 UTC, quorum = half the voters.
+
+**Data.** From this sandbox only Yahoo Finance and the CFTC are reachable (FRED, ECB, BIS are blocked):
+- 15 years of daily closes for the 14 pairs, US yields, VIX, oil, copper, gold, iron ore, Chinese and world stock indices (`research/fundamental/data/yahoo.json`, `fetch.py`).
+- COT positioning.
+- A central-bank policy-rate table for 2012-2026 (`policy-rates.json`; 2026 decisions checked against the news).
+
+Two things could not be built:
+- Carry from CME currency futures: the futures and spot closes are taken hours apart, so the implied rate gap swings by ±10% a day.
+- CPI/PMI surprises: there is no source for past forecasts.
+
+**Fundamental voters alone** (`fund-lib.mts`, `f-oos.mts`): 60 candidates in 8 families (carry, rate path, US yields, value, COT, oil, metals/China, risk mood, equity flows).
+- Each voter's direction (follow or fade) was chosen on 2012-2022 only, keeping those with t >= 1.5 that were positive in 2 of 3 eras: 13 of 60 kept.
+- 2023 to Sep 2026, which played no part in the choice: the 13 averaged **+2.6 bps per vote after commission** (8 of 13 positive). The rejected ones averaged -1.5 bps.
+- Best out-of-sample:
+
+| Voter | Out of sample | t |
+|---|---|---|
+| Fade a big 60-day S&P 500 move | +10.9 bps | 2.8 |
+| ASX beats the S&P → buy AUD | +9.5 | 1.6 |
+| TSX beats the S&P → buy CAD | +7.2 | 1.3 |
+| COT 3-year extreme fade (the live veto) | +5.2 | 1.9 |
+
+- Following big COT flows lost in every era 2012-2022, so fading them was chosen; out of sample the fade made nothing (-1.0).
+- Carry lost over 4-day holds in every era.
+
+**New quant voters alone** (`new-quant.mts`, `nq-score.mts`): 40 candidates.
+- Families: robust trend tests (Theil-Sen, Mann-Kendall, Spearman, Wilcoxon, runs test); signal processing (Holt, Kalman acceleration, Laguerre, roofing filter, Hilbert phase, kernel regression); AR forecasts; volatility regimes; skew; session and calendar effects (London morning, Asia fade, 16:00 fix, month-end); cross-pair residuals.
+- 17 of 40 were positive in the selection months. The best 20 made +6.3 bps per vote there and -0.1 in Jul-Sep; most are reversal strategies.
+- For comparison, the live strategies alone: technical -0.9 / -2.2 bps, quant -0.6 / -2.8. The edge comes from the vote, not from any one strategy.
+
+**In the poll** (`poll-compare.mts`). Per trade is $ per $1 stake, Nov-Jun / Jul-Sep. Monday-only is the owner's setup: $10 each Monday, every vote until one stake is left, 46 weeks.
+
+| Electorate | Trades/yr | Per trade, sel / test | Monday-only withdrawn | Monday-only Jul-Sep |
+|---|---|---|---|---|
+| **Live 60** | 914 | 0.027 / 0.048 | **+$28.35** (59% weeks up) | +$8.78 |
+| 40 quant + 20 new quant | 310 | -0.061 / -0.030 | +$0.10 | -$0.82 |
+| 40 quant + 20 new + 40 fundamental (the 100) | 5 | — | -$1.24 | -$0.62 |
+| Live 60 + 40 fundamental | 88 | -0.137 / -0.066 | -$5.72 | +$0.26 |
+| Live 60, fundamentals only in the tally (not the quorum) | 918 | 0.028 / 0.048 | +$29.51 | +$8.78 |
+| Live 60, fundamental veto | 753 | 0.008 / 0.079 | +$13.86 | +$8.02 |
+| 40 quant + 4 new quant picked by contribution | 916 | 0.055 / 0.036 | +$35.31 | +$10.35 |
+| **40 quant only (technical dropped)** | 981 | 0.026 / 0.043 | **+$32.93** (63%) | +$11.93 |
+
+- **New quant voters as a block** vote against the trend-following majority. The poll deadlocks or flips, and the year turns from +$30 to -$16.
+- **Fundamental voters** speak only now and then. With 100 voters the poll seldom reaches its quorum of 50 (5 trades a year). Counted only in the tally, they almost never change a decision. As a veto they cut good trades with the bad.
+- **The 4 new quant voters picked by contribution** improve the months they were picked on, but not Jul-Sep (0.036 against 0.043 without them).
+- **Dropping the technical 20** (`drop-ta.mts`) is a tie month by month:
+  - better in 6 of 11 months, and in 23 weeks against 22 worse;
+  - it trades more often, so bad months are deeper (March: -$8.81 against -$4.80).
+
+**Conclusion:** none of the additions improves the poll. Removing the technical voters makes no reliable difference either way.
+
 ## Fix: open rows from a removed broker connection could not be cleared
 
 The owner's Trades page showed open rows on the old demo account (#2). That account has no enabled broker connection. The contract monitor checks only accounts with an enabled connection, so these rows can never settle and read "open" forever. Since the audit, any open row with a Deriv contract was refused for deletion. Clear History then offered "0 closed" and silently did nothing.
